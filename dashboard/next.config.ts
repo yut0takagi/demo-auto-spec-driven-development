@@ -1,13 +1,18 @@
 import type { NextConfig } from 'next';
 
 const repo = 'demo-auto-spec-driven-development';
-const isCI = process.env.GITHUB_ACTIONS === 'true';
+
+// GitHub Pages はリポジトリ名のサブパス配信になるため basePath が要る。
+// ただし「CI である(GITHUB_ACTIONS)」と「Pages 用にビルドする」は別物。
+// GITHUB_ACTIONS で判定すると ci.yml の E2E も basePath 付き dev サーバになり、
+// テストが `/` を開いて 404 → CI でだけ落ちる。デプロイ専用フラグで分離する。
+const usePagesBasePath = process.env.PAGES_BASE_PATH === 'true';
 
 const nextConfig: NextConfig = {
   output: 'export',
   images: { unoptimized: true },
-  basePath: isCI ? `/${repo}` : '',
-  assetPrefix: isCI ? `/${repo}/` : '',
+  basePath: usePagesBasePath ? `/${repo}` : '',
+  assetPrefix: usePagesBasePath ? `/${repo}/` : '',
 };
 
 export default nextConfig;
