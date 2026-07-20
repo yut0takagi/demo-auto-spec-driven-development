@@ -20,8 +20,9 @@
 |---|---|
 | `dashboard/src/lib/types.ts` | **全プラン共通のデータ契約**。`RunRecord` / `LoopStatus` の型定義。Plan 2 の Python 側はこれに一致する JSON を出力する |
 | `dashboard/src/lib/aggregate.ts` | 純関数の集計層。`summarize` / `coverageTrend` / `costTrend`。副作用なし＝TDD対象 |
-| `dashboard/src/lib/loadData.ts` | ビルド時に `../data` を fs で読む I/O 層。集計層とは分離 |
+| `dashboard/src/lib/loadData.ts` | ビルド時に `../data` を fs で読む I/O 層。集計層とは分離。壊れた record は throw せずスキップし `errors` として返す |
 | `dashboard/src/components/StatusBadge.tsx` | RUNNING/PAUSED/HALTED バッジ＋停止理由・再開手順の表示 |
+| `dashboard/src/components/LoadErrorBanner.tsx` | `loadRuns` がスキップした壊れた record をユーザーに提示するバナー |
 | `dashboard/src/components/MetricCards.tsx` | 集計サマリのカード群 |
 | `dashboard/src/components/IterationTimeline.tsx` | 反復履歴のタイムライン |
 | `dashboard/src/components/TrendChart.tsx` | カバレッジ／コスト推移の SVG チャート（依存追加を避け自前実装） |
@@ -54,9 +55,13 @@ test-results/
 __pycache__/
 *.pyc
 .venv/
-.env
+.pytest_cache/
+*.egg-info/
+.env*
 .DS_Store
 ```
+
+`.env` ではなく `.env*` にすること。public リポジトリでは `.env.local` などが追跡されると秘密情報の漏洩経路になる。
 
 - [ ] **Step 2: `README.md` を作成（停止手順を最上部に）**
 
@@ -67,9 +72,15 @@ Issue を自分で立て、実装し、敵対的レビューを受け、PR を�
 
 ## 🛑 今すぐ止める
 
+> **注意:** `loop.yml` は Plan 3 で追加されます。追加されるまでこの手順は動作しません。
+> CLI を使わない場合は GitHub の Actions タブから該当ワークフローの "Disable workflow" を押しても同じ効果があります。
+
 ```bash
 gh workflow disable loop.yml          # cron を停止（最も確実）
-gh run cancel $(gh run list --workflow=loop.yml --status=in_progress --json databaseId -q '.[0].databaseId')
+
+# 実行中のジョブがあれば止める（何も出力されなければ実行中のジョブは無い）
+RUN_ID=$(gh run list --workflow=loop.yml --status=in_progress --json databaseId --jq '.[0].databaseId // empty')
+[ -n "$RUN_ID" ] && gh run cancel "$RUN_ID"
 ```
 
 一時停止のみなら:
@@ -122,7 +133,7 @@ Expected: `develop` が origin に存在する。
 **Files:**
 - Create: `dashboard/src/lib/types.ts`
 - Create: `data/status.json`
-- Create: `data/runs/0001.json`
+- Create: `data/runs/0001.json`〜`data/runs/0005.json`
 
 これは Plan 2（Python 側）と共有する契約。ここで確定した名前は Plan 2/3 で厳密に一致させること。
 
@@ -135,6 +146,8 @@ npx create-next-app@latest dashboard --typescript --tailwind --eslint --app --sr
 Expected: `dashboard/` が作成され `dashboard/src/app/page.tsx` が存在する。
 
 - [ ] **Step 2: `dashboard/src/lib/types.ts` を作成**
+
+> **レビューでの修正（2026-07-20）:** 当初案は `verify.testsPassed` 一本、`Verdict` に `dry-run` なし、`gateReasons`/`prNumber` なしだった。しかし実際のループは unit と e2e を別条件でゲートしており（round.py の `verify_passed`/`e2e_passed`）、`needs-human` の反復がなぜ弾かれたかをダッシュボードが説明できず、`paused`（人間が止めた）と「最初からマージしない dry-run」が区別できなかった。以下は修正後の実ファイルと完全に一致する。
 
 ```typescript
 /**
@@ -156,8 +169,18 @@ export interface LoopStatus {
   resumeHint: string;
 }
 
-/** 1 反復の最終結果 */
-export type Verdict = 'merged' | 'needs-human' | 'paused' | 'failed';
+/**
+ * 1 反復の最終結果。
+ * - `merged`      ゲートを通過し develop にマージされた
+ * - `needs-human` ゲート不通過。PR は開いたまま人間の判断待ち
+ * - `paused`      キルスイッチによりマージ直前で停止した（PR は開いている）
+ * - `dry-run`     ドライラン。マージ以外は実行した
+ * - `failed`      反復が例外で異常終了した
+ *
+ * `paused` と `dry-run` を分けているのは、前者が「人間が止めた」、後者が
+ * 「最初からマージしない設定だった」という別事象だから。
+ */
+export type Verdict = 'merged' | 'needs-human' | 'paused' | 'dry-run' | 'failed';
 
 export interface RunRecord {
   /** 一意ID。`<ISO8601 basic>-<issue#>` 形式 */
@@ -178,12 +201,24 @@ export interface RunRecord {
   /** adversary の棄却により builder が revise した回数 */
   reviseCycles: number;
   verdict: Verdict;
+  /**
+   * ゲートを通過しなかった理由。通過した場合は空配列。
+   * これが無いと `needs-human` の反復をダッシュボードが説明できない。
+   */
+  gateReasons: string[];
+  /** この反復が開いた PR 番号。PR 到達前に終了した場合は null */
+  prNumber: number | null;
   adversary: {
     approved: boolean;
     summary: string;
   };
+  /**
+   * 検証結果。`npm run verify`（lint/typecheck/unit/build）と
+   * `npm run test:e2e` はゲート上も別条件なので、別々に記録する。
+   */
   verify: {
-    testsPassed: boolean;
+    unitPassed: boolean;
+    e2ePassed: boolean;
     /** 0..100 */
     coveragePct: number;
   };
@@ -216,9 +251,13 @@ export interface RunRecord {
 }
 ```
 
-- [ ] **Step 4: `data/runs/0001.json` にサンプル記録を作成**
+- [ ] **Step 4: `data/runs/0001.json`〜`0005.json` にサンプル記録を作成**
 
-ダッシュボードが空でない状態で開発・テストできるようにする。Plan 2 稼働後は実データが追加される。
+ダッシュボードが空でない状態で開発・テストできるようにする。Plan 2 稼働後は実データが追記される。
+
+> **レビューでの修正（2026-07-20）:** 当初は `0001.json` 1 件だけだった。1 件だけでは `merged` の幸福パスしか無く、Task 3 の集計層や Task 5/6 のコンポーネントが「常に成功する」データでしか検証されない。実際のループは `needs-human` / `paused` / `dry-run` / `failed` を含む複数の終端状態を取りうるので、それぞれの表示・集計が壊れていないことを最初からテストできるよう、多様な verdict のサンプルを 5 件用意する。
+
+`0001.json`（正準形。以下フルで掲載）:
 
 ```json
 {
@@ -235,14 +274,25 @@ export interface RunRecord {
   "durationSec": 300,
   "reviseCycles": 0,
   "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 11,
   "adversary": { "approved": true, "summary": "テストが実装を実質的に検証している。指摘なし。" },
-  "verify": { "testsPassed": true, "coveragePct": 80.0 },
+  "verify": { "unitPassed": true, "e2ePassed": true, "coveragePct": 80.0 },
   "changedLines": 42,
   "cost": { "builderUsd": 0.09, "adversaryUsd": 0.01, "ideationUsd": 0.01, "totalUsd": 0.11 },
   "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
   "nextIssues": [2]
 }
 ```
+
+残り 4 件は verdict と、それぞれを特徴づけるフィールドだけが異なる（全文は `data/runs/000N.json` として配置する）:
+
+| ファイル | verdict | 他と区別する要素 |
+|---|---|---|
+| `0002.json` | `merged` | `reviseCycles: 2`（2 回差し戻された後にマージ） |
+| `0003.json` | `needs-human` | adversary 棄却 (`adversary.approved: false`)、`verify.e2ePassed: false`（`unitPassed` は true）、`changedLines: 512`（上限 400 を超過）、`gateReasons` に 3 件の理由、`nextIssues: []`、`issue.title` が長文で `<mark>` のような特殊文字を含む |
+| `0004.json` | `paused` | キルスイッチによりマージ直前で停止。PR は開いたまま（`prNumber: 14`）で、コストは既に発生済み |
+| `0005.json` | `failed` | 反復が例外で異常終了。`prNumber: null`、`changedLines: 0`、`verify.unitPassed: false` |
 
 - [ ] **Step 5: コミット**
 
@@ -335,8 +385,10 @@ function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     durationSec: 300,
     reviseCycles: 0,
     verdict: 'merged',
+    gateReasons: [],
+    prNumber: 11,
     adversary: { approved: true, summary: '' },
-    verify: { testsPassed: true, coveragePct: 80 },
+    verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
     changedLines: 10,
     cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 },
     models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
@@ -355,6 +407,8 @@ describe('summarize', () => {
     expect(s.avgReviseCycles).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.latestCoveragePct).toBe(0);
+    expect(s.latestCoverageIteration).toBe(0);
+    expect(s.latestCoverageStale).toBe(false);
   });
 
   it('承認率とマージ率を別々に数える', () => {
@@ -367,7 +421,8 @@ describe('summarize', () => {
     const s = summarize(runs);
     expect(s.totalRuns).toBe(4);
     expect(s.mergedRuns).toBe(1);
-    expect(s.approvalRate).toBeCloseTo(0.5);
+    // iteration 3 は failed（クラッシュ）なので承認率の母集団から除外される: 2/3 (iteration 1, 2, 4)
+    expect(s.approvalRate).toBeCloseTo(2 / 3);
     expect(s.mergeRate).toBeCloseTo(0.25);
   });
 
@@ -384,18 +439,73 @@ describe('summarize', () => {
 
   it('latestCoveragePct は iteration 最大の run を採用する（配列順に依存しない）', () => {
     const runs = [
-      makeRun({ iteration: 5, verify: { testsPassed: true, coveragePct: 91 } }),
-      makeRun({ iteration: 2, verify: { testsPassed: true, coveragePct: 70 } }),
+      makeRun({ iteration: 5, verify: { unitPassed: true, e2ePassed: true, coveragePct: 91 } }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 70 } }),
     ];
     expect(summarize(runs).latestCoveragePct).toBe(91);
+  });
+
+  it('最新 iteration がクラッシュした場合、直前の測定値を採用しstaleを立てる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 84.1 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed', prNumber: null, changedLines: 0,
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+    ];
+    const s = summarize(runs);
+    expect(s.latestCoveragePct).toBe(84.1);
+    expect(s.latestCoverageIteration).toBe(1);
+    expect(s.latestCoverageStale).toBe(true);
+  });
+
+  it('クラッシュした run は平均サイクルタイムと平均revise回数の母集団から外す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 700, reviseCycles: 2 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 100, reviseCycles: 0 }),
+    ];
+    const s = summarize(runs);
+    expect(s.avgCycleTimeSec).toBe(700);
+    expect(s.avgReviseCycles).toBe(2);
+  });
+
+  it('クラッシュした run は承認率の母集団から外すが、コストには算入する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '' }, cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 } }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: 'レビューに到達しなかった。' }, cost: { builderUsd: 0.02, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.02 } }),
+    ];
+    const s = summarize(runs);
+    expect(s.approvalRate).toBe(1);
+    expect(s.totalCostUsd).toBeCloseTo(0.12);
+    expect(s.totalRuns).toBe(2);
+  });
+
+  it('全 run が failed でも承認率や平均が NaN にならない', () => {
+    const s = summarize([makeRun({ verdict: 'failed', adversary: { approved: false, summary: '' } })]);
+    expect(s.approvalRate).toBe(0);
+    expect(s.avgCycleTimeSec).toBe(0);
+    expect(s.avgReviseCycles).toBe(0);
+    expect(Number.isNaN(s.approvalRate)).toBe(false);
+  });
+
+  it('要素が1件でも正しく計算する', () => {
+    const runs = [makeRun({ iteration: 7, durationSec: 200, cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 }, verify: { unitPassed: true, e2ePassed: true, coveragePct: 75 } })];
+    const s = summarize(runs);
+    expect(s.avgCycleTimeSec).toBe(200);
+    expect(s.totalCostUsd).toBeCloseTo(0.2);
+    expect(s.latestCoveragePct).toBe(75);
+    expect(s.latestCoverageStale).toBe(false);
+    expect(coverageTrend(runs)).toEqual([{ iteration: 7, value: 75 }]);
+    expect(costTrend(runs)).toEqual([{ iteration: 7, value: 0.2 }]);
   });
 });
 
 describe('coverageTrend', () => {
   it('iteration 昇順に整列して返す', () => {
     const runs = [
-      makeRun({ iteration: 3, verify: { testsPassed: true, coveragePct: 88 } }),
-      makeRun({ iteration: 1, verify: { testsPassed: true, coveragePct: 80 } }),
+      makeRun({ iteration: 3, verify: { unitPassed: true, e2ePassed: true, coveragePct: 88 } }),
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
     ];
     expect(coverageTrend(runs)).toEqual([
       { iteration: 1, value: 80 },
@@ -414,6 +524,11 @@ describe('costTrend', () => {
     expect(t[0].value).toBeCloseTo(0.1);
     expect(t[1].value).toBeCloseTo(0.3);
   });
+
+  it('coverageTrend/costTrend は空配列で空配列を返す', () => {
+    expect(coverageTrend([])).toEqual([]);
+    expect(costTrend([])).toEqual([]);
+  });
 });
 ```
 
@@ -421,6 +536,8 @@ describe('costTrend', () => {
 
 Run: `cd dashboard && npx vitest run src/lib/aggregate.test.ts`
 Expected: FAIL — `Failed to resolve import "./aggregate"`
+
+**なぜ `verdict: 'failed'` の run を除外するか:** クラッシュした run は `verify.coveragePct: 0` / 短い `durationSec` を記録するが、これは「カバレッジが 0 だった」のではなく「測定できなかった」ことを意味する。素朴に平均や「最新値」に含めると、無人ループの唯一の人間向け窓口であるダッシュボードが「カバレッジ崩壊」「サイクルタイム短縮」という偽の信号を出す（実データ `data/runs/0005.json` で検証済み: 素朴実装では `latestCoveragePct` が 84.1% ではなく 0.0% と表示される）。そのため crashed run は測定由来の指標（承認率・平均サイクルタイム・平均revise回数・最新カバレッジ）の母集団から除外し、コストと総数（`totalCostUsd` / `totalRuns` / `mergedRuns`）には引き続き算入する（金は使われている以上、除外してはいけない）。
 
 - [ ] **Step 7: `dashboard/src/lib/aggregate.ts` を実装**
 
@@ -430,15 +547,19 @@ import type { RunRecord } from './types';
 export interface Summary {
   totalRuns: number;
   mergedRuns: number;
-  /** adversary が approve した割合 0..1 */
+  /** adversary が approve した割合 0..1。分母は verify に到達した run のみ（crashed run を除く） */
   approvalRate: number;
   /** develop にマージされた割合 0..1 */
   mergeRate: number;
   avgCycleTimeSec: number;
   avgReviseCycles: number;
   totalCostUsd: number;
-  /** 最新 iteration のカバレッジ */
+  /** verify に到達した最新 iteration のカバレッジ */
   latestCoveragePct: number;
+  /** latestCoveragePct がどの iteration の測定値か */
+  latestCoverageIteration: number;
+  /** true なら最新 iteration ではなく、それ以前の測定値を表示している */
+  latestCoverageStale: boolean;
 }
 
 export interface TrendPoint {
@@ -455,6 +576,15 @@ function byIterationAsc(runs: RunRecord[]): RunRecord[] {
   return [...runs].sort((a, b) => a.iteration - b.iteration);
 }
 
+/**
+ * その run が実際に verify まで到達したか。
+ * `failed` は例外で異常終了しており、coveragePct や durationSec が
+ * 「測定されなかった」ことを意味する 0 なので、平均や最新値の母集団から外す。
+ */
+function reachedVerify(run: RunRecord): boolean {
+  return run.verdict !== 'failed';
+}
+
 export function summarize(runs: RunRecord[]): Summary {
   if (runs.length === 0) {
     return {
@@ -466,31 +596,45 @@ export function summarize(runs: RunRecord[]): Summary {
       avgReviseCycles: 0,
       totalCostUsd: 0,
       latestCoveragePct: 0,
+      latestCoverageIteration: 0,
+      latestCoverageStale: false,
     };
   }
 
   const sorted = byIterationAsc(runs);
   const latest = sorted[sorted.length - 1];
+  const completed = sorted.filter(reachedVerify);
+  const latestMeasured = completed.length > 0 ? completed[completed.length - 1] : latest;
   const mergedRuns = runs.filter((r) => r.verdict === 'merged').length;
-  const approvedRuns = runs.filter((r) => r.adversary.approved).length;
+  const approvedRuns = completed.filter((r) => r.adversary.approved).length;
 
   return {
     totalRuns: runs.length,
     mergedRuns,
-    approvalRate: approvedRuns / runs.length,
+    approvalRate: completed.length === 0 ? 0 : approvedRuns / completed.length,
     mergeRate: mergedRuns / runs.length,
-    avgCycleTimeSec: mean(runs.map((r) => r.durationSec)),
-    avgReviseCycles: mean(runs.map((r) => r.reviseCycles)),
+    avgCycleTimeSec: mean(completed.map((r) => r.durationSec)),
+    avgReviseCycles: mean(completed.map((r) => r.reviseCycles)),
     totalCostUsd: runs.reduce((sum, r) => sum + r.cost.totalUsd, 0),
-    latestCoveragePct: latest.verify.coveragePct,
+    latestCoveragePct: latestMeasured.verify.coveragePct,
+    latestCoverageIteration: latestMeasured.iteration,
+    latestCoverageStale: latestMeasured.iteration !== latest.iteration,
   };
 }
 
+/**
+ * カバレッジ推移。`failed` run は coveragePct を測定していない（sentinel 0）ため
+ * 点として含めない。含めると最新点が 0 に急落し、同じページの MetricCards
+ * （measured な最新値を表示）と矛盾した「カバレッジ崩壊」に見える。
+ * コストは失敗でも実際に消費されるので costTrend は全 run を含む（対称ではない）。
+ */
 export function coverageTrend(runs: RunRecord[]): TrendPoint[] {
-  return byIterationAsc(runs).map((r) => ({
-    iteration: r.iteration,
-    value: r.verify.coveragePct,
-  }));
+  return byIterationAsc(runs)
+    .filter(reachedVerify)
+    .map((r) => ({
+      iteration: r.iteration,
+      value: r.verify.coveragePct,
+    }));
 }
 
 export function costTrend(runs: RunRecord[]): TrendPoint[] {
@@ -505,7 +649,7 @@ export function costTrend(runs: RunRecord[]): TrendPoint[] {
 - [ ] **Step 8: テストを実行して合格を確認**
 
 Run: `cd dashboard && npx vitest run src/lib/aggregate.test.ts`
-Expected: PASS — 7 tests passed
+Expected: PASS — 12 tests passed（`summarize` 9 件 + `coverageTrend` 1 件 + `costTrend` 2 件。crashed run の除外ロジックを追加した際のコードレビューで、実データ `data/runs/0005.json` に対して素朴実装が偽のカバレッジ崩壊を報告することが判明し、6 件から 12 件に増補した）
 
 - [ ] **Step 9: コミット**
 
@@ -520,49 +664,435 @@ git commit -m "feat(dashboard): add pure aggregation layer with tests"
 
 **Files:**
 - Create: `dashboard/src/lib/loadData.ts`
+- Test: `dashboard/src/lib/loadData.test.ts`
 
 集計層と分離した I/O 層。ビルド時に `../data` を読む（static export なので build 時 fs 読みで完結する）。
 
-- [ ] **Step 1: `dashboard/src/lib/loadData.ts` を実装**
+> **レビューでの修正（2026-07-20 初稿）:** 当初案は `JSON.parse(...) as RunRecord` のみで、これはコンパイル時にしか効かず実行時には消える型アサーションだった。`data/runs/*.json` は無人稼働の Python が書き、誰もレビューしないまま着地するため、壊れたレコード（必須フィールド欠落・型不一致・範囲外の値）を**ビルド時に検知して static export を失敗させる**実行時チェックを追加する。あわせて `coveragePct` を `[0, 100]` にクランプし、上流の異常値がダッシュボードの表示を壊さないようにする。
+>
+> **レビューでの修正（2026-07-20 再訂正・設計反転）:** 上の初稿には重大な欠陥があった。境界で検証すること自体は正しいが、**検証失敗を `throw` する設計が誤り**だった。理由: 1 件でも壊れたレコードが来ると `loadRuns` が例外を投げ、`next build`（static export）全体が失敗する → GitHub Pages のデプロイが止まる → ダッシュボードは「最後に成功したビルド」の内容で凍りつく。ところがこのダッシュボードは RUNNING/PAUSED/HALTED の状態バッジと停止理由も表示する場所であり、まさにループが壊れて異常なレコードを吐いている瞬間に、人間はその状態バッジ自体を更新できなくなる（デプロイ失敗は Actions タブを見に行く人にしか見えない）。さらに `cost: {}` のような**内部フィールド欠落は当初の浅いチェック（`typeof r.cost === 'object'` のみ）をすり抜け**、`summarize()` の `totalCostUsd` が `NaN` になり、ダッシュボードに文字通り「$NaN」が表示される実害も確認された。
+>
+> **修正後の原則:** ダッシュボードは**常にビルドが通り、常に状態を表示する**。壊れたレコードは `throw` せず**スキップし**、理由を `LoadError[]` として呼び出し側に返して画面上に明示する（`LoadErrorBanner`。Task 6/7 参照）。`loadStatus` も同じ理由で**絶対に例外を投げず**、`state` が未知の値・型不一致・JSON 破損のいずれでも安全側の `HALTED` にフォールバックする（「不明」を「稼働中」と誤認しない）。あわせて `cost` / `models` / `adversary` の内部フィールドも 1 段掘り下げて検証し、`$NaN` のような表示崩れを構造的に防ぐ。
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+`dataDir` を注入できるように `loadRuns(dataDir?: string)` / `loadStatus(dataDir?: string)` とし、テストは `os.tmpdir()` 配下に一時ディレクトリを作って検証する（fs をモックせず、実ファイルで確認する）。
+
+`dashboard/src/lib/loadData.test.ts`:
+
+```typescript
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadRuns, loadStatus } from './loadData';
+
+const VALID_RECORD = {
+  id: '20260720T000000Z-1',
+  iteration: 1,
+  issue: { number: 1, title: 't', labels: [] },
+  branch: 'loop/1-x',
+  startedAt: '2026-07-20T00:00:00Z',
+  finishedAt: '2026-07-20T00:05:00Z',
+  durationSec: 300,
+  reviseCycles: 0,
+  verdict: 'merged',
+  gateReasons: [],
+  prNumber: 11,
+  adversary: { approved: true, summary: '' },
+  verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
+  changedLines: 10,
+  cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 },
+  models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+  nextIssues: [],
+};
+
+function writeRun(dir: string, filename: string, record: unknown) {
+  fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'runs', filename), JSON.stringify(record));
+}
+
+describe('loadRuns', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loaddata-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('正しい形の record は読み込める', () => {
+    writeRun(dir, '0001.json', VALID_RECORD);
+    const { runs } = loadRuns(dir);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].id).toBe('20260720T000000Z-1');
+  });
+
+  it('verdict が欠けている record はスキップされ、errors に理由が載る', () => {
+    const broken: Record<string, unknown> = { ...VALID_RECORD };
+    delete broken.verdict;
+    writeRun(dir, '0002.json', broken);
+    const { runs, errors } = loadRuns(dir);
+    expect(runs).toHaveLength(0);
+    expect(errors).toHaveLength(1);
+    expect(errors[0].file).toBe('0002.json');
+    expect(errors[0].message).toMatch(/verdict/);
+  });
+
+  it('coveragePct が 100 を超えていたら 100 にクランプする', () => {
+    writeRun(dir, '0001.json', {
+      ...VALID_RECORD,
+      verify: { ...VALID_RECORD.verify, coveragePct: 150 },
+    });
+    const { runs } = loadRuns(dir);
+    expect(runs[0].verify.coveragePct).toBe(100);
+  });
+
+  it('coveragePct が 0 未満だったら 0 にクランプする', () => {
+    writeRun(dir, '0001.json', {
+      ...VALID_RECORD,
+      verify: { ...VALID_RECORD.verify, coveragePct: -5 },
+    });
+    const { runs } = loadRuns(dir);
+    expect(runs[0].verify.coveragePct).toBe(0);
+  });
+
+  it('runs ディレクトリが無い場合は空配列を返す', () => {
+    expect(loadRuns(dir)).toEqual({ runs: [], errors: [] });
+  });
+
+  it('iteration 昇順に整列して返す（ファイル名順に依存しない）', () => {
+    writeRun(dir, 'b.json', { ...VALID_RECORD, id: 'x-3', iteration: 3 });
+    writeRun(dir, 'a.json', { ...VALID_RECORD, id: 'x-1', iteration: 1 });
+    expect(loadRuns(dir).runs.map((r) => r.iteration)).toEqual([1, 3]);
+  });
+
+  it('1 件壊れていても他の record は読み込める（ダッシュボードを止めない）', () => {
+    writeRun(dir, '0001.json', VALID_RECORD);
+    writeRun(dir, '0002.json', { ...VALID_RECORD, verdict: 'bogus' });
+    writeRun(dir, '0003.json', { ...VALID_RECORD, id: 'x-3', iteration: 3 });
+    const { runs, errors } = loadRuns(dir);
+    expect(runs.map((r) => r.iteration)).toEqual([1, 3]);
+    expect(errors.map((e) => e.file)).toEqual(['0002.json']);
+  });
+
+  it('cost の内部フィールド欠落を検出する（$NaN 表示を防ぐ）', () => {
+    writeRun(dir, '0001.json', { ...VALID_RECORD, cost: {} });
+    const { runs, errors } = loadRuns(dir);
+    expect(runs).toHaveLength(0);
+    expect(errors[0].message).toMatch(/cost/);
+  });
+
+  it('models の内部フィールド欠落を検出する', () => {
+    writeRun(dir, '0001.json', { ...VALID_RECORD, models: {} });
+    expect(loadRuns(dir).errors[0].message).toMatch(/models/);
+  });
+
+  it('adversary の内部フィールド欠落を検出する', () => {
+    writeRun(dir, '0001.json', { ...VALID_RECORD, adversary: {} });
+    expect(loadRuns(dir).errors[0].message).toMatch(/adversary/);
+  });
+
+  it('壊れた JSON 構文はファイル名つきで errors に載る', () => {
+    fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+    fs.writeFileSync(path.join(dir, 'runs', '0003.json'), '{"id": "x", "iteration":');
+    const { errors } = loadRuns(dir);
+    expect(errors[0].file).toBe('0003.json');
+    expect(errors[0].message).toMatch(/JSON/);
+  });
+});
+
+describe('loadStatus', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loadstatus-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('status.json を読み込める', () => {
+    fs.writeFileSync(
+      path.join(dir, 'status.json'),
+      JSON.stringify({
+        state: 'RUNNING',
+        reason: '正常稼働中',
+        actor: 'system',
+        updatedAt: '2026-07-20T10:00:00Z',
+        resumeHint: 'n/a',
+      })
+    );
+    expect(loadStatus(dir).state).toBe('RUNNING');
+  });
+
+  it('status.json が無い場合は HALTED を返す（不明を稼働中と誤認しない）', () => {
+    const status = loadStatus(dir);
+    expect(status.state).toBe('HALTED');
+    expect(status.reason).toContain('status.json');
+  });
+
+  it('state が未知の値なら HALTED にフォールバックする', () => {
+    fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify({
+      state: 'RUNING', reason: 'x', actor: 'system', updatedAt: 'now', resumeHint: 'y',
+    }));
+    expect(loadStatus(dir).state).toBe('HALTED');
+  });
+
+  it('必須フィールドが欠落していたら HALTED にフォールバックする', () => {
+    fs.writeFileSync(path.join(dir, 'status.json'), JSON.stringify({
+      state: 'RUNNING', reason: 'x', actor: 'system', updatedAt: 'now',
+    }));
+    expect(loadStatus(dir).state).toBe('HALTED');
+  });
+
+  it('status.json が壊れた JSON でも例外を投げず HALTED を返す', () => {
+    fs.writeFileSync(path.join(dir, 'status.json'), '{not json');
+    expect(() => loadStatus(dir)).not.toThrow();
+    expect(loadStatus(dir).state).toBe('HALTED');
+  });
+});
+```
+
+- [ ] **Step 2: テストを実行して失敗を確認**
+
+Run: `cd dashboard && npx vitest run src/lib/loadData.test.ts`
+Expected: FAIL — `Failed to resolve import "./loadData"`
+
+- [ ] **Step 3: `dashboard/src/lib/loadData.ts` を実装**
 
 ```typescript
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RunRecord, LoopStatus } from './types';
+import type { RunRecord, LoopStatus, LoopState, Verdict } from './types';
 
 /** リポジトリ直下の data/ を指す（dashboard/ から見て 1 つ上） */
 const DATA_DIR = path.join(process.cwd(), '..', 'data');
 
-export function loadRuns(): RunRecord[] {
-  const dir = path.join(DATA_DIR, 'runs');
-  if (!fs.existsSync(dir)) return [];
-  return fs
-    .readdirSync(dir)
-    .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RunRecord)
-    .sort((a, b) => a.iteration - b.iteration);
+const VALID_VERDICTS: readonly Verdict[] = ['merged', 'needs-human', 'paused', 'dry-run', 'failed'];
+const VALID_STATES: readonly LoopState[] = ['RUNNING', 'PAUSED', 'HALTED'];
+
+export interface LoadError {
+  file: string;
+  message: string;
 }
 
-export function loadStatus(): LoopStatus {
-  const file = path.join(DATA_DIR, 'status.json');
-  if (!fs.existsSync(file)) {
-    return {
-      state: 'HALTED',
-      reason: 'data/status.json が見つからない',
-      actor: 'system',
-      updatedAt: new Date().toISOString(),
-      resumeHint: 'data/status.json を作成してください',
-    };
+export interface LoadRunsResult {
+  runs: RunRecord[];
+  errors: LoadError[];
+}
+
+function clampCoveragePct(value: number, file: string): number {
+  if (Number.isNaN(value)) {
+    console.warn(`[loadRuns] ${file}: coveragePct が NaN のため 0 にクランプした`);
+    return 0;
   }
-  return JSON.parse(fs.readFileSync(file, 'utf8')) as LoopStatus;
+  const clamped = Math.min(100, Math.max(0, value));
+  if (clamped !== value) {
+    console.warn(`[loadRuns] ${file}: coveragePct=${value} は範囲外のため ${clamped} にクランプした`);
+  }
+  return clamped;
+}
+
+/**
+ * `data/runs/*.json` は無人稼働の Python が書き、誰もレビューしないまま着地する。
+ * `JSON.parse(...) as RunRecord` はコンパイル時にしか効かず実行時には消えるため、
+ * ここでフィールド単位の実行時検証を行う。検証に落ちたレコードは呼び出し元の
+ * `loadRuns` がスキップし、ビルドは止めない（詳細は loadRuns のコメント参照）。
+ */
+function assertValidRunRecord(data: unknown, file: string): asserts data is RunRecord {
+  if (typeof data !== 'object' || data === null) {
+    throw new Error(`${file}: RunRecord は object である必要がある`);
+  }
+  const r = data as Record<string, unknown>;
+
+  const requireString = (key: string) => {
+    if (typeof r[key] !== 'string') {
+      throw new Error(`${file}: フィールド "${key}" は string である必要がある`);
+    }
+  };
+  const requireNumber = (key: string) => {
+    if (typeof r[key] !== 'number') {
+      throw new Error(`${file}: フィールド "${key}" は number である必要がある`);
+    }
+  };
+  const requireNumberIn = (obj: Record<string, unknown>, parent: string, key: string) => {
+    if (typeof obj[key] !== 'number') {
+      throw new Error(`${file}: フィールド "${parent}.${key}" は number である必要がある`);
+    }
+  };
+  const requireStringIn = (obj: Record<string, unknown>, parent: string, key: string) => {
+    if (typeof obj[key] !== 'string') {
+      throw new Error(`${file}: フィールド "${parent}.${key}" は string である必要がある`);
+    }
+  };
+
+  requireString('id');
+  requireNumber('iteration');
+
+  if (typeof r.issue !== 'object' || r.issue === null) {
+    throw new Error(`${file}: フィールド "issue" が不正`);
+  }
+  const issue = r.issue as Record<string, unknown>;
+  requireNumberIn(issue, 'issue', 'number');
+  requireStringIn(issue, 'issue', 'title');
+  if (!Array.isArray(issue.labels)) {
+    throw new Error(`${file}: フィールド "issue.labels" は配列である必要がある`);
+  }
+
+  requireString('branch');
+  requireString('startedAt');
+  requireString('finishedAt');
+  requireNumber('durationSec');
+  requireNumber('reviseCycles');
+  if (typeof r.verdict !== 'string' || !VALID_VERDICTS.includes(r.verdict as Verdict)) {
+    throw new Error(`${file}: フィールド "verdict" が不正な値または欠落している: ${JSON.stringify(r.verdict)}`);
+  }
+  if (!Array.isArray(r.gateReasons)) {
+    throw new Error(`${file}: フィールド "gateReasons" は配列である必要がある`);
+  }
+  if (r.prNumber !== null && typeof r.prNumber !== 'number') {
+    throw new Error(`${file}: フィールド "prNumber" は number か null である必要がある`);
+  }
+
+  if (typeof r.adversary !== 'object' || r.adversary === null) {
+    throw new Error(`${file}: フィールド "adversary" が不正`);
+  }
+  const adversary = r.adversary as Record<string, unknown>;
+  if (typeof adversary.approved !== 'boolean') {
+    throw new Error(`${file}: フィールド "adversary.approved" は boolean である必要がある`);
+  }
+  requireStringIn(adversary, 'adversary', 'summary');
+
+  if (typeof r.verify !== 'object' || r.verify === null) {
+    throw new Error(`${file}: フィールド "verify" が不正`);
+  }
+  const verify = r.verify as Record<string, unknown>;
+  if (
+    typeof verify.unitPassed !== 'boolean' ||
+    typeof verify.e2ePassed !== 'boolean' ||
+    typeof verify.coveragePct !== 'number'
+  ) {
+    throw new Error(`${file}: フィールド "verify" の形が不正`);
+  }
+  requireNumber('changedLines');
+
+  if (typeof r.cost !== 'object' || r.cost === null) {
+    throw new Error(`${file}: フィールド "cost" が不正`);
+  }
+  const cost = r.cost as Record<string, unknown>;
+  for (const k of ['builderUsd', 'adversaryUsd', 'ideationUsd', 'totalUsd']) {
+    requireNumberIn(cost, 'cost', k);
+  }
+
+  if (typeof r.models !== 'object' || r.models === null) {
+    throw new Error(`${file}: フィールド "models" が不正`);
+  }
+  const models = r.models as Record<string, unknown>;
+  for (const k of ['builder', 'adversary', 'ideation']) {
+    requireStringIn(models, 'models', k);
+  }
+
+  if (!Array.isArray(r.nextIssues)) {
+    throw new Error(`${file}: フィールド "nextIssues" は配列である必要がある`);
+  }
+}
+
+/**
+ * 1 件の破損レコードで全体を落とさない。落とすと static export のビルドが失敗し、
+ * GitHub Pages のデプロイが止まって「最後の正常ビルド」に凍りつく。RUNNING/PAUSED/HALTED
+ * バッジもそこに表示できなくなり、まさに異常が起きている瞬間に人間が状態を見られなくなる。
+ * そのため不正レコードはスキップし、理由を `errors` として呼び出し側（UI）に返す。
+ */
+export function loadRuns(dataDir: string = DATA_DIR): LoadRunsResult {
+  const dir = path.join(dataDir, 'runs');
+  if (!fs.existsSync(dir)) return { runs: [], errors: [] };
+
+  const runs: RunRecord[] = [];
+  const errors: LoadError[] = [];
+
+  for (const name of fs.readdirSync(dir).filter((f) => f.endsWith('.json'))) {
+    const file = path.join(dir, name);
+    try {
+      let raw: unknown;
+      try {
+        raw = JSON.parse(fs.readFileSync(file, 'utf8'));
+      } catch (e) {
+        // Python 側は json.dumps の既定で NaN/Infinity を出しうる（不正な JSON）。
+        // 途中で kill されて切り詰められたファイルもここに来る。
+        throw new Error(`JSON として解析できない: ${e instanceof Error ? e.message : String(e)}`);
+      }
+      assertValidRunRecord(raw, file);
+      runs.push({
+        ...raw,
+        verify: { ...raw.verify, coveragePct: clampCoveragePct(raw.verify.coveragePct, file) },
+      });
+    } catch (e) {
+      errors.push({ file: name, message: e instanceof Error ? e.message : String(e) });
+      console.error(`[loadRuns] skipped ${name}: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  runs.sort((a, b) => a.iteration - b.iteration);
+  return { runs, errors };
+}
+
+function isValidStatus(data: unknown): data is LoopStatus {
+  if (typeof data !== 'object' || data === null) return false;
+  const s = data as Record<string, unknown>;
+  return (
+    typeof s.state === 'string' &&
+    (VALID_STATES as readonly string[]).includes(s.state) &&
+    typeof s.reason === 'string' &&
+    typeof s.actor === 'string' &&
+    typeof s.updatedAt === 'string' &&
+    typeof s.resumeHint === 'string'
+  );
+}
+
+/**
+ * `state` は人間が見る主指標（RUNNING/PAUSED/HALTED バッジ）を直接駆動するため、
+ * ここは絶対に例外を投げない。壊れたデータから「稼働中」を誤って推測することは
+ * 決してせず、常に安全側の HALTED にフォールバックする。
+ */
+export function loadStatus(dataDir: string = DATA_DIR): LoopStatus {
+  const file = path.join(dataDir, 'status.json');
+  const fallback = (reason: string): LoopStatus => ({
+    state: 'HALTED',
+    reason,
+    actor: 'system',
+    updatedAt: new Date().toISOString(),
+    resumeHint: `${file} の内容を確認してください`,
+  });
+
+  if (!fs.existsSync(file)) return fallback('data/status.json が見つからない');
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  } catch {
+    return fallback('data/status.json を JSON として解析できない');
+  }
+  if (!isValidStatus(parsed)) return fallback('data/status.json の形式が不正');
+  return parsed;
 }
 ```
 
-- [ ] **Step 2: コミット**
+`dataDir` を省略した場合は既定で `DATA_DIR`（`../data`）を読む。ただし戻り値の形が `RunRecord[]` から `{ runs, errors }` に変わったため、Task 7 の `page.tsx` は `loadRuns()` の呼び出しを **`const { runs, errors } = loadRuns();` に変更する必要がある**（Task 7 Step 2 参照）。
+
+- [ ] **Step 4: テストを実行して合格を確認**
+
+Run: `cd dashboard && npx vitest run src/lib/loadData.test.ts`
+Expected: PASS — 16 tests passed（loadRuns 11 / loadStatus 5）
+
+- [ ] **Step 5: コミット**
 
 ```bash
-git add dashboard/src/lib/loadData.ts
-git commit -m "feat(dashboard): add build-time data loading layer"
+git add dashboard/src/lib/loadData.ts dashboard/src/lib/loadData.test.ts
+git commit -m "feat(dashboard): validate run records at build time, skipping and surfacing invalid ones instead of failing the build"
 ```
 
 ---
@@ -688,15 +1218,19 @@ git commit -m "feat(dashboard): add StatusBadge showing stop reason and resume h
 
 ---
 
-## Task 6: MetricCards / TrendChart / IterationTimeline
+## Task 6: MetricCards / TrendChart / IterationTimeline / LoadErrorBanner
 
 **Files:**
 - Create: `dashboard/src/components/MetricCards.tsx`
 - Create: `dashboard/src/components/TrendChart.tsx`
 - Create: `dashboard/src/components/IterationTimeline.tsx`
+- Create: `dashboard/src/components/LoadErrorBanner.tsx`
 - Test: `dashboard/src/components/MetricCards.test.tsx`
+- Test: `dashboard/src/components/LoadErrorBanner.test.tsx`
 
 チャートは外部依存を足さず SVG を自前で描く（依存が増えると agent の verify が遅く・脆くなるため）。
+
+> **レビューでの修正（2026-07-20）:** Task 4 の設計反転（壊れた record は `throw` せずスキップして `errors` として返す）に伴い、そのスキップ理由を実際にダッシュボード上へ提示するコンポーネントが必要になった。`LoadErrorBanner` はそれを担う（Step 8）。
 
 - [ ] **Step 1: MetricCards の失敗するテストを書く**
 
@@ -844,10 +1378,13 @@ export function TrendChart({
 ```tsx
 import type { RunRecord } from '@/lib/types';
 
+// `Record<RunRecord['verdict'], string>` は Verdict の全メンバーをキーとして要求する。
+// 契約に `dry-run` が増えたので、ここに追加しないと typecheck が落ちる（レビューでの修正）。
 const VERDICT_STYLES: Record<RunRecord['verdict'], string> = {
   merged: 'text-emerald-400',
   'needs-human': 'text-amber-400',
   paused: 'text-sky-400',
+  'dry-run': 'text-fuchsia-400',
   failed: 'text-rose-400',
 };
 
@@ -919,11 +1456,76 @@ export function BacklogPanel({ runs, repoUrl }: { runs: RunRecord[]; repoUrl: st
 }
 ```
 
-- [ ] **Step 8: コミット**
+- [ ] **Step 8: `LoadErrorBanner` を TDD で実装**
+
+`loadRuns` がスキップした record の理由を画面上に明示する。空配列なら何も描画しない。
+
+`dashboard/src/components/LoadErrorBanner.test.tsx`（失敗するテストを先に書く）:
+
+```tsx
+import { describe, expect, it } from 'vitest';
+import { render, screen } from '@testing-library/react';
+import { LoadErrorBanner } from './LoadErrorBanner';
+import type { LoadError } from '@/lib/loadData';
+
+describe('LoadErrorBanner', () => {
+  it('errors が空配列なら何も描画しない', () => {
+    const { container } = render(<LoadErrorBanner errors={[]} />);
+    expect(container).toBeEmptyDOMElement();
+  });
+
+  it('errors があればファイルごとに一覧表示する', () => {
+    const errors: LoadError[] = [
+      { file: '0002.json', message: '0002.json: フィールド "verdict" が不正な値または欠落している' },
+      { file: '0009.json', message: '0009.json: フィールド "cost.totalUsd" は number である必要がある' },
+    ];
+    render(<LoadErrorBanner errors={errors} />);
+    expect(screen.getByTestId('load-error-banner')).toBeInTheDocument();
+    expect(screen.getByText('2 件の実行記録を読み込めませんでした')).toBeInTheDocument();
+    expect(screen.getByText(/0002\.json/)).toBeInTheDocument();
+    expect(screen.getByText(/0009\.json/)).toBeInTheDocument();
+  });
+});
+```
+
+Run: `cd dashboard && npx vitest run src/components/LoadErrorBanner.test.tsx`
+Expected: FAIL — `Failed to resolve import "./LoadErrorBanner"`
+
+`dashboard/src/components/LoadErrorBanner.tsx` を実装:
+
+```tsx
+import type { LoadError } from '@/lib/loadData';
+
+export function LoadErrorBanner({ errors }: { errors: LoadError[] }) {
+  if (errors.length === 0) return null;
+  return (
+    <section
+      data-testid="load-error-banner"
+      className="rounded-xl border border-rose-500/40 bg-rose-500/15 p-5 text-rose-300"
+    >
+      <div className="font-semibold">
+        {errors.length} 件の実行記録を読み込めませんでした
+      </div>
+      <ul className="mt-2 space-y-1 text-sm">
+        {errors.map((e) => (
+          <li key={e.file} className="font-mono text-xs">
+            {e.file}: {e.message}
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+```
+
+Run: `cd dashboard && npx vitest run src/components/LoadErrorBanner.test.tsx`
+Expected: PASS — 2 tests passed
+
+- [ ] **Step 9: コミット**
 
 ```bash
 git add dashboard/src/components
-git commit -m "feat(dashboard): add metric cards, trend chart, timeline and backlog panel"
+git commit -m "feat(dashboard): add metric cards, trend chart, timeline, backlog panel, and load-error banner"
 ```
 
 ---
@@ -936,19 +1538,24 @@ git commit -m "feat(dashboard): add metric cards, trend chart, timeline and back
 
 - [ ] **Step 1: `dashboard/next.config.ts` を作成**
 
-GitHub Pages はリポジトリ名のサブパス配信になるため、CI 時のみ `basePath` を付ける。
+GitHub Pages はリポジトリ名のサブパス配信になるため `basePath` を付ける。ただし判定は `GITHUB_ACTIONS` ではなく専用フラグ `PAGES_BASE_PATH` で行う（`GITHUB_ACTIONS` は全 workflow で true になり、ci.yml の E2E dev サーバまで basePath 付きになって `/` が 404 → CI でだけ落ちるため）。pages.yml の build ステップだけがこのフラグを立てる。
 
 ```typescript
 import type { NextConfig } from 'next';
 
 const repo = 'demo-auto-spec-driven-development';
-const isCI = process.env.GITHUB_ACTIONS === 'true';
+
+// GitHub Pages はリポジトリ名のサブパス配信になるため basePath が要る。
+// ただし「CI である(GITHUB_ACTIONS)」と「Pages 用にビルドする」は別物。
+// GITHUB_ACTIONS で判定すると ci.yml の E2E も basePath 付き dev サーバになり、
+// テストが `/` を開いて 404 → CI でだけ落ちる。デプロイ専用フラグで分離する。
+const usePagesBasePath = process.env.PAGES_BASE_PATH === 'true';
 
 const nextConfig: NextConfig = {
   output: 'export',
   images: { unoptimized: true },
-  basePath: isCI ? `/${repo}` : '',
-  assetPrefix: isCI ? `/${repo}/` : '',
+  basePath: usePagesBasePath ? `/${repo}` : '',
+  assetPrefix: usePagesBasePath ? `/${repo}/` : '',
 };
 
 export default nextConfig;
@@ -960,6 +1567,7 @@ export default nextConfig;
 import { loadRuns, loadStatus } from '@/lib/loadData';
 import { summarize, coverageTrend, costTrend } from '@/lib/aggregate';
 import { StatusBadge } from '@/components/StatusBadge';
+import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
 import { TrendChart } from '@/components/TrendChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
@@ -970,7 +1578,9 @@ const REPO_URL =
   'https://github.com/yut0takagi/demo-auto-spec-driven-development';
 
 export default function Home() {
-  const runs = loadRuns();
+  // Task 4 の設計反転により loadRuns() は throw せず { runs, errors } を返す。
+  // errors は LoadErrorBanner でダッシュボード上に明示する（状態バッジより上）。
+  const { runs, errors } = loadRuns();
   const status = loadStatus();
   const summary = summarize(runs);
 
@@ -984,6 +1594,7 @@ export default function Home() {
       </header>
 
       <div className="space-y-6">
+        <LoadErrorBanner errors={errors} />
         <StatusBadge status={status} />
         <MetricCards summary={summary} />
         <div className="grid gap-6 lg:grid-cols-2">
@@ -1001,7 +1612,8 @@ export default function Home() {
 - [ ] **Step 3: verify を実行して全体が緑になることを確認**
 
 Run: `cd dashboard && npm run verify`
-Expected: lint / typecheck / unit(14 tests) / build がすべて成功し `dashboard/out/` が生成される。
+Expected: lint / typecheck / unit(37 tests) / build がすべて成功し `dashboard/out/` が生成される。
+（内訳: aggregate 12 / loadData 16（loadRuns 11 + loadStatus 5）/ StatusBadge 3 / MetricCards 4 / LoadErrorBanner 2。Task 4 の設計反転で `loadData.test.ts` が増え、Task 6 に `LoadErrorBanner` が加わったため、旧稿の「17 tests」から更新）
 
 - [ ] **Step 4: コミット**
 
@@ -1046,6 +1658,8 @@ export default defineConfig({
 
 - [ ] **Step 3: `dashboard/e2e/dashboard.spec.ts` を作成**
 
+> **実装時の修正:** ラベルは `getByText(..., { exact: true })` で狙う。フィクスチャの issue タイトルにも「承認率…」等が含まれ部分一致だと strict mode 違反になるため。停止手順の常時表示・実データ($1.11)・カバレッジ非急落の回帰ガードを追加し 4 テストにした。
+
 ```typescript
 import { test, expect } from '@playwright/test';
 
@@ -1058,16 +1672,54 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
   await expect(badge).toBeVisible();
   await expect(badge).toHaveAttribute('data-state', /RUNNING|PAUSED|HALTED/);
 
-  await expect(page.getByText('反復数')).toBeVisible();
-  await expect(page.getByText('承認率')).toBeVisible();
-  await expect(page.getByText('直近の反復')).toBeVisible();
+  // exact 指定: フィクスチャの issue タイトルにも「承認率…」等が含まれ、
+  // 部分一致だと strict mode 違反になる。ラベルは完全一致で狙う。
+  await expect(page.getByText('反復数', { exact: true })).toBeVisible();
+  await expect(page.getByText('承認率', { exact: true })).toBeVisible();
+  await expect(page.getByText('直近の反復', { exact: true })).toBeVisible();
+});
+
+test('停止バッジは理由・停止主体・再開手順を常時表示する', async ({ page }) => {
+  await page.goto('/');
+
+  // 無人ループを止めた人間が、再開手順まで一目で辿れることを保証する（spec §7）。
+  const badge = page.getByTestId('status-badge');
+  await expect(badge).toContainText('理由');
+  await expect(badge).toContainText('停止主体');
+  await expect(badge).toContainText('再開手順');
+  await expect(badge).toContainText('LOOP_ENABLED');
+});
+
+test('実データが数値として描画され、生 float や NaN が漏れない', async ({ page }) => {
+  await page.goto('/');
+
+  // フィクスチャの累計コストは 0.09+0.36... の合計で、生値は 1.1099999999999999。
+  // 整形されて $1.11 になっていること、生 float / NaN がページに存在しないこと。
+  await expect(page.getByText('$1.11')).toBeVisible();
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('1.10999');
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('カバレッジ推移は failed 反復で 0% に急落しない（カードと一致する）', async ({ page }) => {
+  await page.goto('/');
+
+  // 最新反復(#5)は failed=カバレッジ未計測。カードは iteration 4 の 84.1% を表示し、
+  // 推移グラフのヘッダ現在値も 84.1% を示す（過去、failed の 0% を拾って崩壊表示した回帰の防止）。
+  await expect(page.getByText('84.1%').first()).toBeVisible();
+  await expect(page.getByRole('img', { name: 'カバレッジ推移' })).toBeVisible();
+
+  // 0 への急落シグナルである "0.0%" がページのどこにも現れないこと。
+  await expect(page.getByText('0.0%')).toHaveCount(0);
 });
 ```
 
 - [ ] **Step 4: E2E を実行して合格を確認**
 
 Run: `cd dashboard && npm run test:e2e`
-Expected: PASS — 1 test passed
+Expected: PASS — 4 tests passed
 
 - [ ] **Step 5: コミット**
 
@@ -1247,6 +1899,6 @@ Expected: `1`
 - [ ] `ci` workflow が `develop` push で success
 - [ ] `pages` workflow が success し、公開 URL でダッシュボードが表示される
 - [ ] `main` がブランチ保護されている
-- [ ] `data/status.json` と `data/runs/0001.json` が存在し、ダッシュボードに反映されている
+- [ ] `data/status.json` と `data/runs/0001.json`〜`0005.json` が存在し、ダッシュボードに反映されている
 
 **次:** Plan 2（Orchestrator）— この `npm run verify` が agent の越えるゲートになる。
