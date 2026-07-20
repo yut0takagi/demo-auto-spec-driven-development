@@ -406,6 +406,8 @@ describe('summarize', () => {
     expect(s.avgReviseCycles).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.latestCoveragePct).toBe(0);
+    expect(s.latestCoverageIteration).toBe(0);
+    expect(s.latestCoverageStale).toBe(false);
   });
 
   it('承認率とマージ率を別々に数える', () => {
@@ -418,7 +420,8 @@ describe('summarize', () => {
     const s = summarize(runs);
     expect(s.totalRuns).toBe(4);
     expect(s.mergedRuns).toBe(1);
-    expect(s.approvalRate).toBeCloseTo(0.5);
+    // iteration 3 は failed（クラッシュ）なので承認率の母集団から除外される: 2/3 (iteration 1, 2, 4)
+    expect(s.approvalRate).toBeCloseTo(2 / 3);
     expect(s.mergeRate).toBeCloseTo(0.25);
   });
 
@@ -439,6 +442,61 @@ describe('summarize', () => {
       makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 70 } }),
     ];
     expect(summarize(runs).latestCoveragePct).toBe(91);
+  });
+
+  it('最新 iteration がクラッシュした場合、直前の測定値を採用しstaleを立てる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 84.1 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed', prNumber: null, changedLines: 0,
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+    ];
+    const s = summarize(runs);
+    expect(s.latestCoveragePct).toBe(84.1);
+    expect(s.latestCoverageIteration).toBe(1);
+    expect(s.latestCoverageStale).toBe(true);
+  });
+
+  it('クラッシュした run は平均サイクルタイムと平均revise回数の母集団から外す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 700, reviseCycles: 2 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 100, reviseCycles: 0 }),
+    ];
+    const s = summarize(runs);
+    expect(s.avgCycleTimeSec).toBe(700);
+    expect(s.avgReviseCycles).toBe(2);
+  });
+
+  it('クラッシュした run は承認率の母集団から外すが、コストには算入する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '' }, cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 } }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: 'レビューに到達しなかった。' }, cost: { builderUsd: 0.02, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.02 } }),
+    ];
+    const s = summarize(runs);
+    expect(s.approvalRate).toBe(1);
+    expect(s.totalCostUsd).toBeCloseTo(0.12);
+    expect(s.totalRuns).toBe(2);
+  });
+
+  it('全 run が failed でも承認率や平均が NaN にならない', () => {
+    const s = summarize([makeRun({ verdict: 'failed', adversary: { approved: false, summary: '' } })]);
+    expect(s.approvalRate).toBe(0);
+    expect(s.avgCycleTimeSec).toBe(0);
+    expect(s.avgReviseCycles).toBe(0);
+    expect(Number.isNaN(s.approvalRate)).toBe(false);
+  });
+
+  it('要素が1件でも正しく計算する', () => {
+    const runs = [makeRun({ iteration: 7, durationSec: 200, cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 }, verify: { unitPassed: true, e2ePassed: true, coveragePct: 75 } })];
+    const s = summarize(runs);
+    expect(s.avgCycleTimeSec).toBe(200);
+    expect(s.totalCostUsd).toBeCloseTo(0.2);
+    expect(s.latestCoveragePct).toBe(75);
+    expect(s.latestCoverageStale).toBe(false);
+    expect(coverageTrend(runs)).toEqual([{ iteration: 7, value: 75 }]);
+    expect(costTrend(runs)).toEqual([{ iteration: 7, value: 0.2 }]);
   });
 });
 
@@ -465,6 +523,11 @@ describe('costTrend', () => {
     expect(t[0].value).toBeCloseTo(0.1);
     expect(t[1].value).toBeCloseTo(0.3);
   });
+
+  it('coverageTrend/costTrend は空配列で空配列を返す', () => {
+    expect(coverageTrend([])).toEqual([]);
+    expect(costTrend([])).toEqual([]);
+  });
 });
 ```
 
@@ -472,6 +535,8 @@ describe('costTrend', () => {
 
 Run: `cd dashboard && npx vitest run src/lib/aggregate.test.ts`
 Expected: FAIL — `Failed to resolve import "./aggregate"`
+
+**なぜ `verdict: 'failed'` の run を除外するか:** クラッシュした run は `verify.coveragePct: 0` / 短い `durationSec` を記録するが、これは「カバレッジが 0 だった」のではなく「測定できなかった」ことを意味する。素朴に平均や「最新値」に含めると、無人ループの唯一の人間向け窓口であるダッシュボードが「カバレッジ崩壊」「サイクルタイム短縮」という偽の信号を出す（実データ `data/runs/0005.json` で検証済み: 素朴実装では `latestCoveragePct` が 84.1% ではなく 0.0% と表示される）。そのため crashed run は測定由来の指標（承認率・平均サイクルタイム・平均revise回数・最新カバレッジ）の母集団から除外し、コストと総数（`totalCostUsd` / `totalRuns` / `mergedRuns`）には引き続き算入する（金は使われている以上、除外してはいけない）。
 
 - [ ] **Step 7: `dashboard/src/lib/aggregate.ts` を実装**
 
@@ -481,15 +546,19 @@ import type { RunRecord } from './types';
 export interface Summary {
   totalRuns: number;
   mergedRuns: number;
-  /** adversary が approve した割合 0..1 */
+  /** adversary が approve した割合 0..1。分母は verify に到達した run のみ（crashed run を除く） */
   approvalRate: number;
   /** develop にマージされた割合 0..1 */
   mergeRate: number;
   avgCycleTimeSec: number;
   avgReviseCycles: number;
   totalCostUsd: number;
-  /** 最新 iteration のカバレッジ */
+  /** verify に到達した最新 iteration のカバレッジ */
   latestCoveragePct: number;
+  /** latestCoveragePct がどの iteration の測定値か */
+  latestCoverageIteration: number;
+  /** true なら最新 iteration ではなく、それ以前の測定値を表示している */
+  latestCoverageStale: boolean;
 }
 
 export interface TrendPoint {
@@ -506,6 +575,15 @@ function byIterationAsc(runs: RunRecord[]): RunRecord[] {
   return [...runs].sort((a, b) => a.iteration - b.iteration);
 }
 
+/**
+ * その run が実際に verify まで到達したか。
+ * `failed` は例外で異常終了しており、coveragePct や durationSec が
+ * 「測定されなかった」ことを意味する 0 なので、平均や最新値の母集団から外す。
+ */
+function reachedVerify(run: RunRecord): boolean {
+  return run.verdict !== 'failed';
+}
+
 export function summarize(runs: RunRecord[]): Summary {
   if (runs.length === 0) {
     return {
@@ -517,23 +595,29 @@ export function summarize(runs: RunRecord[]): Summary {
       avgReviseCycles: 0,
       totalCostUsd: 0,
       latestCoveragePct: 0,
+      latestCoverageIteration: 0,
+      latestCoverageStale: false,
     };
   }
 
   const sorted = byIterationAsc(runs);
   const latest = sorted[sorted.length - 1];
+  const completed = sorted.filter(reachedVerify);
+  const latestMeasured = completed.length > 0 ? completed[completed.length - 1] : latest;
   const mergedRuns = runs.filter((r) => r.verdict === 'merged').length;
-  const approvedRuns = runs.filter((r) => r.adversary.approved).length;
+  const approvedRuns = completed.filter((r) => r.adversary.approved).length;
 
   return {
     totalRuns: runs.length,
     mergedRuns,
-    approvalRate: approvedRuns / runs.length,
+    approvalRate: completed.length === 0 ? 0 : approvedRuns / completed.length,
     mergeRate: mergedRuns / runs.length,
-    avgCycleTimeSec: mean(runs.map((r) => r.durationSec)),
-    avgReviseCycles: mean(runs.map((r) => r.reviseCycles)),
+    avgCycleTimeSec: mean(completed.map((r) => r.durationSec)),
+    avgReviseCycles: mean(completed.map((r) => r.reviseCycles)),
     totalCostUsd: runs.reduce((sum, r) => sum + r.cost.totalUsd, 0),
-    latestCoveragePct: latest.verify.coveragePct,
+    latestCoveragePct: latestMeasured.verify.coveragePct,
+    latestCoverageIteration: latestMeasured.iteration,
+    latestCoverageStale: latestMeasured.iteration !== latest.iteration,
   };
 }
 
@@ -556,7 +640,7 @@ export function costTrend(runs: RunRecord[]): TrendPoint[] {
 - [ ] **Step 8: テストを実行して合格を確認**
 
 Run: `cd dashboard && npx vitest run src/lib/aggregate.test.ts`
-Expected: PASS — 6 tests passed（`summarize` 4 件 + `coverageTrend` 1 件 + `costTrend` 1 件。旧稿は「7 tests」と誤記していた — 契約変更とは無関係の既存の数え間違いをここで訂正）
+Expected: PASS — 12 tests passed（`summarize` 9 件 + `coverageTrend` 1 件 + `costTrend` 2 件。crashed run の除外ロジックを追加した際のコードレビューで、実データ `data/runs/0005.json` に対して素朴実装が偽のカバレッジ崩壊を報告することが判明し、6 件から 12 件に増補した）
 
 - [ ] **Step 9: コミット**
 
