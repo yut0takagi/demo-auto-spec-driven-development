@@ -1,9 +1,23 @@
 import Image from "next/image";
+import { loadRuns } from "@/lib/loadData";
+import { LoadErrorBanner } from "@/components/LoadErrorBanner";
 
 export default function Home() {
+  // Task 6/7 でこのページは MetricCards / TrendChart / IterationTimeline などを
+  // 組み立てて runs を本格的に使うようになる。今はそれらのコンポーネントがまだ
+  // 無いため、先に確定した loadRuns() の契約（壊れた record はスキップし errors
+  // として返す）を実際に static export のビルド時に通し、結果を最小限表示する。
+  const { runs, errors } = loadRuns();
+
   return (
     <div className="flex flex-col flex-1 items-center justify-center bg-zinc-50 font-sans dark:bg-black">
       <main className="flex flex-1 w-full max-w-3xl flex-col items-center justify-between py-32 px-16 bg-white dark:bg-black sm:items-start">
+        <div className="w-full">
+          <LoadErrorBanner errors={errors} />
+          <p className="mt-2 text-xs text-zinc-500 dark:text-zinc-500">
+            読み込んだ実行記録: {runs.length} 件（MetricCards などは Task 6/7 で追加）
+          </p>
+        </div>
         <Image
           className="dark:invert"
           src="/next.svg"
