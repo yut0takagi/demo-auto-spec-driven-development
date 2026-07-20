@@ -17,8 +17,18 @@ export interface LoopStatus {
   resumeHint: string;
 }
 
-/** 1 反復の最終結果 */
-export type Verdict = 'merged' | 'needs-human' | 'paused' | 'failed';
+/**
+ * 1 反復の最終結果。
+ * - `merged`      ゲートを通過し develop にマージされた
+ * - `needs-human` ゲート不通過。PR は開いたまま人間の判断待ち
+ * - `paused`      キルスイッチによりマージ直前で停止した（PR は開いている）
+ * - `dry-run`     ドライラン。マージ以外は実行した
+ * - `failed`      反復が例外で異常終了した
+ *
+ * `paused` と `dry-run` を分けているのは、前者が「人間が止めた」、後者が
+ * 「最初からマージしない設定だった」という別事象だから。
+ */
+export type Verdict = 'merged' | 'needs-human' | 'paused' | 'dry-run' | 'failed';
 
 export interface RunRecord {
   /** 一意ID。`<ISO8601 basic>-<issue#>` 形式 */
@@ -39,12 +49,24 @@ export interface RunRecord {
   /** adversary の棄却により builder が revise した回数 */
   reviseCycles: number;
   verdict: Verdict;
+  /**
+   * ゲートを通過しなかった理由。通過した場合は空配列。
+   * これが無いと `needs-human` の反復をダッシュボードが説明できない。
+   */
+  gateReasons: string[];
+  /** この反復が開いた PR 番号。PR 到達前に終了した場合は null */
+  prNumber: number | null;
   adversary: {
     approved: boolean;
     summary: string;
   };
+  /**
+   * 検証結果。`npm run verify`（lint/typecheck/unit/build）と
+   * `npm run test:e2e` はゲート上も別条件なので、別々に記録する。
+   */
   verify: {
-    testsPassed: boolean;
+    unitPassed: boolean;
+    e2ePassed: boolean;
     /** 0..100 */
     coveragePct: number;
   };

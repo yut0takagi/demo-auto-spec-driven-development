@@ -1,0 +1,23 @@
+{
+  "id": "20260720T030000Z-4",
+  "iteration": 4,
+  "issue": {
+    "number": 4,
+    "title": "承認率カードに直近10反復の内訳ツールチップを追加する",
+    "labels": ["loop:ready"]
+  },
+  "branch": "loop/4-approval-tooltip",
+  "startedAt": "2026-07-20T03:00:00Z",
+  "finishedAt": "2026-07-20T03:08:20Z",
+  "durationSec": 500,
+  "reviseCycles": 0,
+  "verdict": "paused",
+  "gateReasons": [],
+  "prNumber": 14,
+  "adversary": { "approved": true, "summary": "指摘なし。" },
+  "verify": { "unitPassed": true, "e2ePassed": true, "coveragePct": 84.1 },
+  "changedLines": 63,
+  "cost": { "builderUsd": 0.12, "adversaryUsd": 0.01, "ideationUsd": 0.0, "totalUsd": 0.13 },
+  "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
+  "nextIssues": []
+}

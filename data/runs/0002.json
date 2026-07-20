@@ -1,0 +1,26 @@
+{
+  "id": "20260720T010000Z-2",
+  "iteration": 2,
+  "issue": {
+    "number": 2,
+    "title": "反復タイムラインに所要時間を分表記で表示する",
+    "labels": ["loop:ready", "enhancement"]
+  },
+  "branch": "loop/2-timeline-duration",
+  "startedAt": "2026-07-20T01:00:00Z",
+  "finishedAt": "2026-07-20T01:12:30Z",
+  "durationSec": 750,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 12,
+  "adversary": {
+    "approved": true,
+    "summary": "2 回の差し戻しを経て、境界値(0秒/24時間超)のテストが追加された。現状は承認できる。"
+  },
+  "verify": { "unitPassed": true, "e2ePassed": true, "coveragePct": 83.4 },
+  "changedLines": 118,
+  "cost": { "builderUsd": 0.31, "adversaryUsd": 0.04, "ideationUsd": 0.01, "totalUsd": 0.36 },
+  "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
+  "nextIssues": [3, 4]
+}

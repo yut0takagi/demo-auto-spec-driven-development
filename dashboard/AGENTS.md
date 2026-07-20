@@ -1,5 +1,34 @@
-<!-- BEGIN:nextjs-agent-rules -->
-# This is NOT the Next.js you know
+# dashboard/ で作業するエージェントへ
 
-This version has breaking changes — APIs, conventions, and file structure may all differ from your training data. Read the relevant guide in `node_modules/next/dist/docs/` before writing any code. Heed deprecation notices.
-<!-- END:nextjs-agent-rules -->
+このディレクトリは**自走ループが育てるプロダクト**（自己観測ダッシュボード）です。
+無人で回るため、以下は毎回守ってください。
+
+## このプロジェクト固有の制約
+
+- **静的エクスポート専用** (`output: 'export'`)。サーバー実行時にしか動かないものは使えません:
+  API Routes、Server Actions、リクエスト時に評価される動的レンダリング、`next/image` の最適化。
+  データはビルド時に `../data` を fs で読む方式です（`src/lib/loadData.ts`）。
+- **データ契約を勝手に変えない。** `src/lib/types.ts` の `RunRecord` / `LoopStatus` は
+  Python 製オーケストレータが出力する JSON と 1:1 対応する**言語をまたぐ契約**です。
+  フィールド名の変更・追加・削除は、Python 側の変更とセットでないと壊れます。
+- **変更は 400 行以内。** 超えると自動マージのゲートで弾かれます。
+- **触ってよいのは `dashboard/` と `data/` だけ。** `.github/`、`orchestrator/`、`tests/`、
+  `.loop/` は保護パスで、変更するとゲートで即ブロックされます。
+
+## 完了の条件
+
+```bash
+npm run verify     # lint / typecheck / unit / build。これが緑でないと先に進めません
+npm run test:e2e   # Playwright
+```
+
+**テストは実装を実質的に検証すること。** 通すためだけのテスト（アサートが実質空、
+モックの戻り値をそのまま検証しているだけ、等）は敵対的レビューで棄却されます。
+境界値・空・異常系を必ず含めてください。
+
+## Next.js のバージョン差分について
+
+このリポジトリの Next.js は比較的新しく、API や規約が学習データと異なる可能性があります。
+**未知の API に遭遇したときや、想定外のエラーが出たときに限り** `node_modules/next/dist/docs/`
+の該当ガイドを参照してください。予防的に読み漁るとトークンを無駄に消費します
+（このループは 1 日 $5 の予算で回っています）。

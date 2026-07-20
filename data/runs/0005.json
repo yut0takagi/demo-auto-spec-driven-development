@@ -1,0 +1,23 @@
+{
+  "id": "20260720T040000Z-5",
+  "iteration": 5,
+  "issue": {
+    "number": 5,
+    "title": "カバレッジ推移に目標線 (90%) を引く",
+    "labels": ["loop:ready"]
+  },
+  "branch": "loop/5-coverage-target-line",
+  "startedAt": "2026-07-20T04:00:00Z",
+  "finishedAt": "2026-07-20T04:02:10Z",
+  "durationSec": 130,
+  "reviseCycles": 0,
+  "verdict": "failed",
+  "gateReasons": ["反復が例外で異常終了した: AgentError: claude exited 1"],
+  "prNumber": null,
+  "adversary": { "approved": false, "summary": "レビューに到達しなかった。" },
+  "verify": { "unitPassed": false, "e2ePassed": false, "coveragePct": 0.0 },
+  "changedLines": 0,
+  "cost": { "builderUsd": 0.02, "adversaryUsd": 0.0, "ideationUsd": 0.0, "totalUsd": 0.02 },
+  "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
+  "nextIssues": []
+}
