@@ -50,7 +50,7 @@ GitHub 上に、**issue を自分で立て → 自分で実装 → 敵対的レ�
 ```
 
 3つの構成物：
-- **`app/`** — 育てられるプロダクト（Next.js App Router + TypeScript）。ループ自身の稼働を可視化。
+- **`dashboard/`** — 育てられるプロダクト（Next.js App Router + TypeScript）。ループ自身の稼働を可視化。Next.js の `src/app/` と紛れないようこの名前にする。
 - **`orchestrator/`** — ループの脳（Python）。
 - **`.github/workflows/`** — 実行基盤。
 
@@ -128,10 +128,11 @@ h5i を `launcher="client"` + `on_turn` コールバックで駆動し、コー�
 ### 保護パス（ボットが触ったら即ブロック → `loop:needs-human`）
 - `.github/workflows/**`（CI・ループ定義）
 - `orchestrator/**`（ループの脳）
-- `**/*.secret`, `.loop/**`（制御ファイル）
+- `tests/**`（オーケストレータのテスト。脳の検証を弱められないようにする）
+- `.loop/**`（制御ファイル）
 - ブランチ保護設定
 
-→ **ループは自分の脳と安全装置を自己改変できない**。v1 では改善対象を実質 `app/` と `data/`・`docs/` に限定。将来ここは緩められる。
+→ **ループは自分の脳と安全装置を自己改変できない**。v1 では改善対象を実質 `dashboard/` と `data/`・`docs/` に限定。将来ここは緩められる。
 
 ### main の保護
 - 保護ブランチ。develop→main は人間のみがマージ。
@@ -166,7 +167,7 @@ h5i を `launcher="client"` + `on_turn` コールバックで駆動し、コー�
 - README 最上部に「🛑 今すぐ止める: `gh workflow disable loop.yml`」を明記。
 - 再開: `LOOP_ENABLED=true` に戻す or `control.yml` の resume。halted からの復帰は人間が理由確認後。
 
-## 8. Web アプリ（app/）
+## 8. Web アプリ（dashboard/）
 
 - **技術**: Next.js（App Router）+ TypeScript、`output: 'export'` で静的化。
 - **データソース**: (a) リポジトリにコミットされた `data/runs/*.json`（各反復の記録）、(b) GitHub REST/GraphQL API（issue/PR/CI 実行、public リポなので未認証読取で可）。
