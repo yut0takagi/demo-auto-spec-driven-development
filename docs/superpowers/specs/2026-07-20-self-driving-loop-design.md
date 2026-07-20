@@ -25,6 +25,7 @@ GitHub 上に、**issue を自分で立て → 自分で実装 → 敵対的レ�
 |---|---|---|
 | 実行エンジン | **GitHub Actions**（cron + workflow_dispatch） | PC 電源 off でも回る。GitHub 上で完結し再現可能 |
 | エージェント構成 | **Claude 2 役**（builder / adversary）。OAuth トークン | 追加課金なしで開始。セットアップ最小。Codex は後から追加可能に |
+| モデル | **builder=Sonnet / adversary=Haiku / ideation=Haiku**（Opus 不使用） | コスト最小化で無限に回す。安全は CI ゲートが担保 |
 | 題材 | **自己観測ダッシュボード**（Next.js + TS） | データが自動で増えループが枯れない。リポを見た人に一発でコンセプトが伝わる |
 | h5i の役割 | **内側の敵対ラウンドのエンジン**（案A） | 「h5i-python を使う」を正直に満たしつつ tmux を回避 |
 | 安全境界 | **develop=全自動マージ / main=人間ゲート** | 完全自走と「壊れても main は安全」を両立 |
@@ -76,8 +77,8 @@ GitHub 上に、**issue を自分で立て → 自分で実装 → 敵対的レ�
 | `MAX_REVISE_CYCLES` (N) | 2 | adversary 棄却時に builder が revise する最大回数 |
 | `MAX_CHANGED_LINES` | 400 | 自動マージを許す変更行数の上限 |
 | `CIRCUIT_BREAKER_FAILS` (K) | 3 | 連続ゲート失敗でループを自動 halt するしきい値 |
-| `DAILY_COST_BUDGET_USD` | 20 | 1 日あたりのトークンコスト上限（超過で halt） |
-| `PER_ITER_COST_BUDGET_USD` | 3 | 1 反復あたりのコスト上限（超過でその反復を中断） |
+| `DAILY_COST_BUDGET_USD` | 5 | 1 日あたりのトークンコスト上限（超過で halt）。Sonnet/Haiku 前提で低め |
+| `PER_ITER_COST_BUDGET_USD` | 0.5 | 1 反復あたりのコスト上限（超過でその反復を中断） |
 | `IDEATION_MAX_ISSUES` | 3 | 1 反復で生成する改善 issue の最大数 |
 | `LOOP_CRON` | `*/30 * * * *` | cron 間隔 |
 
@@ -89,8 +90,20 @@ h5i を `launcher="client"` + `on_turn` コールバックで駆動し、コー�
 - **立ち上げは native を先に緑化 → h5i 経路を有効化**、の順で確実に進める。
 
 ### エージェントの役割（敵対性の担保）
-- **builder**: タスクを実装する。`claude`（実装向けモデル）。
-- **adversary**: builder の成果物を **棄却を狙う敵対的プロンプト**でレビューする（「このエッジケースが漏れている」「このテストは実質を検証していない」等を具体的に指摘）。approve を出すのは本当に問題が無いときだけ。`claude`（別モデル/別ペルソナ）。
+- **builder**: タスクを実装する。
+- **adversary**: builder の成果物を **棄却を狙う敵対的プロンプト**でレビューする（「このエッジケースが漏れている」「このテストは実質を検証していない」等を具体的に指摘）。approve を出すのは本当に問題が無いときだけ。
+
+### モデル構成（コスト最小化・無限稼働前提）
+**Opus は使わない。** 役割ごとに最安の割り当て。すべて env で上書き可。
+
+| 役割 | 既定モデル | 環境変数 | 理由 |
+|---|---|---|---|
+| builder | **Sonnet**（`claude-sonnet-5`） | `BUILDER_MODEL` | CI と adversary を突破する実装が要る。品質/コストのスイートスポット。Haiku 単体だと revise 増で逆に高コスト |
+| adversary | **Haiku**（`claude-haiku-4-5`） | `ADVERSARY_MODEL` | 「棄却を狙い穴を探す」役。安いモデルでも敵対プロンプト＋具体的失敗証拠の要求で機能。甘く approve しても **CI(verify) が最終ゲート**なので安全側 |
+| ideation | **Haiku**（`claude-haiku-4-5`） | `IDEATION_MODEL` | issue 生成は軽い。最安で十分 |
+
+- **Opus へのエスカレーションは行わない**（明示的に除外）。revise が `MAX_REVISE_CYCLES` 尽きたら `loop:needs-human` に落とす。
+- 運用で adversary の approve が甘すぎると判明したら `ADVERSARY_MODEL=claude-sonnet-5` に引き上げ可能。
 
 ## 5. 1 反復のライフサイクル（loop.py）
 
