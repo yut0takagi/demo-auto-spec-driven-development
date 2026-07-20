@@ -622,11 +622,19 @@ export function summarize(runs: RunRecord[]): Summary {
   };
 }
 
+/**
+ * カバレッジ推移。`failed` run は coveragePct を測定していない（sentinel 0）ため
+ * 点として含めない。含めると最新点が 0 に急落し、同じページの MetricCards
+ * （measured な最新値を表示）と矛盾した「カバレッジ崩壊」に見える。
+ * コストは失敗でも実際に消費されるので costTrend は全 run を含む（対称ではない）。
+ */
 export function coverageTrend(runs: RunRecord[]): TrendPoint[] {
-  return byIterationAsc(runs).map((r) => ({
-    iteration: r.iteration,
-    value: r.verify.coveragePct,
-  }));
+  return byIterationAsc(runs)
+    .filter(reachedVerify)
+    .map((r) => ({
+      iteration: r.iteration,
+      value: r.verify.coveragePct,
+    }));
 }
 
 export function costTrend(runs: RunRecord[]): TrendPoint[] {

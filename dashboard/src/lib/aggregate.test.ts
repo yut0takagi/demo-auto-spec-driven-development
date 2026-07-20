@@ -140,6 +140,27 @@ describe('coverageTrend', () => {
       { iteration: 3, value: 88 },
     ]);
   });
+
+  it('failed run は点として含めない（0への急落でカバレッジ崩壊に見せない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 84.1 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+    ];
+    expect(coverageTrend(runs)).toEqual([{ iteration: 1, value: 84.1 }]);
+  });
+
+  it('costTrend は failed run のコストも含める（金は実際に消費されている）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 } }),
+      makeRun({ iteration: 2, verdict: 'failed', cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.02 } }),
+    ];
+    const t = costTrend(runs);
+    expect(t).toHaveLength(2);
+    expect(t[1].value).toBeCloseTo(0.12);
+  });
 });
 
 describe('costTrend', () => {
