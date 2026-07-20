@@ -4,9 +4,15 @@ Issue を自分で立て、実装し、敵対的レビューを受け、PR を�
 
 ## 🛑 今すぐ止める
 
+> **注意:** `loop.yml` は Plan 3 で追加されます。追加されるまでこの手順は動作しません。
+> CLI を使わない場合は GitHub の Actions タブから該当ワークフローの "Disable workflow" を押しても同じ効果があります。
+
 ```bash
 gh workflow disable loop.yml          # cron を停止（最も確実）
-gh run cancel $(gh run list --workflow=loop.yml --status=in_progress --json databaseId -q '.[0].databaseId')
+
+# 実行中のジョブがあれば止める（何も出力されなければ実行中のジョブは無い）
+RUN_ID=$(gh run list --workflow=loop.yml --status=in_progress --json databaseId --jq '.[0].databaseId // empty')
+[ -n "$RUN_ID" ] && gh run cancel "$RUN_ID"
 ```
 
 一時停止のみなら:

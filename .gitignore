@@ -7,7 +7,9 @@ test-results/
 __pycache__/
 *.pyc
 .venv/
-.env
+.pytest_cache/
+*.egg-info/
+.env*
 .DS_Store
 
 # worktrees (isolated workspaces — never commit these)
