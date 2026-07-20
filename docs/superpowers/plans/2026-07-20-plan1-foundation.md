@@ -132,7 +132,7 @@ Expected: `develop` が origin に存在する。
 **Files:**
 - Create: `dashboard/src/lib/types.ts`
 - Create: `data/status.json`
-- Create: `data/runs/0001.json`
+- Create: `data/runs/0001.json`〜`data/runs/0005.json`
 
 これは Plan 2（Python 側）と共有する契約。ここで確定した名前は Plan 2/3 で厳密に一致させること。
 
@@ -145,6 +145,8 @@ npx create-next-app@latest dashboard --typescript --tailwind --eslint --app --sr
 Expected: `dashboard/` が作成され `dashboard/src/app/page.tsx` が存在する。
 
 - [ ] **Step 2: `dashboard/src/lib/types.ts` を作成**
+
+> **レビューでの修正（2026-07-20）:** 当初案は `verify.testsPassed` 一本、`Verdict` に `dry-run` なし、`gateReasons`/`prNumber` なしだった。しかし実際のループは unit と e2e を別条件でゲートしており（round.py の `verify_passed`/`e2e_passed`）、`needs-human` の反復がなぜ弾かれたかをダッシュボードが説明できず、`paused`（人間が止めた）と「最初からマージしない dry-run」が区別できなかった。以下は修正後の実ファイルと完全に一致する。
 
 ```typescript
 /**
@@ -166,8 +168,18 @@ export interface LoopStatus {
   resumeHint: string;
 }
 
-/** 1 反復の最終結果 */
-export type Verdict = 'merged' | 'needs-human' | 'paused' | 'failed';
+/**
+ * 1 反復の最終結果。
+ * - `merged`      ゲートを通過し develop にマージされた
+ * - `needs-human` ゲート不通過。PR は開いたまま人間の判断待ち
+ * - `paused`      キルスイッチによりマージ直前で停止した（PR は開いている）
+ * - `dry-run`     ドライラン。マージ以外は実行した
+ * - `failed`      反復が例外で異常終了した
+ *
+ * `paused` と `dry-run` を分けているのは、前者が「人間が止めた」、後者が
+ * 「最初からマージしない設定だった」という別事象だから。
+ */
+export type Verdict = 'merged' | 'needs-human' | 'paused' | 'dry-run' | 'failed';
 
 export interface RunRecord {
   /** 一意ID。`<ISO8601 basic>-<issue#>` 形式 */
@@ -188,12 +200,24 @@ export interface RunRecord {
   /** adversary の棄却により builder が revise した回数 */
   reviseCycles: number;
   verdict: Verdict;
+  /**
+   * ゲートを通過しなかった理由。通過した場合は空配列。
+   * これが無いと `needs-human` の反復をダッシュボードが説明できない。
+   */
+  gateReasons: string[];
+  /** この反復が開いた PR 番号。PR 到達前に終了した場合は null */
+  prNumber: number | null;
   adversary: {
     approved: boolean;
     summary: string;
   };
+  /**
+   * 検証結果。`npm run verify`（lint/typecheck/unit/build）と
+   * `npm run test:e2e` はゲート上も別条件なので、別々に記録する。
+   */
   verify: {
-    testsPassed: boolean;
+    unitPassed: boolean;
+    e2ePassed: boolean;
     /** 0..100 */
     coveragePct: number;
   };
@@ -226,9 +250,13 @@ export interface RunRecord {
 }
 ```
 
-- [ ] **Step 4: `data/runs/0001.json` にサンプル記録を作成**
+- [ ] **Step 4: `data/runs/0001.json`〜`0005.json` にサンプル記録を作成**
 
-ダッシュボードが空でない状態で開発・テストできるようにする。Plan 2 稼働後は実データが追加される。
+ダッシュボードが空でない状態で開発・テストできるようにする。Plan 2 稼働後は実データが追記される。
+
+> **レビューでの修正（2026-07-20）:** 当初は `0001.json` 1 件だけだった。1 件だけでは `merged` の幸福パスしか無く、Task 3 の集計層や Task 5/6 のコンポーネントが「常に成功する」データでしか検証されない。実際のループは `needs-human` / `paused` / `dry-run` / `failed` を含む複数の終端状態を取りうるので、それぞれの表示・集計が壊れていないことを最初からテストできるよう、多様な verdict のサンプルを 5 件用意する。
+
+`0001.json`（正準形。以下フルで掲載）:
 
 ```json
 {
@@ -245,14 +273,25 @@ export interface RunRecord {
   "durationSec": 300,
   "reviseCycles": 0,
   "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 11,
   "adversary": { "approved": true, "summary": "テストが実装を実質的に検証している。指摘なし。" },
-  "verify": { "testsPassed": true, "coveragePct": 80.0 },
+  "verify": { "unitPassed": true, "e2ePassed": true, "coveragePct": 80.0 },
   "changedLines": 42,
   "cost": { "builderUsd": 0.09, "adversaryUsd": 0.01, "ideationUsd": 0.01, "totalUsd": 0.11 },
   "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
   "nextIssues": [2]
 }
 ```
+
+残り 4 件は verdict と、それぞれを特徴づけるフィールドだけが異なる（全文は `data/runs/000N.json` として配置する）:
+
+| ファイル | verdict | 他と区別する要素 |
+|---|---|---|
+| `0002.json` | `merged` | `reviseCycles: 2`（2 回差し戻された後にマージ） |
+| `0003.json` | `needs-human` | adversary 棄却 (`adversary.approved: false`)、`verify.e2ePassed: false`（`unitPassed` は true）、`changedLines: 512`（上限 400 を超過）、`gateReasons` に 3 件の理由、`nextIssues: []`、`issue.title` が長文で `<mark>` のような特殊文字を含む |
+| `0004.json` | `paused` | キルスイッチによりマージ直前で停止。PR は開いたまま（`prNumber: 14`）で、コストは既に発生済み |
+| `0005.json` | `failed` | 反復が例外で異常終了。`prNumber: null`、`changedLines: 0`、`verify.unitPassed: false` |
 
 - [ ] **Step 5: コミット**
 
@@ -345,8 +384,10 @@ function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
     durationSec: 300,
     reviseCycles: 0,
     verdict: 'merged',
+    gateReasons: [],
+    prNumber: 11,
     adversary: { approved: true, summary: '' },
-    verify: { testsPassed: true, coveragePct: 80 },
+    verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
     changedLines: 10,
     cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 },
     models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
@@ -394,8 +435,8 @@ describe('summarize', () => {
 
   it('latestCoveragePct は iteration 最大の run を採用する（配列順に依存しない）', () => {
     const runs = [
-      makeRun({ iteration: 5, verify: { testsPassed: true, coveragePct: 91 } }),
-      makeRun({ iteration: 2, verify: { testsPassed: true, coveragePct: 70 } }),
+      makeRun({ iteration: 5, verify: { unitPassed: true, e2ePassed: true, coveragePct: 91 } }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 70 } }),
     ];
     expect(summarize(runs).latestCoveragePct).toBe(91);
   });
@@ -404,8 +445,8 @@ describe('summarize', () => {
 describe('coverageTrend', () => {
   it('iteration 昇順に整列して返す', () => {
     const runs = [
-      makeRun({ iteration: 3, verify: { testsPassed: true, coveragePct: 88 } }),
-      makeRun({ iteration: 1, verify: { testsPassed: true, coveragePct: 80 } }),
+      makeRun({ iteration: 3, verify: { unitPassed: true, e2ePassed: true, coveragePct: 88 } }),
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
     ];
     expect(coverageTrend(runs)).toEqual([
       { iteration: 1, value: 80 },
@@ -515,7 +556,7 @@ export function costTrend(runs: RunRecord[]): TrendPoint[] {
 - [ ] **Step 8: テストを実行して合格を確認**
 
 Run: `cd dashboard && npx vitest run src/lib/aggregate.test.ts`
-Expected: PASS — 7 tests passed
+Expected: PASS — 6 tests passed（`summarize` 4 件 + `coverageTrend` 1 件 + `costTrend` 1 件。旧稿は「7 tests」と誤記していた — 契約変更とは無関係の既存の数え間違いをここで訂正）
 
 - [ ] **Step 9: コミット**
 
@@ -530,31 +571,204 @@ git commit -m "feat(dashboard): add pure aggregation layer with tests"
 
 **Files:**
 - Create: `dashboard/src/lib/loadData.ts`
+- Test: `dashboard/src/lib/loadData.test.ts`
 
 集計層と分離した I/O 層。ビルド時に `../data` を読む（static export なので build 時 fs 読みで完結する）。
 
-- [ ] **Step 1: `dashboard/src/lib/loadData.ts` を実装**
+> **レビューでの修正（2026-07-20）:** 当初案は `JSON.parse(...) as RunRecord` のみで、これはコンパイル時にしか効かず実行時には消える型アサーションだった。`data/runs/*.json` は無人稼働の Python が書き、誰もレビューしないまま着地するため、壊れたレコード（必須フィールド欠落・型不一致・範囲外の値）を**ビルド時に検知して static export を失敗させる**実行時チェックを追加する。あわせて `coveragePct` を `[0, 100]` にクランプし、上流の異常値がダッシュボードの表示を壊さないようにする。
+
+- [ ] **Step 1: 失敗するテストを書く**
+
+`dataDir` を注入できるように `loadRuns(dataDir?: string)` / `loadStatus(dataDir?: string)` とし、テストは `os.tmpdir()` 配下に一時ディレクトリを作って検証する（fs をモックせず、実ファイルで確認する）。
+
+`dashboard/src/lib/loadData.test.ts`:
+
+```typescript
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { loadRuns, loadStatus } from './loadData';
+
+const VALID_RECORD = {
+  id: '20260720T000000Z-1',
+  iteration: 1,
+  issue: { number: 1, title: 't', labels: [] },
+  branch: 'loop/1-x',
+  startedAt: '2026-07-20T00:00:00Z',
+  finishedAt: '2026-07-20T00:05:00Z',
+  durationSec: 300,
+  reviseCycles: 0,
+  verdict: 'merged',
+  gateReasons: [],
+  prNumber: 11,
+  adversary: { approved: true, summary: '' },
+  verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
+  changedLines: 10,
+  cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 },
+  models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+  nextIssues: [],
+};
+
+function writeRun(dir: string, filename: string, record: unknown) {
+  fs.mkdirSync(path.join(dir, 'runs'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'runs', filename), JSON.stringify(record));
+}
+
+describe('loadRuns', () => {
+  let dir: string;
+
+  beforeEach(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'loaddata-test-'));
+  });
+
+  afterEach(() => {
+    fs.rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('正しい形の record は読み込める', () => {
+    writeRun(dir, '0001.json', VALID_RECORD);
+    const runs = loadRuns(dir);
+    expect(runs).toHaveLength(1);
+    expect(runs[0].id).toBe('20260720T000000Z-1');
+  });
+
+  it('verdict が欠けている record は、そのファイル名を含むエラーで落ちる', () => {
+    const broken: Record<string, unknown> = { ...VALID_RECORD };
+    delete broken.verdict;
+    writeRun(dir, '0002.json', broken);
+    expect(() => loadRuns(dir)).toThrowError(/0002\.json/);
+  });
+
+  it('coveragePct が 100 を超えていたら 100 にクランプする', () => {
+    writeRun(dir, '0001.json', {
+      ...VALID_RECORD,
+      verify: { ...VALID_RECORD.verify, coveragePct: 150 },
+    });
+    const runs = loadRuns(dir);
+    expect(runs[0].verify.coveragePct).toBe(100);
+  });
+
+  it('coveragePct が 0 未満だったら 0 にクランプする', () => {
+    writeRun(dir, '0001.json', {
+      ...VALID_RECORD,
+      verify: { ...VALID_RECORD.verify, coveragePct: -5 },
+    });
+    const runs = loadRuns(dir);
+    expect(runs[0].verify.coveragePct).toBe(0);
+  });
+});
+```
+
+- [ ] **Step 2: テストを実行して失敗を確認**
+
+Run: `cd dashboard && npx vitest run src/lib/loadData.test.ts`
+Expected: FAIL — `Failed to resolve import "./loadData"`
+
+- [ ] **Step 3: `dashboard/src/lib/loadData.ts` を実装**
 
 ```typescript
 import fs from 'node:fs';
 import path from 'node:path';
-import type { RunRecord, LoopStatus } from './types';
+import type { RunRecord, LoopStatus, Verdict } from './types';
 
 /** リポジトリ直下の data/ を指す（dashboard/ から見て 1 つ上） */
 const DATA_DIR = path.join(process.cwd(), '..', 'data');
 
-export function loadRuns(): RunRecord[] {
-  const dir = path.join(DATA_DIR, 'runs');
+const VALID_VERDICTS: readonly Verdict[] = ['merged', 'needs-human', 'paused', 'dry-run', 'failed'];
+
+function clampCoveragePct(value: number): number {
+  if (Number.isNaN(value)) return 0;
+  return Math.min(100, Math.max(0, value));
+}
+
+/**
+ * `data/runs/*.json` は無人稼働の Python が書き、誰もレビューしないまま着地する。
+ * `JSON.parse(...) as RunRecord` はコンパイル時にしか効かず実行時には消えるため、
+ * ビルド時（static export）に壊れたレコードを検出して失敗させる。
+ */
+function assertValidRunRecord(data: unknown, file: string): asserts data is RunRecord {
+  if (typeof data !== 'object' || data === null) {
+    throw new Error(`${file}: RunRecord は object である必要がある`);
+  }
+  const r = data as Record<string, unknown>;
+
+  const requireString = (key: string) => {
+    if (typeof r[key] !== 'string') {
+      throw new Error(`${file}: フィールド "${key}" は string である必要がある`);
+    }
+  };
+  const requireNumber = (key: string) => {
+    if (typeof r[key] !== 'number') {
+      throw new Error(`${file}: フィールド "${key}" は number である必要がある`);
+    }
+  };
+
+  requireString('id');
+  requireNumber('iteration');
+  if (typeof r.issue !== 'object' || r.issue === null) {
+    throw new Error(`${file}: フィールド "issue" が不正`);
+  }
+  requireString('branch');
+  requireString('startedAt');
+  requireString('finishedAt');
+  requireNumber('durationSec');
+  requireNumber('reviseCycles');
+  if (typeof r.verdict !== 'string' || !VALID_VERDICTS.includes(r.verdict as Verdict)) {
+    throw new Error(`${file}: フィールド "verdict" が不正な値または欠落している: ${JSON.stringify(r.verdict)}`);
+  }
+  if (!Array.isArray(r.gateReasons)) {
+    throw new Error(`${file}: フィールド "gateReasons" は配列である必要がある`);
+  }
+  if (r.prNumber !== null && typeof r.prNumber !== 'number') {
+    throw new Error(`${file}: フィールド "prNumber" は number か null である必要がある`);
+  }
+  if (typeof r.adversary !== 'object' || r.adversary === null) {
+    throw new Error(`${file}: フィールド "adversary" が不正`);
+  }
+  if (typeof r.verify !== 'object' || r.verify === null) {
+    throw new Error(`${file}: フィールド "verify" が不正`);
+  }
+  const verify = r.verify as Record<string, unknown>;
+  if (
+    typeof verify.unitPassed !== 'boolean' ||
+    typeof verify.e2ePassed !== 'boolean' ||
+    typeof verify.coveragePct !== 'number'
+  ) {
+    throw new Error(`${file}: フィールド "verify" の形が不正`);
+  }
+  requireNumber('changedLines');
+  if (typeof r.cost !== 'object' || r.cost === null) {
+    throw new Error(`${file}: フィールド "cost" が不正`);
+  }
+  if (typeof r.models !== 'object' || r.models === null) {
+    throw new Error(`${file}: フィールド "models" が不正`);
+  }
+  if (!Array.isArray(r.nextIssues)) {
+    throw new Error(`${file}: フィールド "nextIssues" は配列である必要がある`);
+  }
+}
+
+export function loadRuns(dataDir: string = DATA_DIR): RunRecord[] {
+  const dir = path.join(dataDir, 'runs');
   if (!fs.existsSync(dir)) return [];
   return fs
     .readdirSync(dir)
     .filter((f) => f.endsWith('.json'))
-    .map((f) => JSON.parse(fs.readFileSync(path.join(dir, f), 'utf8')) as RunRecord)
+    .map((f) => {
+      const file = path.join(dir, f);
+      const raw: unknown = JSON.parse(fs.readFileSync(file, 'utf8'));
+      assertValidRunRecord(raw, file);
+      return {
+        ...raw,
+        verify: { ...raw.verify, coveragePct: clampCoveragePct(raw.verify.coveragePct) },
+      };
+    })
     .sort((a, b) => a.iteration - b.iteration);
 }
 
-export function loadStatus(): LoopStatus {
-  const file = path.join(DATA_DIR, 'status.json');
+export function loadStatus(dataDir: string = DATA_DIR): LoopStatus {
+  const file = path.join(dataDir, 'status.json');
   if (!fs.existsSync(file)) {
     return {
       state: 'HALTED',
@@ -568,11 +782,18 @@ export function loadStatus(): LoopStatus {
 }
 ```
 
-- [ ] **Step 2: コミット**
+`dataDir` を省略した場合は既定で `DATA_DIR`（`../data`）を読むので、Task 7 の `page.tsx` は `loadRuns()` / `loadStatus()` の呼び出しを変更する必要はない。
+
+- [ ] **Step 4: テストを実行して合格を確認**
+
+Run: `cd dashboard && npx vitest run src/lib/loadData.test.ts`
+Expected: PASS — 4 tests passed
+
+- [ ] **Step 5: コミット**
 
 ```bash
-git add dashboard/src/lib/loadData.ts
-git commit -m "feat(dashboard): add build-time data loading layer"
+git add dashboard/src/lib/loadData.ts dashboard/src/lib/loadData.test.ts
+git commit -m "feat(dashboard): validate run records at build time and clamp coveragePct"
 ```
 
 ---
@@ -854,10 +1075,13 @@ export function TrendChart({
 ```tsx
 import type { RunRecord } from '@/lib/types';
 
+// `Record<RunRecord['verdict'], string>` は Verdict の全メンバーをキーとして要求する。
+// 契約に `dry-run` が増えたので、ここに追加しないと typecheck が落ちる（レビューでの修正）。
 const VERDICT_STYLES: Record<RunRecord['verdict'], string> = {
   merged: 'text-emerald-400',
   'needs-human': 'text-amber-400',
   paused: 'text-sky-400',
+  'dry-run': 'text-fuchsia-400',
   failed: 'text-rose-400',
 };
 
@@ -1011,7 +1235,8 @@ export default function Home() {
 - [ ] **Step 3: verify を実行して全体が緑になることを確認**
 
 Run: `cd dashboard && npm run verify`
-Expected: lint / typecheck / unit(14 tests) / build がすべて成功し `dashboard/out/` が生成される。
+Expected: lint / typecheck / unit(17 tests) / build がすべて成功し `dashboard/out/` が生成される。
+（内訳: aggregate 6 / loadData 4 / StatusBadge 3 / MetricCards 4。Task 4 で `loadData.test.ts` を追加したため、旧稿の「14 tests」から更新）
 
 - [ ] **Step 4: コミット**
 
@@ -1257,6 +1482,6 @@ Expected: `1`
 - [ ] `ci` workflow が `develop` push で success
 - [ ] `pages` workflow が success し、公開 URL でダッシュボードが表示される
 - [ ] `main` がブランチ保護されている
-- [ ] `data/status.json` と `data/runs/0001.json` が存在し、ダッシュボードに反映されている
+- [ ] `data/status.json` と `data/runs/0001.json`〜`0005.json` が存在し、ダッシュボードに反映されている
 
 **次:** Plan 2（Orchestrator）— この `npm run verify` が agent の越えるゲートになる。
