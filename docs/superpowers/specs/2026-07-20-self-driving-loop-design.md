@@ -219,3 +219,11 @@ h5i を `launcher="client"` + `on_turn` コールバックで駆動し、コー�
 | 壊れた変更が main に到達 | main 人間ゲート、develop post-merge 赤で revert PR 自動生成 |
 | 途中停止で半端な状態 | 3 チェックポイントでマージ直前に離脱、最悪でも open PR のみ |
 | OAuth トークンの期限切れ | ループが認証失敗を検知したら halt + issue 発行（人間に通知） |
+
+## 14. GitHub Actions の制限に関する設計上の前提
+
+- **public リポジトリを維持する** → GitHub-hosted runner の実行時間が無料・無制限。private にすると月 2000 分無料枠を 30 分 cron が即枯渇させるため、private 化する場合は self-hosted runner か有料枠が前提になる。
+- **cron はベストエフォート**（高負荷時は遅延・稀にスキップ）。ループは issue 駆動で冪等なので、遅延・スキップしても次回起動で続きから安全に再開する。
+- **60 日無活動で scheduled workflow が自動停止**する仕様があるが、ループは常時 commit するため該当しない。
+- **`GITHUB_TOKEN` は他の workflow を連鎖トリガーしない**（無限再帰防止）。したがってボット作成 PR では `ci.yml` が発火しない前提で設計する: **verify（lint/type/unit/E2E）はループジョブ内で `c.verify()` として直接実行**し、別 workflow の発火に依存しない。`ci.yml` は人間 PR 用の二次的セーフティネットと位置づける。
+- 真に監視すべき上限は GHA ではなく **Claude 側の利用量/コスト**。§13 の日次/反復コスト予算と L4 サーキットブレーカで自動停止する。
