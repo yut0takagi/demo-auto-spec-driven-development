@@ -1,0 +1,21 @@
+{
+  "id": "20260720T000000Z-1",
+  "iteration": 1,
+  "issue": {
+    "number": 1,
+    "title": "seed: ダッシュボードに稼働ステータスを表示する",
+    "labels": ["loop:ready"]
+  },
+  "branch": "loop/1-seed",
+  "startedAt": "2026-07-20T00:00:00Z",
+  "finishedAt": "2026-07-20T00:05:00Z",
+  "durationSec": 300,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "adversary": { "approved": true, "summary": "テストが実装を実質的に検証している。指摘なし。" },
+  "verify": { "testsPassed": true, "coveragePct": 80.0 },
+  "changedLines": 42,
+  "cost": { "builderUsd": 0.09, "adversaryUsd": 0.01, "ideationUsd": 0.01, "totalUsd": 0.11 },
+  "models": { "builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5" },
+  "nextIssues": [2]
+}

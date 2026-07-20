@@ -1,0 +1,7 @@
+{
+  "state": "PAUSED",
+  "reason": "初期状態。まだループを起動していない",
+  "actor": "system",
+  "updatedAt": "2026-07-20T00:00:00Z",
+  "resumeHint": "gh variable set LOOP_ENABLED --body true && gh workflow enable loop.yml"
+}
