@@ -70,6 +70,17 @@ GitHub 上に、**issue を自分で立て → 自分で実装 → 敵対的レ�
 | `gates.py` | 安全ゲート判定・保護パス判定・キルスイッチ読取 | — |
 | `config.py` | 環境変数・予算・上限値の集中管理 | — |
 
+### 既定パラメータ（config.py、環境変数で上書き可）
+| 名前 | 既定値 | 意味 |
+|---|---|---|
+| `MAX_REVISE_CYCLES` (N) | 2 | adversary 棄却時に builder が revise する最大回数 |
+| `MAX_CHANGED_LINES` | 400 | 自動マージを許す変更行数の上限 |
+| `CIRCUIT_BREAKER_FAILS` (K) | 3 | 連続ゲート失敗でループを自動 halt するしきい値 |
+| `DAILY_COST_BUDGET_USD` | 20 | 1 日あたりのトークンコスト上限（超過で halt） |
+| `PER_ITER_COST_BUDGET_USD` | 3 | 1 反復あたりのコスト上限（超過でその反復を中断） |
+| `IDEATION_MAX_ISSUES` | 3 | 1 反復で生成する改善 issue の最大数 |
+| `LOOP_CRON` | `*/30 * * * *` | cron 間隔 |
+
 ### round.py の要点
 h5i を `launcher="client"` + `on_turn` コールバックで駆動し、コールバック内で `claude -p --model <model>` にシェルアウトする。これにより **tmux 不要**で GitHub 管理ランナー上で動く。
 
