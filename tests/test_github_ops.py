@@ -1,0 +1,71 @@
+import json
+
+from orchestrator.github_ops import GitHubOps
+from orchestrator.shell import CommandResult, FakeRunner
+
+
+def ops(results):
+    runner = FakeRunner(results)
+    return GitHubOps(cwd="/repo", runner=runner), runner
+
+
+class TestListReadyIssues:
+    def test_parses_issue_list(self):
+        payload = json.dumps(
+            [
+                {"number": 7, "title": "add chart", "labels": [{"name": "loop:ready"}]},
+                {"number": 9, "title": "fix flake", "labels": [{"name": "loop:ready"}]},
+            ]
+        )
+        gh, _ = ops([CommandResult(0, payload, "")])
+        issues = gh.list_ready_issues("loop:ready")
+        assert [i.number for i in issues] == [7, 9]
+        assert issues[0].labels == ["loop:ready"]
+
+    def test_empty_list_returns_empty(self):
+        gh, _ = ops([CommandResult(0, "[]", "")])
+        assert gh.list_ready_issues("loop:ready") == []
+
+
+class TestChangedFiles:
+    def test_parses_name_only_diff(self):
+        gh, _ = ops([CommandResult(0, "dashboard/a.ts\ndashboard/b.ts\n", "")])
+        assert gh.changed_files("develop") == ["dashboard/a.ts", "dashboard/b.ts"]
+
+    def test_ignores_blank_lines(self):
+        gh, _ = ops([CommandResult(0, "a.ts\n\n\n", "")])
+        assert gh.changed_files("develop") == ["a.ts"]
+
+
+class TestChangedLines:
+    def test_sums_added_and_deleted(self):
+        gh, _ = ops([CommandResult(0, "10\t5\ta.ts\n3\t2\tb.ts\n", "")])
+        assert gh.changed_lines("develop") == 20
+
+    def test_treats_binary_dashes_as_zero(self):
+        gh, _ = ops([CommandResult(0, "-\t-\timage.png\n4\t1\ta.ts\n", "")])
+        assert gh.changed_lines("develop") == 5
+
+
+class TestMutations:
+    def test_open_pr_returns_number_from_url(self):
+        gh, runner = ops([CommandResult(0, "https://github.com/o/r/pull/123\n", "")])
+        assert gh.open_pr(title="t", body="b", base="develop", head="loop/1-x") == 123
+        assert runner.calls[0][0][:3] == ["gh", "pr", "create"]
+
+    def test_merge_pr_uses_squash_and_deletes_branch(self):
+        gh, runner = ops([CommandResult(0, "", "")])
+        gh.merge_pr(123)
+        cmd = runner.calls[0][0]
+        assert cmd[:3] == ["gh", "pr", "merge"]
+        assert "--squash" in cmd
+        assert "--delete-branch" in cmd
+
+    def test_add_label(self):
+        gh, runner = ops([CommandResult(0, "", "")])
+        gh.add_label(123, "loop:needs-human")
+        assert "loop:needs-human" in runner.calls[0][0]
+
+    def test_create_issue_returns_number(self):
+        gh, _ = ops([CommandResult(0, "https://github.com/o/r/issues/45\n", "")])
+        assert gh.create_issue(title="t", body="b", labels=["loop:ready"]) == 45

@@ -204,8 +204,11 @@ git commit -m "feat(orchestrator): add typed config layer with defaults from spe
 
 `tests/test_models.py`:
 
+> **レビューでの修正（2026-07-20）:** 当初案は `VerifyResult.tests_passed` 一本、`Verdict` に `dry-run` なし、`gate_reasons`/`pr_number` なしだった。ダッシュボード側（Plan 1）の契約修正に合わせて、unit と e2e を別々に持ち、ゲート不通過の理由と PR 番号を記録できるようにする。
+
 ```python
 import json
+from dataclasses import replace
 
 from orchestrator.models import AdversaryVerdict, CostBreakdown, Issue, LoopStatus, RunRecord, VerifyResult
 
@@ -221,8 +224,10 @@ def make_record() -> RunRecord:
         duration_sec=360,
         revise_cycles=1,
         verdict="merged",
+        gate_reasons=[],
+        pr_number=42,
         adversary=AdversaryVerdict(approved=True, summary="ok"),
-        verify=VerifyResult(tests_passed=True, coverage_pct=87.5),
+        verify=VerifyResult(unit_passed=True, e2e_passed=True, coverage_pct=87.5),
         changed_lines=120,
         cost=CostBreakdown(builder_usd=0.12, adversary_usd=0.02, ideation_usd=0.01),
         models={"builder": "claude-sonnet-5", "adversary": "claude-haiku-4-5", "ideation": "claude-haiku-4-5"},
@@ -241,13 +246,41 @@ def test_to_json_uses_camel_case_matching_typescript_contract():
     assert payload["issue"]["number"] == 42
     assert payload["adversary"]["approved"] is True
     assert payload["verify"]["coveragePct"] == 87.5
-    assert payload["verify"]["testsPassed"] is True
+    assert payload["verify"]["unitPassed"] is True
+    assert payload["verify"]["e2ePassed"] is True
+    assert payload["gateReasons"] == []
+    assert payload["prNumber"] == 42
 
 
 def test_cost_total_is_derived_not_stored():
     payload = json.loads(make_record().to_json())
     assert payload["cost"]["builderUsd"] == 0.12
     assert payload["cost"]["totalUsd"] == 0.15
+
+
+def test_pr_number_serialises_as_null_when_absent():
+    record = replace(make_record(), pr_number=None, verdict="failed")
+    payload = json.loads(record.to_json())
+    assert payload["prNumber"] is None
+
+
+def test_gate_reasons_round_trip_as_a_list():
+    record = replace(
+        make_record(),
+        verdict="needs-human",
+        gate_reasons=["adversary が approve していない", "e2e(Playwright) が失敗している"],
+    )
+    payload = json.loads(record.to_json())
+    assert payload["gateReasons"] == [
+        "adversary が approve していない",
+        "e2e(Playwright) が失敗している",
+    ]
+
+
+def test_dry_run_is_a_valid_verdict():
+    record = replace(make_record(), verdict="dry-run")
+    payload = json.loads(record.to_json())
+    assert payload["verdict"] == "dry-run"
 
 
 def test_loop_status_serialises_camel_case():
@@ -280,7 +313,7 @@ import json
 from dataclasses import dataclass, field
 from typing import Literal
 
-Verdict = Literal["merged", "needs-human", "paused", "failed"]
+Verdict = Literal["merged", "needs-human", "paused", "dry-run", "failed"]
 LoopState = Literal["RUNNING", "PAUSED", "HALTED"]
 
 
@@ -305,11 +338,18 @@ class AdversaryVerdict:
 
 @dataclass(frozen=True)
 class VerifyResult:
-    tests_passed: bool
+    """`npm run verify`（unit）と `npm run test:e2e` はゲート上も別条件なので分けて持つ。"""
+
+    unit_passed: bool
+    e2e_passed: bool
     coverage_pct: float = 0.0
 
     def to_dict(self) -> dict:
-        return {"testsPassed": self.tests_passed, "coveragePct": self.coverage_pct}
+        return {
+            "unitPassed": self.unit_passed,
+            "e2ePassed": self.e2e_passed,
+            "coveragePct": self.coverage_pct,
+        }
 
 
 @dataclass(frozen=True)
@@ -342,6 +382,10 @@ class RunRecord:
     duration_sec: int
     revise_cycles: int
     verdict: Verdict
+    #: ゲートを通過しなかった理由。通過した場合は空リスト。
+    gate_reasons: list[str]
+    #: この反復が開いた PR 番号。PR 到達前に終了した場合は None
+    pr_number: int | None
     adversary: AdversaryVerdict
     verify: VerifyResult
     changed_lines: int
@@ -360,6 +404,8 @@ class RunRecord:
             "durationSec": self.duration_sec,
             "reviseCycles": self.revise_cycles,
             "verdict": self.verdict,
+            "gateReasons": list(self.gate_reasons),
+            "prNumber": self.pr_number,
             "adversary": self.adversary.to_dict(),
             "verify": self.verify.to_dict(),
             "changedLines": self.changed_lines,
@@ -396,7 +442,7 @@ class LoopStatus:
 - [ ] **Step 4: テストを実行して合格を確認**
 
 Run: `pytest tests/test_models.py -v`
-Expected: PASS — 3 passed
+Expected: PASS — 6 passed（`gate_reasons`/`pr_number`/`dry-run` を追加検証する 3 件をレビューで追加したため、旧稿の「3 passed」から更新）
 
 - [ ] **Step 5: コミット**
 
@@ -1313,6 +1359,8 @@ git commit -m "feat(orchestrator): add gh/git operations wrapper"
 
 builder が実装 → adversary が敵対レビュー → 棄却なら revise → verify。
 
+> **レビュー確認（2026-07-20）:** `RoundOutcome` は元々 `verify_passed` と `e2e_passed` を別フィールドとして持っており、Task 2 の契約修正（`VerifyResult` の unit/e2e 分離）に対して本タスクの変更は不要。以下のコードは変更なし。
+
 - [ ] **Step 1: 失敗するテストを書く**
 
 `tests/test_round.py`:
@@ -1584,8 +1632,10 @@ def make_record(iteration: int) -> RunRecord:
         duration_sec=300,
         revise_cycles=0,
         verdict="merged",
+        gate_reasons=[],
+        pr_number=11,
         adversary=AdversaryVerdict(approved=True, summary=""),
-        verify=VerifyResult(tests_passed=True, coverage_pct=80.0),
+        verify=VerifyResult(unit_passed=True, e2e_passed=True, coverage_pct=80.0),
         changed_lines=10,
         cost=CostBreakdown(builder_usd=0.1),
         models={"builder": "b", "adversary": "a", "ideation": "i"},
@@ -1891,6 +1941,12 @@ git commit -m "feat(orchestrator): generate follow-up improvement issues"
 
 **spec §7 の停止機構の中核。** 停止時に不可逆な操作が走らないことをテストで保証する。
 
+> **レビューでの修正（2026-07-20）:** 以下 4 点を修正する。
+> 1. `_record()` が `tests_passed=verify_passed and e2e_passed` として畳んでおり、どちらが失敗したか記録から失われていた → `unit_passed`/`e2e_passed` を分離して渡す。
+> 2. `_record()` が `gate_reasons`/`pr_number` を受け取っておらず契約を満たせなかった → 両方を受け取り記録する。
+> 3. **チェックポイント3（マージ直前の一時停止）が記録を一切書かずに return していた** — builder+adversary の 1 ラウンド分の実費用が発生したのに痕跡が残らないバグ。ここで `verdict="paused"` の記録を書いてから return するよう修正する。あわせて dry-run パスは `verdict="paused"` ではなく `verdict="dry-run"` を記録するよう修正する（「人間が止めた」と「最初からマージしない設定だった」は別事象）。
+> 4. `duration_sec` が `0` 固定（`started_at == finished_at == now`）だった → `clock: Callable[[], str]` を注入し、反復開始時と各終了パスでそれぞれ実際の時刻を読んで差分を計算する。
+
 - [ ] **Step 1: 失敗するテストを書く**
 
 `tests/test_loop.py`:
@@ -1946,8 +2002,20 @@ def approved_round(**overrides) -> RoundOutcome:
     return RoundOutcome(**base)
 
 
+def make_clock(*timestamps: str):
+    """固定シーケンスを返す `clock`。尽きたら最後の値を返し続ける（duration_sec を決定的にする）。"""
+    values = list(timestamps) or ["2026-07-20T12:00:00Z", "2026-07-20T12:05:00Z"]
+
+    def _clock() -> str:
+        if len(values) > 1:
+            return values.pop(0)
+        return values[0]
+
+    return _clock
+
+
 def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
-        proposals=("next idea",)):
+        proposals=("next idea",), clock=None):
     """1 反復を実行するヘルパ。
 
     kill_switch_reader は 3 回呼ばれる:
@@ -1970,7 +2038,7 @@ def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
         cfg=cfg or Config.from_env({}),
         data_dir=tmp_path,
         repo_root=str(tmp_path),
-        now="2026-07-20T12:00:00Z",
+        clock=clock or make_clock(),
         kill_switch_reader=kill_switch_reader,
         round_runner=round_runner,
         ideation_runner=lambda **_k: ([{"title": t, "body": "b"} for t in proposals], 0.01),
@@ -2005,6 +2073,16 @@ class TestCheckpoint3:
         assert not any(a.startswith("merge:") for a in gh.actions)
         assert "label:loop:paused" in gh.actions
 
+    def test_disabled_before_merge_writes_a_paused_record(self, tmp_path):
+        # レビュー指摘: 以前はこのチェックポイントで記録を書かずに終了しており、
+        # 実際に課金されたラウンドの痕跡が消えていた。
+        gh = FakeGh()
+        run(tmp_path, gh=gh, disable_on_call=3)
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["verdict"] == "paused"
+        assert record["prNumber"] == 123
+        assert record["gateReasons"] == []
+
 
 class TestHappyPath:
     def test_gate_passing_merges_and_records(self, tmp_path):
@@ -2016,6 +2094,8 @@ class TestHappyPath:
         assert record["verdict"] == "merged"
         assert record["iteration"] == 1
         assert record["issue"]["number"] == 42
+        assert record["prNumber"] == 123
+        assert record["gateReasons"] == []
 
     def test_creates_follow_up_issues_after_merge(self, tmp_path):
         gh = FakeGh()
@@ -2077,6 +2157,28 @@ class TestDryRun:
         result = run(tmp_path, gh=gh, cfg=Config.from_env({"LOOP_DRY_RUN": "1"}))
         assert result.status == "dry-run"
         assert not any(a.startswith("merge:") for a in gh.actions)
+
+    def test_dry_run_records_verdict_dry_run(self, tmp_path):
+        # レビュー指摘: 以前は dry-run も verdict="paused" として記録され、
+        # 「人間が止めた」のか「設定でマージしない」のか区別できなかった。
+        gh = FakeGh()
+        run(tmp_path, gh=gh, cfg=Config.from_env({"LOOP_DRY_RUN": "1"}))
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["verdict"] == "dry-run"
+        assert record["prNumber"] == 123
+
+
+class TestDuration:
+    def test_duration_sec_is_derived_from_clock_reads(self, tmp_path):
+        # レビュー指摘: duration_sec が 0 固定（started_at == finished_at）だったのを、
+        # 実際の開始・終了時刻から計算するように変更した。
+        gh = FakeGh()
+        clock = make_clock("2026-07-20T12:00:00Z", "2026-07-20T12:07:30Z")
+        run(tmp_path, gh=gh, clock=clock)
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["startedAt"] == "2026-07-20T12:00:00Z"
+        assert record["finishedAt"] == "2026-07-20T12:07:30Z"
+        assert record["durationSec"] == 450
 ```
 
 - [ ] **Step 2: テストを実行して失敗を確認**
@@ -2092,13 +2194,15 @@ Expected: FAIL — `ModuleNotFoundError: No module named 'orchestrator.loop'`
 停止チェックポイントは 3 箇所（spec §7）:
   1. 反復開始時          — 何もせず終了
   2. ラウンド後・PR 前   — ブランチだけ残して終了
-  3. マージ直前          — PR を開いたまま loop:paused を付けて終了
+  3. マージ直前          — PR を開いたまま loop:paused を付け、
+                           verdict="paused" の記録を書いて終了
 """
 
 from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Protocol
 
@@ -2139,17 +2243,29 @@ def slugify(title: str) -> str:
     return _SLUG.sub("-", title.lower()).strip("-")[:40] or "task"
 
 
+def _seconds_between(start_iso: str, end_iso: str) -> int:
+    """ISO8601（`...Z`）の2時刻の差を秒で返す。負値にはしない。"""
+    start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+    end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    return max(0, round((end - start).total_seconds()))
+
+
 def run_iteration(
     *,
     gh: GhLike,
     cfg: Config,
     data_dir: Path,
     repo_root: str,
-    now: str,
+    clock: Callable[[], str],
     kill_switch_reader: Callable[[], bool],
     round_runner: Callable[..., Any],
     ideation_runner: Callable[..., tuple[list[dict], float]],
 ) -> IterationResult:
+    """1 反復を実行する。`clock` は ISO8601 文字列を返す呼び出し可能オブジェクト。
+    テストでは固定シーケンスを注入し、`duration_sec` を決定的にする
+    （旧稿は `started_at == finished_at == now` で `duration_sec` が常に 0 だった）。
+    """
+    started_at = clock()
     iteration = next_iteration(Path(data_dir))
 
     # --- 停止チェックポイント 1 ---
@@ -2198,8 +2314,16 @@ def run_iteration(
     gh.comment_pr(pr, _review_comment(outcome.adversary))
 
     # --- 停止チェックポイント 3（マージ直前） ---
+    # レビュー指摘: 以前はここで記録を書かずに return していたため、実際に
+    # builder+adversary の 1 ラウンド分の課金が発生したのに痕跡が残らなかった。
     if not kill_switch_reader():
         gh.add_label(issue.number, cfg.paused_label)
+        _record(
+            data_dir, iteration, issue, branch, outcome, changed_lines,
+            verdict="paused", started_at=started_at, finished_at=clock(),
+            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            gate_reasons=gate.reasons, pr_number=pr,
+        )
         return IterationResult(
             status="paused", iteration=iteration,
             issue_number=issue.number, pr_number=pr,
@@ -2209,7 +2333,9 @@ def run_iteration(
         gh.add_label(issue.number, cfg.needs_human_label)
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
-            verdict="needs-human", now=now, cfg=cfg, ideation_cost=0.0, next_issues=[],
+            verdict="needs-human", started_at=started_at, finished_at=clock(),
+            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            gate_reasons=gate.reasons, pr_number=pr,
         )
         return IterationResult(
             status="needs-human", iteration=iteration,
@@ -2217,9 +2343,13 @@ def run_iteration(
         )
 
     if cfg.dry_run:
+        # レビュー指摘: 以前は dry-run も verdict="paused" として記録しており、
+        # 「人間が止めた」のか「最初からマージしない設定だった」のか区別できなかった。
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
-            verdict="paused", now=now, cfg=cfg, ideation_cost=0.0, next_issues=[],
+            verdict="dry-run", started_at=started_at, finished_at=clock(),
+            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            gate_reasons=gate.reasons, pr_number=pr,
         )
         return IterationResult(
             status="dry-run", iteration=iteration,
@@ -2238,8 +2368,9 @@ def run_iteration(
 
     _record(
         data_dir, iteration, issue, branch, outcome, changed_lines,
-        verdict="merged", now=now, cfg=cfg,
-        ideation_cost=ideation_cost, next_issues=next_issues,
+        verdict="merged", started_at=started_at, finished_at=clock(),
+        cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
+        gate_reasons=gate.reasons, pr_number=pr,
     )
     return IterationResult(
         status="merged", iteration=iteration,
@@ -2249,22 +2380,26 @@ def run_iteration(
 
 def _record(
     data_dir, iteration, issue, branch, outcome, changed_lines,
-    *, verdict, now, cfg, ideation_cost, next_issues,
+    *, verdict, started_at, finished_at, cfg, ideation_cost, next_issues,
+    gate_reasons, pr_number,
 ) -> None:
     write_run_record(
         RunRecord(
-            id=f"{now.replace('-', '').replace(':', '')}-{issue.number}",
+            id=f"{started_at.replace('-', '').replace(':', '')}-{issue.number}",
             iteration=iteration,
             issue=issue,
             branch=branch,
-            started_at=now,
-            finished_at=now,
-            duration_sec=0,
+            started_at=started_at,
+            finished_at=finished_at,
+            duration_sec=_seconds_between(started_at, finished_at),
             revise_cycles=outcome.revise_cycles,
             verdict=verdict,
+            gate_reasons=list(gate_reasons),
+            pr_number=pr_number,
             adversary=outcome.adversary,
             verify=VerifyResult(
-                tests_passed=outcome.verify_passed and outcome.e2e_passed
+                unit_passed=outcome.verify_passed,
+                e2e_passed=outcome.e2e_passed,
             ),
             changed_lines=changed_lines,
             cost=CostBreakdown(
@@ -2305,13 +2440,13 @@ def _review_comment(verdict: AdversaryVerdict) -> str:
 - [ ] **Step 4: テストを実行して合格を確認**
 
 Run: `pytest tests/test_loop.py -v`
-Expected: PASS — 13 passed
+Expected: PASS — 16 passed（レビューでの修正により「チェックポイント3が記録を書く」「dry-runがverdict=dry-runを記録する」「duration_secが実時刻から算出される」の3件を追加したため、旧稿の「13 passed」から更新）
 
 - [ ] **Step 5: 全テストを実行**
 
 Run: `pytest -v`
-Expected: PASS — 全 83 テストが合格
-（内訳: config 3 / models 3 / gates 22 / shell 3 / claude_cli 5 / review 6 / github_ops 10 / round 6 / record 7 / ideation 5 / loop 13）
+Expected: PASS — 全 89 テストが合格（レビューでの契約修正により models 3→6、loop 13→16 に増えたため、旧稿の「83」から更新）
+（内訳: config 3 / models 6 / gates 22 / shell 3 / claude_cli 5 / review 6 / github_ops 10 / round 6 / record 7 / ideation 5 / loop 16）
 
 - [ ] **Step 6: コミット**
 
@@ -2340,6 +2475,8 @@ git commit -m "feat(orchestrator): add outer loop with three stop checkpoints"
 
 - [ ] **Step 2: `orchestrator/__main__.py` を実装**
 
+> **レビューでの修正（2026-07-20）:** `run_iteration` が例外を投げると、実際に課金は発生していても `data/runs/*.json` には何も書かれず、無人実行では反復が「消える」。これがこの自走ループにおける唯一の観測手段になるため、トップレベルで例外を捕まえ `verdict="failed"` の記録を書いてから終了するようにする。あわせて `run_iteration` が `now: str` から `clock: Callable[[], str]` に変わった（Task 11）ため呼び出しを更新する。
+
 ```python
 """`python -m orchestrator` で 1 反復を実行する。"""
 
@@ -2356,7 +2493,8 @@ from orchestrator.gates import read_kill_switch
 from orchestrator.github_ops import GitHubOps
 from orchestrator.ideation import propose_next_issues
 from orchestrator.loop import run_iteration
-from orchestrator.record import write_status
+from orchestrator.models import AdversaryVerdict, CostBreakdown, Issue, RunRecord, VerifyResult
+from orchestrator.record import next_iteration, write_run_record, write_status
 from orchestrator.round import run_native_round
 
 
@@ -2370,27 +2508,38 @@ def _read_control(repo_root: Path) -> dict:
         return {"enabled": False, "reason": "control.json が壊れている", "actor": "system"}
 
 
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
 def main() -> int:
     repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
     data_dir = repo_root / "data"
     cfg = Config.from_env(os.environ)
-    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
     def kill_switch_reader() -> bool:
         return read_kill_switch(env=os.environ, control=_read_control(repo_root)).enabled
 
     gh = GitHubOps(cwd=str(repo_root))
 
-    result = run_iteration(
-        gh=gh,
-        cfg=cfg,
-        data_dir=data_dir,
-        repo_root=str(repo_root),
-        now=now,
-        kill_switch_reader=kill_switch_reader,
-        round_runner=run_native_round,
-        ideation_runner=_ideate,
-    )
+    # 無人実行の最終防波堤: 反復のどこで例外が飛んでも、必ず verdict="failed" の
+    # 記録を残してから異常終了する。これが無いと、課金は発生したのにダッシュ
+    # ボードには何も表示されない「消えた反復」が起きる。
+    try:
+        result = run_iteration(
+            gh=gh,
+            cfg=cfg,
+            data_dir=data_dir,
+            repo_root=str(repo_root),
+            clock=_utc_now,
+            kill_switch_reader=kill_switch_reader,
+            round_runner=run_native_round,
+            ideation_runner=_ideate,
+        )
+    except Exception as exc:  # noqa: BLE001 — 無人実行では握りつぶさず記録して非ゼロ終了する
+        _record_crash(data_dir, cfg, exc)
+        print(json.dumps({"status": "failed", "error": repr(exc)}, ensure_ascii=False))
+        return 1
 
     switch = read_kill_switch(env=os.environ, control=_read_control(repo_root))
     write_status(
@@ -2399,11 +2548,42 @@ def main() -> int:
         reason=switch.reason if not switch.enabled else f"直近の反復: {result.status}",
         actor=switch.actor,
         resume_hint="gh variable set LOOP_ENABLED --body true && gh workflow enable loop.yml",
-        now=now,
+        now=_utc_now(),
     )
 
     print(json.dumps(result.__dict__, ensure_ascii=False, default=list))
     return 0
+
+
+def _record_crash(data_dir: Path, cfg: Config, exc: Exception) -> None:
+    """例外で異常終了した反復の痕跡を残す。issue はこの時点では特定できないため不明値で埋める。"""
+    now = _utc_now()
+    write_run_record(
+        RunRecord(
+            id=f"{now.replace('-', '').replace(':', '')}-0",
+            iteration=next_iteration(data_dir),
+            issue=Issue(number=0, title="(不明: 例外発生時点で issue を特定できなかった)", labels=[]),
+            branch="unknown",
+            started_at=now,
+            finished_at=now,
+            duration_sec=0,
+            revise_cycles=0,
+            verdict="failed",
+            gate_reasons=[f"反復が例外で異常終了した: {exc!r}"],
+            pr_number=None,
+            adversary=AdversaryVerdict(approved=False, summary="例外により審査に到達しなかった"),
+            verify=VerifyResult(unit_passed=False, e2e_passed=False, coverage_pct=0.0),
+            changed_lines=0,
+            cost=CostBreakdown(),
+            models={
+                "builder": cfg.builder_model,
+                "adversary": cfg.adversary_model,
+                "ideation": cfg.ideation_model,
+            },
+            next_issues=[],
+        ),
+        data_dir=data_dir,
+    )
 
 
 def _ideate(*, context: str, cfg: Config, cwd: str) -> tuple[list[dict], float]:
@@ -2481,7 +2661,7 @@ gh variable set LOOP_ENABLED --body true
 
 ## Plan 2 完了条件
 
-- [ ] `pytest` が全緑（83 テスト）
+- [ ] `pytest` が全緑（89 テスト）
 - [ ] `LOOP_DRY_RUN=1 python -m orchestrator` で 1 反復が完走し PR が作られる（マージはされない）
 - [ ] `LOOP_ENABLED=false` で `skipped-disabled` になり副作用ゼロ
 - [ ] 保護パス変更・過大 diff・adversary 棄却のいずれでもマージされないことがテストで保証されている
