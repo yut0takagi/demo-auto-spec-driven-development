@@ -1,0 +1,75 @@
+name: control
+
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'ループの制御'
+        type: choice
+        required: true
+        options: [pause, resume, halt]
+      reason:
+        description: '理由（記録に残ります）'
+        type: string
+        default: '手動操作'
+
+permissions:
+  contents: write
+  actions: write
+
+jobs:
+  control:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+
+      - name: Apply control action
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ACTION: ${{ inputs.action }}
+          REASON: ${{ inputs.reason }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          set -euo pipefail
+          case "$ACTION" in
+            pause|halt) ENABLED=false ;;
+            resume)     ENABLED=true  ;;
+          esac
+
+          gh variable set LOOP_ENABLED --body "$ENABLED"
+
+          STATE=$([[ "$ACTION" == "resume" ]] && echo RUNNING || \
+                  ([[ "$ACTION" == "halt" ]] && echo HALTED || echo PAUSED))
+          NOW=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+
+          cat > .loop/control.json <<EOF
+          {
+            "enabled": $ENABLED,
+            "reason": "$REASON",
+            "actor": "human:$ACTOR"
+          }
+          EOF
+
+          cat > data/status.json <<EOF
+          {
+            "state": "$STATE",
+            "reason": "$REASON",
+            "actor": "human:$ACTOR",
+            "updatedAt": "$NOW",
+            "resumeHint": "control ワークフローを resume で実行する"
+          }
+          EOF
+
+          git config user.name "loop-bot"
+          git config user.email "loop-bot@users.noreply.github.com"
+          git add .loop/control.json data/status.json
+          git commit -m "chore(control): $ACTION by $ACTOR [skip ci]"
+          git push origin develop
+
+      - name: Disable the schedule when halting
+        if: inputs.action == 'halt'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: gh workflow disable loop.yml
