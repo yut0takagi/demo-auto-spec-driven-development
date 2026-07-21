@@ -8,13 +8,14 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+from orchestrator.breaker import check_breakers
 from orchestrator.config import Config
 from orchestrator.gates import read_kill_switch
 from orchestrator.github_ops import GitHubOps
 from orchestrator.ideation import propose_next_issues
 from orchestrator.loop import run_iteration
 from orchestrator.models import AdversaryVerdict, CostBreakdown, Issue, RunRecord, VerifyResult
-from orchestrator.record import next_iteration, write_run_record, write_status
+from orchestrator.record import load_runs, next_iteration, write_run_record, write_status
 from orchestrator.round import run_native_round
 
 
@@ -60,6 +61,28 @@ def main() -> int:
         _record_crash(data_dir, cfg, exc)
         print(json.dumps({"status": "failed", "error": repr(exc)}, ensure_ascii=False))
         return 1
+
+    # サーキットブレーカ: 連続失敗・予算超過なら loop:halted issue を立てて HALTED で終了。
+    # 判定は gates.py の純関数、副作用（issue 作成・status 書き込み）はここで行う。
+    now = _utc_now()
+    breaker = check_breakers(load_runs(data_dir), cfg=cfg, today=now[:10])
+    if breaker.should_halt:
+        gh.create_issue(
+            title=f"🛑 ループを自動停止しました: {breaker.actor}",
+            body=(
+                f"{breaker.reason}\n\n"
+                "再開するには原因を確認したうえで:\n"
+                "```bash\ngh variable set LOOP_ENABLED --body true\n```"
+            ),
+            labels=["loop:halted"],
+        )
+        write_status(
+            data_dir, state="HALTED", reason=breaker.reason, actor=breaker.actor,
+            resume_hint="原因を確認後 gh variable set LOOP_ENABLED --body true",
+            now=now,
+        )
+        print(json.dumps({"status": "halted", "reason": breaker.reason}, ensure_ascii=False))
+        return 0
 
     switch = read_kill_switch(env=os.environ, control=_read_control(repo_root))
     write_status(
