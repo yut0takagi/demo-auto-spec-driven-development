@@ -25,6 +25,9 @@ const summary: Summary = {
   latestCoverageStale: false,
   latestDurationSec: 545,
   latestDurationIteration: 12,
+  breakerStreak: 1,
+  breakerThreshold: 3,
+  breakerRemaining: 2,
 };
 
 describe('MetricCards', () => {
@@ -113,5 +116,28 @@ describe('MetricCards', () => {
     // 直近反復の値(9.1分)や、そのiteration番号ラベルが紛れ込んでいないこと
     expect(within(cycleTimeCard).queryByText('9.1分')).not.toBeInTheDocument();
     expect(within(cycleTimeCard).queryByText('iteration 12')).not.toBeInTheDocument();
+  });
+
+  it('ブレーカー余力を「残り/閾値」と連続非マージ数で表示する', () => {
+    render(<MetricCards summary={summary} />);
+    const breakerCard = getCard('ブレーカー余力');
+    expect(within(breakerCard).getByText('2/3')).toBeInTheDocument();
+    expect(within(breakerCard).getByText('連続非マージ 1回')).toBeInTheDocument();
+  });
+
+  it('連続非マージが閾値を超えても余力は0/閾値と表示する（マイナスにならない）', () => {
+    const tripped: Summary = { ...summary, breakerStreak: 4, breakerThreshold: 3, breakerRemaining: 0 };
+    render(<MetricCards summary={tripped} />);
+    const breakerCard = getCard('ブレーカー余力');
+    expect(within(breakerCard).getByText('0/3')).toBeInTheDocument();
+    expect(within(breakerCard).getByText('連続非マージ 4回')).toBeInTheDocument();
+  });
+
+  it('連続非マージがちょうど閾値と等しい境界値でも余力は0/閾値と表示する', () => {
+    const atThreshold: Summary = { ...summary, breakerStreak: 3, breakerThreshold: 3, breakerRemaining: 0 };
+    render(<MetricCards summary={atThreshold} />);
+    const breakerCard = getCard('ブレーカー余力');
+    expect(within(breakerCard).getByText('0/3')).toBeInTheDocument();
+    expect(within(breakerCard).getByText('連続非マージ 3回')).toBeInTheDocument();
   });
 });

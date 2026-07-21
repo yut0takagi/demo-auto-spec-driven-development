@@ -1,4 +1,18 @@
-import type { RunRecord } from './types';
+import type { RunRecord, Verdict } from './types';
+
+/**
+ * ブレーカを連続させる verdict の集合（orchestrator/gates.py の should_trip_breaker が
+ * 連続失敗として数える verdict と同じ）。merged はもちろん、paused / dry-run のような
+ * 意図的な非マージも連続を途切れさせる（この集合に含まれない）。
+ */
+const BREAKER_TRIP_VERDICTS: readonly Verdict[] = ['failed', 'needs-human'];
+
+/**
+ * orchestrator/config.py の circuit_breaker_fails 既定値(3)に合わせた表示用の閾値。
+ * 実際に発火させる値は orchestrator 側の CIRCUIT_BREAKER_FAILS 環境変数で変わりうるが、
+ * dashboard は Python 設定を読めないため既定値を表示用の目安として使う。
+ */
+const BREAKER_THRESHOLD = 3;
 
 export interface Summary {
   totalRuns: number;
@@ -30,6 +44,29 @@ export interface Summary {
   latestDurationSec: number;
   /** latestDurationSec の対象 iteration。フォールバックしないので常に最新 iteration と一致する */
   latestDurationIteration: number;
+  /**
+   * サーキットブレーカ（orchestrator/gates.py の should_trip_breaker）が見ている
+   * 「直近の連続非マージ数」。最新 iteration から遡り、failed / needs-human が
+   * 連続している数。paused / dry-run や merged に当たるとそこで途切れる。
+   */
+  breakerStreak: number;
+  /** breakerStreak がこの値に達するとブレーカが発火する（表示用の目安。既定値3） */
+  breakerThreshold: number;
+  /** 発火まで残り何回連続で非マージが続けられるか（0 なら次の非マージで発火） */
+  breakerRemaining: number;
+}
+
+/**
+ * 最新 iteration から遡って、failed / needs-human が何回連続しているかを数える。
+ * merged / paused / dry-run に当たった時点で連続は途切れる。
+ */
+function breakerStreak(sortedAsc: RunRecord[]): number {
+  let streak = 0;
+  for (let i = sortedAsc.length - 1; i >= 0; i--) {
+    if (!BREAKER_TRIP_VERDICTS.includes(sortedAsc[i].verdict)) break;
+    streak++;
+  }
+  return streak;
 }
 
 export interface TrendPoint {
@@ -70,6 +107,9 @@ export function summarize(runs: RunRecord[]): Summary {
       latestCoverageStale: false,
       latestDurationSec: 0,
       latestDurationIteration: 0,
+      breakerStreak: 0,
+      breakerThreshold: BREAKER_THRESHOLD,
+      breakerRemaining: BREAKER_THRESHOLD,
     };
   }
 
@@ -79,6 +119,7 @@ export function summarize(runs: RunRecord[]): Summary {
   const latestMeasured = completed.length > 0 ? completed[completed.length - 1] : latest;
   const mergedRuns = runs.filter((r) => r.verdict === 'merged').length;
   const approvedRuns = completed.filter((r) => r.adversary.approved).length;
+  const streak = breakerStreak(sorted);
 
   return {
     totalRuns: runs.length,
@@ -93,6 +134,9 @@ export function summarize(runs: RunRecord[]): Summary {
     latestCoverageStale: latestMeasured.iteration !== latest.iteration,
     latestDurationSec: latest.durationSec,
     latestDurationIteration: latest.iteration,
+    breakerStreak: streak,
+    breakerThreshold: BREAKER_THRESHOLD,
+    breakerRemaining: Math.max(0, BREAKER_THRESHOLD - streak),
   };
 }
 
