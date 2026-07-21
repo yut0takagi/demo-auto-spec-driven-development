@@ -85,9 +85,12 @@ jobs:
       - name: Commit run record to develop
         run: |
           git checkout develop
-          git pull --rebase origin develop
+          # orchestrator が書いた data/ を先に commit してから rebase する。
+          # 未コミットのまま `git pull --rebase` すると unstaged changes で exit 128 になる
+          # （dry-run 検証で判明したバグ）。
           if [[ -n "$(git status --porcelain data/)" ]]; then
             git add data/
             git commit -m "chore(loop): record iteration [skip ci]"
+            git pull --rebase origin develop
             git push origin develop
           fi
