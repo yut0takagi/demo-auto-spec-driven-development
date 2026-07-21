@@ -1,0 +1,39 @@
+name: revert-on-red
+
+on:
+  workflow_run:
+    workflows: [ci]
+    types: [completed]
+    branches: [develop]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  revert:
+    if: github.event.workflow_run.conclusion == 'failure'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - name: Open a revert PR for the offending commit
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          git config user.name "loop-bot"
+          git config user.email "loop-bot@users.noreply.github.com"
+
+          BRANCH="revert/${SHA::7}"
+          git checkout -b "$BRANCH"
+          git revert --no-edit "$SHA"
+          git push -u origin "$BRANCH"
+
+          gh pr create --base develop --head "$BRANCH" \
+            --title "revert: ${SHA::7} (develop の CI が赤になったため)" \
+            --body "develop の post-merge CI が失敗したため自動的に revert PR を作成しました。人間の確認が必要です。"
