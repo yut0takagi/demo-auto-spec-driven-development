@@ -20,7 +20,7 @@ export function MetricCards({ summary }: { summary: Summary }) {
     : '最新反復';
 
   return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-7">
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-4 lg:grid-cols-8">
       <Card label="反復数" value={String(summary.totalRuns)} sub={`${summary.mergedRuns} merged`} />
       <Card label="承認率" value={`${Math.round(summary.approvalRate * 100)}%`} sub="adversary approve" />
       <Card label="マージ率" value={`${Math.round(summary.mergeRate * 100)}%`} sub="develop 到達" />
@@ -36,6 +36,11 @@ export function MetricCards({ summary }: { summary: Summary }) {
         sub={`平均 revise ${summary.avgReviseCycles.toFixed(1)}回`}
       />
       <Card label="カバレッジ" value={`${summary.latestCoveragePct.toFixed(1)}%`} sub={coverageSub} />
+      <Card
+        label="ブレーカー余力"
+        value={`${summary.breakerRemaining}/${summary.breakerThreshold}`}
+        sub={`連続非マージ ${summary.breakerStreak}回`}
+      />
     </div>
   );
 }

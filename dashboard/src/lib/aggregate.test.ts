@@ -39,6 +39,9 @@ describe('summarize', () => {
     expect(s.latestCoverageStale).toBe(false);
     expect(s.latestDurationSec).toBe(0);
     expect(s.latestDurationIteration).toBe(0);
+    expect(s.breakerStreak).toBe(0);
+    expect(s.breakerThreshold).toBe(3);
+    expect(s.breakerRemaining).toBe(3);
   });
 
   it('承認率とマージ率を別々に数える', () => {
@@ -148,6 +151,80 @@ describe('summarize', () => {
     expect(s.latestCoverageStale).toBe(false);
     expect(coverageTrend(runs)).toEqual([{ iteration: 7, value: 75 }]);
     expect(costTrend(runs)).toEqual([{ iteration: 7, value: 0.2 }]);
+  });
+
+  it('breakerStreak は最新 iteration から遡った連続 failed/needs-human 数（merged で途切れる）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'needs-human' }),
+    ];
+    const s = summarize(runs);
+    expect(s.breakerStreak).toBe(2);
+    expect(s.breakerThreshold).toBe(3);
+    expect(s.breakerRemaining).toBe(1);
+  });
+
+  it('paused は意図的な非マージであり、breakerStreak の連続をリセットする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+    ];
+    const s = summarize(runs);
+    // iteration 3 (paused) で途切れるため、iteration 4 の1件のみが連続と数えられる
+    expect(s.breakerStreak).toBe(1);
+    expect(s.breakerRemaining).toBe(2);
+  });
+
+  it('dry-run は意図的な非マージであり、breakerStreak の連続をリセットする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'dry-run' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+    ];
+    const s = summarize(runs);
+    // iteration 3 (dry-run) で途切れるため、iteration 4 の1件のみが連続と数えられる
+    expect(s.breakerStreak).toBe(1);
+    expect(s.breakerRemaining).toBe(2);
+  });
+
+  it('連続 failed/needs-human がちょうど閾値(3)に達すると breakerRemaining は 0 になる（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+    ];
+    const s = summarize(runs);
+    expect(s.breakerStreak).toBe(3);
+    expect(s.breakerThreshold).toBe(3);
+    expect(s.breakerRemaining).toBe(0);
+  });
+
+  it('連続 failed/needs-human が閾値(3)以上でも breakerRemaining は 0 未満にならない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'needs-human' }),
+    ];
+    const s = summarize(runs);
+    expect(s.breakerStreak).toBe(4);
+    expect(s.breakerRemaining).toBe(0);
+  });
+
+  it('breakerStreak は配列順に依存せず iteration の時系列順で連続を数える', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+    ];
+    const s = summarize(runs);
+    // 配列の並びは [3,1,2] だが、時系列(iteration昇順)は 1(failed) -> 2(merged) -> 3(failed)。
+    // iteration 2 の merged で連続が途切れるため、最新(iteration 3)の failed 1件のみを数える。
+    expect(s.breakerStreak).toBe(1);
   });
 });
 
