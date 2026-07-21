@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { summarize, coverageTrend, costTrend } from './aggregate';
+import { summarize, coverageTrend, costTrend, unresolvedNeedsHuman } from './aggregate';
 import type { RunRecord } from './types';
 
 function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -259,6 +259,65 @@ describe('coverageTrend', () => {
     const t = costTrend(runs);
     expect(t).toHaveLength(2);
     expect(t[1].value).toBeCloseTo(0.12);
+  });
+});
+
+describe('unresolvedNeedsHuman', () => {
+  it('反復が0件なら null を返す', () => {
+    expect(unresolvedNeedsHuman([])).toBeNull();
+  });
+
+  it('needs-human が1件もなければ null を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+    ];
+    expect(unresolvedNeedsHuman(runs)).toBeNull();
+  });
+
+  it('needs-human が1件だけ、かつ最新 iteration ならその反復を返す', () => {
+    const target = makeRun({
+      iteration: 2,
+      verdict: 'needs-human',
+      gateReasons: ['e2e(Playwright) が失敗している'],
+    });
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), target];
+    expect(unresolvedNeedsHuman(runs)).toEqual(target);
+  });
+
+  it('needs-human が複数あっても、最新 iteration のものだけを返す（配列順に依存しない）', () => {
+    const older = makeRun({ iteration: 2, verdict: 'needs-human', gateReasons: ['古い理由'] });
+    const newer = makeRun({ iteration: 5, verdict: 'needs-human', gateReasons: ['新しい理由'] });
+    const runs = [newer, makeRun({ iteration: 1, verdict: 'merged' }), older];
+    expect(unresolvedNeedsHuman(runs)).toEqual(newer);
+  });
+
+  it('needs-human より後に merged 反復があれば、未解決ではないため null を返す', () => {
+    const target = makeRun({ iteration: 3, verdict: 'needs-human', gateReasons: ['変更行数が上限を超えている'] });
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      target,
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    expect(unresolvedNeedsHuman(runs)).toBeNull();
+  });
+
+  it('needs-human より後に failed 反復があっても、未解決ではないため null を返す', () => {
+    const target = makeRun({ iteration: 1, verdict: 'needs-human', gateReasons: ['カバレッジ不足'] });
+    const runs = [target, makeRun({ iteration: 2, verdict: 'failed' })];
+    expect(unresolvedNeedsHuman(runs)).toBeNull();
+  });
+
+  it('needs-human より後に paused / dry-run が続いても、未解決ではないため null を返す（境界: 意図的な非マージでも「前進」扱い）', () => {
+    const target = makeRun({ iteration: 1, verdict: 'needs-human', gateReasons: ['カバレッジ不足'] });
+    const runs = [target, makeRun({ iteration: 2, verdict: 'paused' }), makeRun({ iteration: 3, verdict: 'dry-run' })];
+    expect(unresolvedNeedsHuman(runs)).toBeNull();
+  });
+
+  it('gateReasons が空配列の needs-human 反復も、最新であればそのまま返す（欠損を隠さない）', () => {
+    const target = makeRun({ iteration: 1, verdict: 'needs-human', gateReasons: [] });
+    expect(unresolvedNeedsHuman([target])).toEqual(target);
   });
 });
 

@@ -5,6 +5,7 @@ import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
 import { TrendChart } from '@/components/TrendChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
+import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { BacklogPanel } from '@/components/BacklogPanel';
 
 const REPO_URL =
@@ -36,6 +37,7 @@ export default function Home() {
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
         </div>
         <IterationTimeline runs={runs} />
+        <GateReasonsPanel runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>
     </main>

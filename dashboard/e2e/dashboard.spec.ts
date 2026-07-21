@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize } from '../src/lib/aggregate';
+import { summarize, unresolvedNeedsHuman } from '../src/lib/aggregate';
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -100,4 +100,33 @@ test('カバレッジ推移は failed 反復で 0% に急落しない（カー�
 
   // 0 への急落シグナルである "0.0%" がページのどこにも現れないこと。
   await expect(page.getByText('0.0%')).toHaveCount(0);
+});
+
+test('未解決の needs-human 反復のゲート不通過理由が実データから抽出・表示される', async ({ page }) => {
+  // 「未解決」= 時系列で最新の run 自体が needs-human であること。それより後に
+  // merged/failed 等が続いていれば、ループは前進済みでありパネルは保留中なしを示す。
+  // どちらの分岐になるかは data/runs の現在の中身次第なので、ここでも実データから
+  // 期待値を導出し、ハードコードしない。
+  const { runs } = loadRuns();
+  const target = unresolvedNeedsHuman(runs);
+
+  await page.goto('/');
+
+  const panel = page.getByTestId('gate-reasons-panel');
+  await expect(panel).toBeVisible();
+
+  // <li> を明示的に探すことで、パネル外や他の文言との部分一致混同を排除する。
+  const items = panel.getByRole('listitem');
+
+  if (target === null) {
+    await expect(panel).toContainText('現在、ゲート不通過で保留中の反復はありません');
+    await expect(items).toHaveCount(0);
+    return;
+  }
+
+  await expect(panel).toContainText(`iteration #${target.iteration}`);
+  await expect(items).toHaveCount(target.gateReasons.length);
+  for (const reason of target.gateReasons) {
+    await expect(items.filter({ hasText: reason })).toHaveCount(1);
+  }
 });

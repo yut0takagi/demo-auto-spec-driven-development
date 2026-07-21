@@ -162,3 +162,20 @@ export function costTrend(runs: RunRecord[]): TrendPoint[] {
     return { iteration: r.iteration, value: cumulative };
   });
 }
+
+/**
+ * 現在「未解決」の `needs-human` 反復を返す。
+ *
+ * 「未解決」の定義: 時系列(iteration)で最新の run 自体が needs-human であること。
+ * needs-human の後に merged / failed / paused / dry-run など何らかの反復が
+ * 続いていれば、ループはそこから先へ進んでおり、その needs-human はもはや
+ * 「直近のゲート不通過理由」として提示すべき現在進行中の事象ではないため null を返す
+ * （過去の記録として確認したい場合は data/runs を直接参照する）。
+ * needs-human が1件もない場合も null。
+ */
+export function unresolvedNeedsHuman(runs: RunRecord[]): RunRecord | null {
+  if (runs.length === 0) return null;
+  const sorted = byIterationAsc(runs);
+  const latest = sorted[sorted.length - 1];
+  return latest.verdict === 'needs-human' ? latest : null;
+}
