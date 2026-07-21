@@ -1,0 +1,36 @@
+name: release
+
+on:
+  schedule:
+    - cron: '0 0 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  promote:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Open promotion PR if develop is ahead
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          AHEAD=$(git rev-list --count origin/main..origin/develop)
+          if [[ "$AHEAD" -eq 0 ]]; then
+            echo "develop は main と同じ。昇格 PR は不要。"
+            exit 0
+          fi
+          if gh pr list --base main --head develop --state open --json number -q 'length' | grep -qv '^0$'; then
+            echo "昇格 PR は既に開いている。"
+            exit 0
+          fi
+          gh pr create --base main --head develop \
+            --title "release: develop を main に昇格 ($AHEAD commits)" \
+            --body "自走ループが develop に積んだ $AHEAD 件の変更を main へ昇格します。**マージは人間が判断してください。**"
