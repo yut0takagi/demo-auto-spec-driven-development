@@ -1,0 +1,82 @@
+name: loop
+
+on:
+  schedule:
+    - cron: '*/30 * * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'マージせず PR 作成までで止める'
+        type: boolean
+        default: false
+
+concurrency:
+  group: loop
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+  pull-requests: write
+  issues: write
+
+jobs:
+  iterate:
+    # キルスイッチ L2: 変数が false ならジョブ自体を実行しない
+    if: vars.LOOP_ENABLED != 'false'
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity
+        run: |
+          git config user.name "loop-bot"
+          git config user.email "loop-bot@users.noreply.github.com"
+
+      - name: Run one iteration
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          LOOP_ENABLED: ${{ vars.LOOP_ENABLED }}
+          LOOP_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          ORCHESTRATOR: ${{ vars.ORCHESTRATOR || 'native' }}
+          BUILDER_MODEL: ${{ vars.BUILDER_MODEL || 'claude-sonnet-5' }}
+          ADVERSARY_MODEL: ${{ vars.ADVERSARY_MODEL || 'claude-haiku-4-5' }}
+          IDEATION_MODEL: ${{ vars.IDEATION_MODEL || 'claude-haiku-4-5' }}
+          REPO_ROOT: ${{ github.workspace }}
+        run: python -m orchestrator
+
+      - name: Commit run record to develop
+        run: |
+          git checkout develop
+          git pull --rebase origin develop
+          if [[ -n "$(git status --porcelain data/)" ]]; then
+            git add data/
+            git commit -m "chore(loop): record iteration [skip ci]"
+            git push origin develop
+          fi
