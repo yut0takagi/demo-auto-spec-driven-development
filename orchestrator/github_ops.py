@@ -73,6 +73,20 @@ class GitHubOps:
     def create_branch(self, name: str, base: str) -> None:
         self._run(["git", "checkout", "-b", name, base])
 
+    def commit_all(self, message: str) -> bool:
+        """builder が作業ツリーに加えた全変更を1コミットにする。
+
+        変更が無ければコミットせず False を返す（builder が何も生成しなかった場合、
+        空の PR を作ってしまうのを防ぐ）。gate は commit 済みの diff を見るため、
+        ここで commit しないと changed_lines が常に 0・保護パス検出も空になり判定が形骸化する。
+        """
+        self._run(["git", "add", "-A"])
+        staged = self.runner(["git", "diff", "--cached", "--quiet"], cwd=self.cwd)
+        if staged.ok:  # returncode 0 = ステージに差分なし
+            return False
+        self._run(["git", "commit", "-m", message])
+        return True
+
     def push_branch(self, name: str) -> None:
         self._run(["git", "push", "-u", "origin", name])
 

@@ -69,3 +69,24 @@ class TestMutations:
     def test_create_issue_returns_number(self):
         gh, _ = ops([CommandResult(0, "https://github.com/o/r/issues/45\n", "")])
         assert gh.create_issue(title="t", body="b", labels=["loop:ready"]) == 45
+
+
+class TestCommitAll:
+    def test_commits_when_there_are_changes(self):
+        gh, runner = ops([
+            CommandResult(0, "", ""),   # git add -A
+            CommandResult(1, "", ""),   # git diff --cached --quiet -> returncode 1 = 差分あり
+            CommandResult(0, "", ""),   # git commit
+        ])
+        assert gh.commit_all("実装した") is True
+        assert runner.calls[0][0][:2] == ["git", "add"]
+        assert runner.calls[-1][0][:2] == ["git", "commit"]
+        assert "実装した" in runner.calls[-1][0]
+
+    def test_returns_false_and_does_not_commit_when_no_changes(self):
+        gh, runner = ops([
+            CommandResult(0, "", ""),   # git add -A
+            CommandResult(0, "", ""),   # git diff --cached --quiet -> returncode 0 = 差分なし
+        ])
+        assert gh.commit_all("なにもなし") is False
+        assert all(call[0][:2] != ["git", "commit"] for call in runner.calls)
