@@ -1,0 +1,44 @@
+{
+  "id": "20260721T192646Z-15",
+  "iteration": 7,
+  "issue": {
+    "number": 15,
+    "title": "gateReasons（ゲート不通過理由）を最新 needs-human 反復から抽出して表示する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/15-gatereasons-needs-human",
+  "startedAt": "2026-07-21T19:26:46Z",
+  "finishedAt": "2026-07-21T19:38:15Z",
+  "durationSec": 689,
+  "reviseCycles": 2,
+  "verdict": "needs-human",
+  "gateReasons": [
+    "e2e(Playwright) が失敗している",
+    "adversary が approve していない"
+  ],
+  "prNumber": 16,
+  "adversary": {
+    "approved": false,
+    "summary": "GateReasonsPanel のキー生成戦略が脆弱であり、gateReasons に重複がある場合に予測不可能な再レンダリングが発生する危険性がある。テストも『通すこと』に重点を置いており、実装の正確性を実質的に検証していない。 / 指摘: キーは ${run.iteration}-${i} ではなく、gateReasons 内の一意性を保証する戦略（例: UUID や、reason 自体とインデックスのハイブリッド）が必要。現状は重複理由で不定動作を招く; GateReasonsPanel.test.tsx のテストは『キー警告なし』だけを確認しており、複数レンダリングやアンマウント・再マウント時の挙動が未検証。テストが実装のバグを隠している; e2e テストは data/runs に needs-human が存在しない場合、保留中なし分岐だけを実行し表示ロジックをスキップする。needs-human 固定フィクスチャを別途用意するか、モックで needs-human 状態を作り出して表示ロジック全体を検証すべき"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 257,
+  "cost": {
+    "builderUsd": 3.017482,
+    "adversaryUsd": 0.245037,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.262519
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
