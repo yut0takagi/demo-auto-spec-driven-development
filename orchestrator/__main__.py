@@ -16,7 +16,7 @@ from orchestrator.ideation import propose_next_issues
 from orchestrator.loop import run_iteration
 from orchestrator.models import AdversaryVerdict, CostBreakdown, Issue, RunRecord, VerifyResult
 from orchestrator.record import load_runs, next_iteration, write_run_record, write_status
-from orchestrator.round import run_native_round
+from orchestrator.h5i_round import select_round_runner
 
 
 def _read_control(repo_root: Path) -> dict:
@@ -54,7 +54,7 @@ def main() -> int:
             repo_root=str(repo_root),
             clock=_utc_now,
             kill_switch_reader=kill_switch_reader,
-            round_runner=run_native_round,
+            round_runner=select_round_runner(cfg),
             ideation_runner=_ideate,
         )
     except Exception as exc:  # noqa: BLE001 — 無人実行では握りつぶさず記録して非ゼロ終了する
