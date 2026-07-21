@@ -123,6 +123,25 @@ class TestBreaker:
     def test_does_not_trip_before_k_runs_exist(self):
         assert should_trip_breaker(["failed", "failed"], k=3) is False
 
+    def test_needs_human_counts_as_a_failure(self):
+        assert should_trip_breaker(["needs-human", "needs-human", "needs-human"], k=3) is True
+
+    def test_mixed_real_failures_trip(self):
+        assert should_trip_breaker(["failed", "needs-human", "failed"], k=3) is True
+
+    def test_paused_is_not_a_failure_and_breaks_the_streak(self):
+        # paused は人間が意図的に止めた結果なので「連続失敗」に数えない
+        assert should_trip_breaker(["failed", "paused", "failed"], k=3) is False
+
+    def test_dry_run_is_not_a_failure_and_breaks_the_streak(self):
+        # dry-run はマージしない設定での完走なので失敗ではない
+        assert should_trip_breaker(["failed", "dry-run", "failed"], k=3) is False
+
+    def test_seed_history_of_needs_human_paused_failed_does_not_trip(self):
+        # 観測されたバグの回帰テスト: サンプルデータ末尾 [needs-human, paused, failed] で
+        # 誤って発火し、no-work 実行なのに loop:halted issue が作られていた。
+        assert should_trip_breaker(["needs-human", "paused", "failed"], k=3) is False
+
 
 class TestBudget:
     def test_sums_only_todays_runs(self):
