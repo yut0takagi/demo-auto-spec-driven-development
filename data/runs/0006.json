@@ -1,0 +1,45 @@
+{
+  "id": "20260721T175456Z-11",
+  "iteration": 6,
+  "issue": {
+    "number": 11,
+    "title": "サーキットブレーカの余力（直近の連続非マージ数）をダッシュボードに表示する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/11-task",
+  "startedAt": "2026-07-21T17:54:56Z",
+  "finishedAt": "2026-07-21T18:10:24Z",
+  "durationSec": 928,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 12,
+  "adversary": {
+    "approved": true,
+    "summary": "ブレーカー余力の計算ロジックは正確で、境界値・異常系を網羅したテストが実装されている。UI表示も要件を満たす。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 156,
+  "cost": {
+    "builderUsd": 3.642476,
+    "adversaryUsd": 0.226004,
+    "ideationUsd": 0.09590749999999999,
+    "totalUsd": 3.964387
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    13,
+    14,
+    15
+  ]
+}
