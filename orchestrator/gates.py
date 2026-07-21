@@ -16,6 +16,11 @@ PROTECTED_PREFIXES: tuple[str, ...] = (
 
 _TRUTHY = {"1", "true", "yes", "on"}
 
+#: ブレーカが「失敗」とみなす verdict。
+#: paused / dry-run は人間が止めた・マージしない設定での完走であり失敗ではないので数えない。
+#: no-work / skipped-disabled はそもそも記録されないため対象外。
+BREAKER_FAILURE_VERDICTS: frozenset[str] = frozenset({"failed", "needs-human"})
+
 
 @dataclass(frozen=True)
 class GateResult:
@@ -87,11 +92,15 @@ def read_kill_switch(
 
 
 def should_trip_breaker(recent_verdicts: Sequence[str], *, k: int) -> bool:
-    """直近 k 件がすべて merged 以外ならブレーカを落とす。"""
+    """直近 k 件がすべて実障害（failed / needs-human）ならブレーカを落とす。
+
+    merged はもちろん、paused / dry-run のような意図的な非マージも連続を途切れさせる。
+    「連続失敗」の意図に沿い、止められただけ・確認だけの反復では発火させない。
+    """
     if len(recent_verdicts) < k:
         return False
     window = recent_verdicts[-k:]
-    return all(v != "merged" for v in window)
+    return all(v in BREAKER_FAILURE_VERDICTS for v in window)
 
 
 def spent_today_usd(runs: Iterable[Mapping[str, Any]], *, today: str) -> float:

@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orchestrator.breaker import check_breakers
+from orchestrator.breaker import BreakerAction, check_breakers
 from orchestrator.config import Config
 from orchestrator.gates import read_kill_switch
 from orchestrator.github_ops import GitHubOps
@@ -65,7 +65,14 @@ def main() -> int:
     # サーキットブレーカ: 連続失敗・予算超過なら loop:halted issue を立てて HALTED で終了。
     # 判定は gates.py の純関数、副作用（issue 作成・status 書き込み）はここで行う。
     now = _utc_now()
-    breaker = check_breakers(load_runs(data_dir), cfg=cfg, today=now[:10])
+    # no-work / skipped-disabled / paused-before-pr は反復を実走しておらず失敗でもないので
+    # ブレーカ評価の対象外。idle tick で loop:halted issue が誤生成されるのを防ぐ。
+    _non_operational = {"no-work", "skipped-disabled", "paused-before-pr"}
+    breaker = (
+        BreakerAction(should_halt=False)
+        if result.status in _non_operational
+        else check_breakers(load_runs(data_dir), cfg=cfg, today=now[:10])
+    )
     if breaker.should_halt:
         gh.create_issue(
             title=f"🛑 ループを自動停止しました: {breaker.actor}",
