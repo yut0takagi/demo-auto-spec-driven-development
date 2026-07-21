@@ -20,11 +20,16 @@ export function MetricCards({ summary }: { summary: Summary }) {
     : '最新反復';
 
   return (
-    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-6">
+    <div className="grid grid-cols-2 gap-4 md:grid-cols-3 lg:grid-cols-7">
       <Card label="反復数" value={String(summary.totalRuns)} sub={`${summary.mergedRuns} merged`} />
       <Card label="承認率" value={`${Math.round(summary.approvalRate * 100)}%`} sub="adversary approve" />
       <Card label="マージ率" value={`${Math.round(summary.mergeRate * 100)}%`} sub="develop 到達" />
       <Card label="サイクルタイム" value={`${(summary.avgCycleTimeSec / 60).toFixed(1)}分`} sub="平均" />
+      <Card
+        label="直近の所要時間"
+        value={`${(summary.latestDurationSec / 60).toFixed(1)}分`}
+        sub={`iteration ${summary.latestDurationIteration}`}
+      />
       <Card
         label="累計コスト"
         value={`$${summary.totalCostUsd.toFixed(2)}`}

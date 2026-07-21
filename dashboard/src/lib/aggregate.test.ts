@@ -37,6 +37,8 @@ describe('summarize', () => {
     expect(s.latestCoveragePct).toBe(0);
     expect(s.latestCoverageIteration).toBe(0);
     expect(s.latestCoverageStale).toBe(false);
+    expect(s.latestDurationSec).toBe(0);
+    expect(s.latestDurationIteration).toBe(0);
   });
 
   it('承認率とマージ率を別々に数える', () => {
@@ -86,6 +88,26 @@ describe('summarize', () => {
     expect(s.latestCoveragePct).toBe(84.1);
     expect(s.latestCoverageIteration).toBe(1);
     expect(s.latestCoverageStale).toBe(true);
+  });
+
+  it('latestDurationSec は iteration 最大の run を採用する（配列順に依存しない）', () => {
+    const runs = [
+      makeRun({ iteration: 5, durationSec: 130 }),
+      makeRun({ iteration: 2, durationSec: 300 }),
+    ];
+    const s = summarize(runs);
+    expect(s.latestDurationSec).toBe(130);
+    expect(s.latestDurationIteration).toBe(5);
+  });
+
+  it('durationSec は verdict に関係なく必ず記録されるため、最新 iteration が failed でも latestDurationSec に採用する（カバレッジと違い stale フォールバックしない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 700 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 130 }),
+    ];
+    const s = summarize(runs);
+    expect(s.latestDurationSec).toBe(130);
+    expect(s.latestDurationIteration).toBe(2);
   });
 
   it('クラッシュした run は平均サイクルタイムと平均revise回数の母集団から外す', () => {
