@@ -10,12 +10,26 @@ export interface Summary {
   avgCycleTimeSec: number;
   avgReviseCycles: number;
   totalCostUsd: number;
-  /** verify に到達した最新 iteration のカバレッジ */
+  /**
+   * verify に到達した最新 iteration のカバレッジ。`failed` run は verify に
+   * 到達しておらず測定していないため、その場合は 1 つ前の測定済み iteration
+   * までフォールバックする（＝最新 iteration の値ではないことがある）。
+   */
   latestCoveragePct: number;
   /** latestCoveragePct がどの iteration の測定値か */
   latestCoverageIteration: number;
-  /** true なら最新 iteration ではなく、それ以前の測定値を表示している */
+  /** true なら latestCoveragePct が最新 iteration ではなく、それ以前の測定値である */
   latestCoverageStale: boolean;
+  /**
+   * 直近 iteration の所要時間（秒）。
+   *
+   * latestCoveragePct とは異なり stale フォールバックが存在しない: durationSec は
+   * verdict（merged/failed 等）に関係なく全 run で必ず記録されるため、
+   * 常に最新 iteration（0005.json のような failed run を含む）の値をそのまま採用する。
+   */
+  latestDurationSec: number;
+  /** latestDurationSec の対象 iteration。フォールバックしないので常に最新 iteration と一致する */
+  latestDurationIteration: number;
 }
 
 export interface TrendPoint {
@@ -54,6 +68,8 @@ export function summarize(runs: RunRecord[]): Summary {
       latestCoveragePct: 0,
       latestCoverageIteration: 0,
       latestCoverageStale: false,
+      latestDurationSec: 0,
+      latestDurationIteration: 0,
     };
   }
 
@@ -75,6 +91,8 @@ export function summarize(runs: RunRecord[]): Summary {
     latestCoveragePct: latestMeasured.verify.coveragePct,
     latestCoverageIteration: latestMeasured.iteration,
     latestCoverageStale: latestMeasured.iteration !== latest.iteration,
+    latestDurationSec: latest.durationSec,
+    latestDurationIteration: latest.iteration,
   };
 }
 

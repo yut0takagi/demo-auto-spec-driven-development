@@ -1,4 +1,23 @@
 import { test, expect } from '@playwright/test';
+import { loadRuns } from '../src/lib/loadData';
+import { summarize } from '../src/lib/aggregate';
+
+/**
+ * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
+ * 追記するたびにテストが実データと乖離して壊れる（または気づかれずに無意味化する）。
+ * ここでは実際の data/ を loadRuns/summarize で読み、UI が表示すべき期待値を
+ * その場で導出する。0件だった場合は data/runs が存在しない・空という前提が
+ * 崩れているということなので、その旨を示して即座に失敗させる。
+ */
+function summaryFromRealData() {
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  return summarize(runs);
+}
+
+function toMinutes(sec: number): string {
+  return `${(sec / 60).toFixed(1)}分`;
+}
 
 test('ダッシュボードが稼働ステータスと主要メトリクスを表示する', async ({ page }) => {
   await page.goto('/');
@@ -14,6 +33,37 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
   await expect(page.getByText('反復数', { exact: true })).toBeVisible();
   await expect(page.getByText('承認率', { exact: true })).toBeVisible();
   await expect(page.getByText('直近の反復', { exact: true })).toBeVisible();
+
+  // 直近 iteration の所要時間が分表記で表示されること。値は data/runs を実際に読んで
+  // 導出する（ハードコードすると無人ループが run を追記した際に壊れる／無意味化する）。
+  const summary = summaryFromRealData();
+  const latestDurationText = toMinutes(summary.latestDurationSec);
+  const avgCycleTimeText = toMinutes(summary.avgCycleTimeSec);
+
+  await expect(page.getByText('直近の所要時間', { exact: true })).toBeVisible();
+  await expect(page.getByText(latestDurationText, { exact: true })).toBeVisible();
+  await expect(page.getByText(`iteration ${summary.latestDurationIteration}`, { exact: true })).toBeVisible();
+
+  // 「平均サイクルタイム」と「直近の所要時間」は値が異なる別カードであり、混同されて
+  // はならない。data/runs の内容次第では両者が同値になり得るため、まずこのテストの
+  // 前提として2つの表記が異なることを確認してから、カード単位の分離を検証する。
+  expect(
+    latestDurationText,
+    'data/runs の内容が変わり、直近所要時間と平均サイクルタイムが同値になった。この場合カードの分離を検証できないため fixture を見直すこと。',
+  ).not.toBe(avgCycleTimeText);
+
+  // ラベルを起点にカード(直近の祖先の rounded-xl コンテナ)へスコープし、
+  // それぞれのカードが自分の値だけを含み、相手の値を含まないことを検証する。
+  const cycleTimeCard = page.locator('div.rounded-xl').filter({ hasText: 'サイクルタイム' });
+  const latestDurationCard = page.locator('div.rounded-xl').filter({ hasText: '直近の所要時間' });
+  await expect(cycleTimeCard).toHaveCount(1);
+  await expect(latestDurationCard).toHaveCount(1);
+
+  await expect(cycleTimeCard).toContainText(avgCycleTimeText);
+  await expect(cycleTimeCard).not.toContainText(latestDurationText);
+
+  await expect(latestDurationCard).toContainText(latestDurationText);
+  await expect(latestDurationCard).not.toContainText(avgCycleTimeText);
 });
 
 test('停止バッジは理由・停止主体・再開手順を常時表示する', async ({ page }) => {

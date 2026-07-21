@@ -1,7 +1,16 @@
 import { describe, it, expect } from 'vitest';
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { MetricCards } from './MetricCards';
 import type { Summary } from '@/lib/aggregate';
+
+/** ラベルの祖先カード（.rounded-xl コンテナ）を取得する。テスト内スコープ限定のヘルパー。 */
+function getCard(label: string): HTMLElement {
+  const card = screen.getByText(label, { exact: true }).closest('.rounded-xl');
+  if (!(card instanceof HTMLElement)) {
+    throw new Error(`"${label}" の祖先に .rounded-xl カードが見つからない`);
+  }
+  return card;
+}
 
 const summary: Summary = {
   totalRuns: 12,
@@ -14,6 +23,8 @@ const summary: Summary = {
   latestCoveragePct: 87.5,
   latestCoverageIteration: 12,
   latestCoverageStale: false,
+  latestDurationSec: 545,
+  latestDurationIteration: 12,
 };
 
 describe('MetricCards', () => {
@@ -68,5 +79,39 @@ describe('MetricCards', () => {
     render(<MetricCards summary={messy} />);
     expect(screen.getByText('$1.11')).toBeInTheDocument();
     expect(screen.queryByText(/1\.1099999999999999/)).not.toBeInTheDocument();
+  });
+
+  it('直近反復の所要時間を分表記で表示し、どの iteration の値か明示する', () => {
+    render(<MetricCards summary={summary} />);
+    // 545秒 = 9.0833...分。平均サイクルタイムの "7.0分" と混同しないよう別値にしている。
+    expect(screen.getByText('9.1分')).toBeInTheDocument();
+    expect(screen.getByText('iteration 12')).toBeInTheDocument();
+  });
+
+  it('直近反復の所要時間が平均サイクルタイムと異なる値でも、それぞれ独立して表示する', () => {
+    const differing: Summary = { ...summary, avgCycleTimeSec: 420, latestDurationSec: 60, latestDurationIteration: 3 };
+    render(<MetricCards summary={differing} />);
+    expect(screen.getByText('7.0分')).toBeInTheDocument();
+    expect(screen.getByText('1.0分')).toBeInTheDocument();
+    expect(screen.getByText('iteration 3')).toBeInTheDocument();
+  });
+
+  it('「直近の所要時間」カードは、そのラベルと値・iteration番号が同一カード内で共存する', () => {
+    render(<MetricCards summary={summary} />);
+    const latestDurationCard = getCard('直近の所要時間');
+    // 545秒 = 9.1分（平均サイクルタイムの7.0分とは別の値）がラベルと同じカードにある
+    expect(within(latestDurationCard).getByText('9.1分')).toBeInTheDocument();
+    expect(within(latestDurationCard).getByText('iteration 12')).toBeInTheDocument();
+    // 平均サイクルタイムの値が紛れ込んでいないこと（混同していないこと）の確認
+    expect(within(latestDurationCard).queryByText('7.0分')).not.toBeInTheDocument();
+  });
+
+  it('「サイクルタイム」（平均）カードは、直近反復の所要時間の値を含まない', () => {
+    render(<MetricCards summary={summary} />);
+    const cycleTimeCard = getCard('サイクルタイム');
+    expect(within(cycleTimeCard).getByText('7.0分')).toBeInTheDocument();
+    // 直近反復の値(9.1分)や、そのiteration番号ラベルが紛れ込んでいないこと
+    expect(within(cycleTimeCard).queryByText('9.1分')).not.toBeInTheDocument();
+    expect(within(cycleTimeCard).queryByText('iteration 12')).not.toBeInTheDocument();
   });
 });
