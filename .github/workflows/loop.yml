@@ -53,6 +53,17 @@ jobs:
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
 
+      - name: Install h5i engine and SDK
+        if: vars.ORCHESTRATOR == 'h5i'
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/h5i-dev/h5i/main/install.sh | sh
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          pip install h5i-orchestra
+
+      - name: Verify h5i is runnable headless
+        if: vars.ORCHESTRATOR == 'h5i'
+        run: h5i --version
+
       - name: Configure git identity
         run: |
           git config user.name "loop-bot"
