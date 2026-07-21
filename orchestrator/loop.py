@@ -31,6 +31,7 @@ class GhLike(Protocol):
     def changed_lines(self, base: str) -> int: ...
     def diff(self, base: str, max_chars: int = ...) -> str: ...
     def create_branch(self, name: str, base: str) -> None: ...
+    def commit_all(self, message: str) -> bool: ...
     def push_branch(self, name: str) -> None: ...
     def open_pr(self, *, title: str, body: str, base: str, head: str) -> int: ...
     def comment_pr(self, number: int, body: str) -> None: ...
@@ -100,6 +101,23 @@ def run_iteration(
     if not kill_switch_reader():
         return IterationResult(
             status="paused-before-pr", iteration=iteration, issue_number=issue.number
+        )
+
+    # builder の作業を1コミットにする。これをやらないとブランチが空になり、
+    # gate は commit 済み diff を見るため changed_lines が常に0・保護パス検出も空になって
+    # 判定が形骸化し、空の PR を作ろうとして失敗する（dry-run で判明したバグ）。
+    if not gh.commit_all(f"loop: {issue.title} (#{issue.number})"):
+        gh.add_label(issue.number, cfg.needs_human_label)
+        reasons = ("builder が変更を生成しなかった",)
+        _record(
+            data_dir, iteration, issue, branch, outcome, 0,
+            verdict="needs-human", started_at=started_at, finished_at=clock(),
+            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            gate_reasons=list(reasons), pr_number=None,
+        )
+        return IterationResult(
+            status="needs-human", iteration=iteration,
+            issue_number=issue.number, reasons=reasons,
         )
 
     changed_files = gh.changed_files(cfg.base_branch)

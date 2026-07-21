@@ -12,12 +12,13 @@ from orchestrator.round import RoundOutcome
 class FakeGh:
     """GitHubOps の代役。呼ばれた操作を記録する。"""
 
-    def __init__(self, issues=None, changed_files=None, changed_lines=100):
+    def __init__(self, issues=None, changed_files=None, changed_lines=100, committed=True):
         self._issues = issues if issues is not None else [
             Issue(number=42, title="add chart", labels=["loop:ready"])
         ]
         self._changed_files = changed_files or ["dashboard/src/app/page.tsx"]
         self._changed_lines = changed_lines
+        self._committed = committed
         self.actions: list[str] = []
         self.created_issues: list[str] = []
 
@@ -26,6 +27,7 @@ class FakeGh:
     def changed_lines(self, base): return self._changed_lines
     def diff(self, base, max_chars=60_000): return "diff"
     def create_branch(self, name, base): self.actions.append(f"branch:{name}")
+    def commit_all(self, message): self.actions.append("commit"); return self._committed
     def push_branch(self, name): self.actions.append(f"push:{name}")
     def open_pr(self, *, title, body, base, head):
         self.actions.append("open_pr")
@@ -225,3 +227,27 @@ class TestDuration:
         assert record["startedAt"] == "2026-07-20T12:00:00Z"
         assert record["finishedAt"] == "2026-07-20T12:07:30Z"
         assert record["durationSec"] == 450
+
+
+class TestNoChanges:
+    def test_builder_produced_nothing_is_needs_human_without_pr(self, tmp_path):
+        # dry-run で判明したバグの回帰: builder の変更が commit されず空ブランチになると、
+        # 空の PR を作ろうとして失敗していた。変更ゼロなら PR を作らず needs-human にする。
+        gh = FakeGh(committed=False)
+        result = run(tmp_path, gh=gh)
+        assert result.status == "needs-human"
+        assert "commit" in gh.actions
+        assert "open_pr" not in gh.actions
+        assert not any(a.startswith("merge:") for a in gh.actions)
+        assert "label:loop:needs-human" in gh.actions
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["verdict"] == "needs-human"
+        assert record["prNumber"] is None
+        assert "変更を生成しなかった" in record["gateReasons"][0]
+
+    def test_committed_changes_proceed_to_pr(self, tmp_path):
+        gh = FakeGh(committed=True)
+        result = run(tmp_path, gh=gh)
+        assert result.status == "merged"
+        assert "commit" in gh.actions
+        assert "open_pr" in gh.actions
