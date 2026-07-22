@@ -109,6 +109,10 @@ class GitHubOps:
     def remove_label(self, number: int, label: str) -> None:
         self._run(["gh", "issue", "edit", str(number), "--remove-label", label])
 
+    def close_issue(self, number: int, comment: str) -> None:
+        """issue にコメントを添えてクローズする（gate を満たせず自動見送りする際に使う）。"""
+        self._run(["gh", "issue", "close", str(number), "--comment", comment])
+
     def create_issue(self, *, title: str, body: str, labels: list[str]) -> int:
         cmd = ["gh", "issue", "create", "--title", title, "--body", body]
         for label in labels:

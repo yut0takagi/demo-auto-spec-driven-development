@@ -3,7 +3,8 @@ from orchestrator.config import Config
 
 def test_defaults_match_spec():
     cfg = Config.from_env({})
-    assert cfg.max_revise_cycles == 2
+    # gate を満たすまでの再試行上限。retry-to-comply 化に伴い 2→3 に引き上げた。
+    assert cfg.max_revise_cycles == 3
     assert cfg.max_changed_lines == 400
     assert cfg.circuit_breaker_fails == 3
     assert cfg.daily_cost_budget_usd == 5.0

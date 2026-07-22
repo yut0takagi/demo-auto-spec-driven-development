@@ -20,15 +20,17 @@ export interface LoopStatus {
 /**
  * 1 反復の最終結果。
  * - `merged`      ゲートを通過し develop にマージされた
- * - `needs-human` ゲート不通過。PR は開いたまま人間の判断待ち
+ * - `abandoned`   ゲートを再試行しても満たせず、人間に振らず自動で見送った（issue はクローズ）
+ * - `needs-human` 旧経路。ゲート不通過を人間に委ねていた（現行ループは発行しない）
  * - `paused`      キルスイッチによりマージ直前で停止した（PR は開いている）
  * - `dry-run`     ドライラン。マージ以外は実行した
  * - `failed`      反復が例外で異常終了した
  *
  * `paused` と `dry-run` を分けているのは、前者が「人間が止めた」、後者が
- * 「最初からマージしない設定だった」という別事象だから。
+ * 「最初からマージしない設定だった」という別事象だから。`needs-human` は既存 record が
+ * 持つため型としては残すが、現行ループは `abandoned` を出す。
  */
-export type Verdict = 'merged' | 'needs-human' | 'paused' | 'dry-run' | 'failed';
+export type Verdict = 'merged' | 'abandoned' | 'needs-human' | 'paused' | 'dry-run' | 'failed';
 
 export interface RunRecord {
   /** 一意ID。`<ISO8601 basic>-<issue#>` 形式 */

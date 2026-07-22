@@ -17,9 +17,10 @@ PROTECTED_PREFIXES: tuple[str, ...] = (
 _TRUTHY = {"1", "true", "yes", "on"}
 
 #: ブレーカが「失敗」とみなす verdict。
+#: abandoned = gate を再試行しても満たせず自動見送りした反復。旧 needs-human の役割を継ぐ。
 #: paused / dry-run は人間が止めた・マージしない設定での完走であり失敗ではないので数えない。
 #: no-work / skipped-disabled はそもそも記録されないため対象外。
-BREAKER_FAILURE_VERDICTS: frozenset[str] = frozenset({"failed", "needs-human"})
+BREAKER_FAILURE_VERDICTS: frozenset[str] = frozenset({"failed", "abandoned", "needs-human"})
 
 
 @dataclass(frozen=True)

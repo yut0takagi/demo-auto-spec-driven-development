@@ -38,6 +38,7 @@ class GhLike(Protocol):
     def merge_pr(self, number: int) -> None: ...
     def add_label(self, number: int, label: str) -> None: ...
     def remove_label(self, number: int, label: str) -> None: ...
+    def close_issue(self, number: int, comment: str) -> None: ...
     def create_issue(self, *, title: str, body: str, labels: list[str]) -> int: ...
 
 
@@ -67,10 +68,47 @@ def _retire_from_queue(gh: GhLike, issue_number: int, terminal_label: str, cfg: 
     これをしないと ready のまま残り、次反復で `ready[0]` が同じ issue を拾い直す。
     その issue が既に PR 用ブランチを push 済みだと、再作成したブランチの push が
     non-fast-forward で失敗し、builder に課金した末にクラッシュしてループが前進しなくなる
-    （#14 / #15 で実際に発生）。terminal ラベル = needs-human / paused。
+    （#14 / #15 で実際に発生）。現行では paused（人間がマージ直前で止めた）にのみ使う。
     """
     gh.remove_label(issue_number, cfg.ready_label)
     gh.add_label(issue_number, terminal_label)
+
+
+def _abandon_comment(reasons: tuple[str, ...] | list[str], cycles: int) -> str:
+    lines = [
+        "🤖 gate を満たせなかったため自動で見送りました（needs-human は出さない方針）。",
+        "",
+        f"- 再試行: {cycles} 回",
+        "- 不通過の理由:",
+        *[f"  - {r}" for r in reasons],
+        "",
+        "必要なら人間が reopen して loop:ready を付け直してください。",
+    ]
+    return "\n".join(lines)
+
+
+def _abandon(
+    gh: GhLike, *, data_dir, iteration, issue, branch, outcome, changed_lines,
+    reasons: tuple[str, ...], cfg: Config, started_at: str, clock: Callable[[], str],
+) -> "IterationResult":
+    """gate を再試行しても満たせなかった issue を、人間に振らず自動で見送る。
+
+    ready を剥がし、loop:abandoned を付けて issue をクローズする（PR は作らない=push もしない
+    ので、needs-human 時代のような宙ぶらりんの PR は残らない）。次反復は次の ready を拾う。
+    """
+    gh.remove_label(issue.number, cfg.ready_label)
+    gh.add_label(issue.number, cfg.abandoned_label)
+    gh.close_issue(issue.number, _abandon_comment(reasons, outcome.revise_cycles))
+    _record(
+        data_dir, iteration, issue, branch, outcome, changed_lines,
+        verdict="abandoned", started_at=started_at, finished_at=clock(),
+        cfg=cfg, ideation_cost=0.0, next_issues=[],
+        gate_reasons=list(reasons), pr_number=None,
+    )
+    return IterationResult(
+        status="abandoned", iteration=iteration,
+        issue_number=issue.number, reasons=tuple(reasons),
+    )
 
 
 def run_iteration(
@@ -119,18 +157,13 @@ def run_iteration(
     # builder の作業を1コミットにする。これをやらないとブランチが空になり、
     # gate は commit 済み diff を見るため changed_lines が常に0・保護パス検出も空になって
     # 判定が形骸化し、空の PR を作ろうとして失敗する（dry-run で判明したバグ）。
+    # builder が変更を生成しなかった → 人間に振らず自動見送り。
     if not gh.commit_all(f"loop: {issue.title} (#{issue.number})"):
-        _retire_from_queue(gh, issue.number, cfg.needs_human_label, cfg)
-        reasons = ("builder が変更を生成しなかった",)
-        _record(
-            data_dir, iteration, issue, branch, outcome, 0,
-            verdict="needs-human", started_at=started_at, finished_at=clock(),
-            cfg=cfg, ideation_cost=0.0, next_issues=[],
-            gate_reasons=list(reasons), pr_number=None,
-        )
-        return IterationResult(
-            status="needs-human", iteration=iteration,
-            issue_number=issue.number, reasons=reasons,
+        return _abandon(
+            gh, data_dir=data_dir, iteration=iteration, issue=issue, branch=branch,
+            outcome=outcome, changed_lines=0,
+            reasons=("builder が変更を生成しなかった",),
+            cfg=cfg, started_at=started_at, clock=clock,
         )
 
     changed_files = gh.changed_files(cfg.base_branch)
@@ -144,6 +177,17 @@ def run_iteration(
         max_changed_lines=cfg.max_changed_lines,
     )
 
+    # gate 不通過 → 人間には振らず自動見送り（abandoned）。builder は round で上限まで
+    # 再試行済み。push も PR もしないので、宙ぶらりんの PR は残らない。次反復は次の ready へ。
+    if not gate.passed:
+        return _abandon(
+            gh, data_dir=data_dir, iteration=iteration, issue=issue, branch=branch,
+            outcome=outcome, changed_lines=changed_lines,
+            reasons=tuple(gate.reasons),
+            cfg=cfg, started_at=started_at, clock=clock,
+        )
+
+    # gate 通過時のみ push → PR → merge へ進む。
     gh.push_branch(branch)
     pr = gh.open_pr(
         title=f"{issue.title} (#{issue.number})",
@@ -154,8 +198,8 @@ def run_iteration(
     gh.comment_pr(pr, _review_comment(outcome.adversary))
 
     # --- 停止チェックポイント 3（マージ直前） ---
-    # レビュー指摘: 以前はここで記録を書かずに return していたため、実際に
-    # builder+adversary の 1 ラウンド分の課金が発生したのに痕跡が残らなかった。
+    # gate は通過済み。ここで止まるのは人間がキルスイッチを引いた場合だけ（needs-human ではない）。
+    # 記録を書かずに return すると課金済みラウンドの痕跡が消えるため、必ず記録する。
     if not kill_switch_reader():
         _retire_from_queue(gh, issue.number, cfg.paused_label, cfg)
         _record(
@@ -167,19 +211,6 @@ def run_iteration(
         return IterationResult(
             status="paused", iteration=iteration,
             issue_number=issue.number, pr_number=pr,
-        )
-
-    if not gate.passed:
-        _retire_from_queue(gh, issue.number, cfg.needs_human_label, cfg)
-        _record(
-            data_dir, iteration, issue, branch, outcome, changed_lines,
-            verdict="needs-human", started_at=started_at, finished_at=clock(),
-            cfg=cfg, ideation_cost=0.0, next_issues=[],
-            gate_reasons=gate.reasons, pr_number=pr,
-        )
-        return IterationResult(
-            status="needs-human", iteration=iteration,
-            issue_number=issue.number, pr_number=pr, reasons=gate.reasons,
         )
 
     if cfg.dry_run:

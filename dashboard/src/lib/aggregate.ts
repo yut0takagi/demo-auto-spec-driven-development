@@ -5,7 +5,7 @@ import type { RunRecord, Verdict } from './types';
  * 連続失敗として数える verdict と同じ）。merged はもちろん、paused / dry-run のような
  * 意図的な非マージも連続を途切れさせる（この集合に含まれない）。
  */
-const BREAKER_TRIP_VERDICTS: readonly Verdict[] = ['failed', 'needs-human'];
+const BREAKER_TRIP_VERDICTS: readonly Verdict[] = ['failed', 'abandoned', 'needs-human'];
 
 /**
  * orchestrator/config.py の circuit_breaker_fails 既定値(3)に合わせた表示用の閾値。

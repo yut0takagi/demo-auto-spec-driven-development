@@ -165,6 +165,17 @@ describe('summarize', () => {
     expect(s.breakerRemaining).toBe(1);
   });
 
+  it('abandoned（自動見送り）は failed/needs-human と同様に breakerStreak を進める', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ];
+    const s = summarize(runs);
+    expect(s.breakerStreak).toBe(2);
+    expect(s.breakerRemaining).toBe(1);
+  });
+
   it('paused は意図的な非マージであり、breakerStreak の連続をリセットする', () => {
     const runs = [
       makeRun({ iteration: 1, verdict: 'failed' }),
