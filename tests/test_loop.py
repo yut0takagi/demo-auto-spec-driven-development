@@ -36,6 +36,7 @@ class FakeGh:
     def merge_pr(self, number): self.actions.append(f"merge:{number}")
     def add_label(self, number, label): self.actions.append(f"label:{label}")
     def remove_label(self, number, label): self.actions.append(f"unlabel:{label}")
+    def close_issue(self, number, comment): self.actions.append(f"close:{number}")
     def create_issue(self, *, title, body, labels):
         self.created_issues.append(title)
         return 900 + len(self.created_issues)
@@ -165,7 +166,9 @@ class TestHappyPath:
 
 
 class TestGateFailures:
-    def test_adversary_rejection_blocks_merge_and_labels_needs_human(self, tmp_path):
+    """gate 不通過は人間に振らず abandoned（自動見送り）になる。needs-human は出さない。"""
+
+    def test_adversary_rejection_abandons_without_merge(self, tmp_path):
         gh = FakeGh()
         result = run(
             tmp_path, gh=gh,
@@ -173,14 +176,21 @@ class TestGateFailures:
                 adversary=AdversaryVerdict(approved=False, summary="薄い")
             ),
         )
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
         assert not any(a.startswith("merge:") for a in gh.actions)
-        assert "label:loop:needs-human" in gh.actions
+        assert "label:loop:abandoned" in gh.actions
+        assert "close:42" in gh.actions
 
-    def test_needs_human_retires_issue_from_ready_queue(self, tmp_path):
-        # 毒饅頭バグの回帰（#14 / #15）: needs-human 判定で loop:ready を外さないと、
-        # 次反復で ready[0] が同じ issue を拾い直し、push 済みブランチと衝突して
-        # 失敗し続ける。ready を剥がして自動処理キューから外すこと。
+    def test_gate_failure_never_pushes_or_opens_a_pr(self, tmp_path):
+        # abandoned は push も PR もしない（needs-human 時代のような宙ぶらりんの PR を残さない）。
+        gh = FakeGh()
+        run(tmp_path, gh=gh, round_outcome=approved_round(e2e_passed=False))
+        assert "open_pr" not in gh.actions
+        assert not any(a.startswith("push:") for a in gh.actions)
+
+    def test_abandon_retires_issue_from_ready_queue(self, tmp_path):
+        # 毒饅頭バグの回帰（#14 / #15）: gate 不通過で loop:ready を外さないと、次反復で
+        # ready[0] が同じ issue を拾い直す。ready を剥がして issue をクローズする。
         gh = FakeGh()
         result = run(
             tmp_path, gh=gh,
@@ -188,28 +198,34 @@ class TestGateFailures:
                 adversary=AdversaryVerdict(approved=False, summary="薄い")
             ),
         )
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
         assert "unlabel:loop:ready" in gh.actions
-        # ready を外してから terminal ラベルを付ける順序であること
-        assert gh.actions.index("unlabel:loop:ready") < gh.actions.index(
-            "label:loop:needs-human"
-        )
+        assert "close:42" in gh.actions
 
-    def test_protected_path_change_blocks_merge(self, tmp_path):
+    def test_protected_path_change_is_abandoned(self, tmp_path):
         gh = FakeGh(changed_files=["orchestrator/loop.py"])
         result = run(tmp_path, gh=gh)
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
         assert not any(a.startswith("merge:") for a in gh.actions)
+        assert "open_pr" not in gh.actions
 
-    def test_oversized_diff_blocks_merge(self, tmp_path):
+    def test_oversized_diff_is_abandoned(self, tmp_path):
         gh = FakeGh(changed_lines=999)
         result = run(tmp_path, gh=gh)
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
 
-    def test_failed_verify_blocks_merge(self, tmp_path):
+    def test_failed_verify_is_abandoned(self, tmp_path):
         gh = FakeGh()
         result = run(tmp_path, gh=gh, round_outcome=approved_round(verify_passed=False))
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
+
+    def test_abandoned_iteration_records_verdict_and_reasons(self, tmp_path):
+        gh = FakeGh()
+        run(tmp_path, gh=gh, round_outcome=approved_round(e2e_passed=False))
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["verdict"] == "abandoned"
+        assert record["prNumber"] is None
+        assert record["gateReasons"]  # 不通過理由が記録されている
 
     def test_blocked_iteration_does_not_create_follow_up_issues(self, tmp_path):
         gh = FakeGh(changed_lines=999)
@@ -256,18 +272,19 @@ class TestDuration:
 
 
 class TestNoChanges:
-    def test_builder_produced_nothing_is_needs_human_without_pr(self, tmp_path):
-        # dry-run で判明したバグの回帰: builder の変更が commit されず空ブランチになると、
-        # 空の PR を作ろうとして失敗していた。変更ゼロなら PR を作らず needs-human にする。
+    def test_builder_produced_nothing_is_abandoned_without_pr(self, tmp_path):
+        # builder の変更が commit されず空ブランチになったら、PR を作らず自動見送りする
+        # （人間には振らない）。
         gh = FakeGh(committed=False)
         result = run(tmp_path, gh=gh)
-        assert result.status == "needs-human"
+        assert result.status == "abandoned"
         assert "commit" in gh.actions
         assert "open_pr" not in gh.actions
         assert not any(a.startswith("merge:") for a in gh.actions)
-        assert "label:loop:needs-human" in gh.actions
+        assert "label:loop:abandoned" in gh.actions
+        assert "close:42" in gh.actions
         record = json.loads((tmp_path / "runs" / "0001.json").read_text())
-        assert record["verdict"] == "needs-human"
+        assert record["verdict"] == "abandoned"
         assert record["prNumber"] is None
         assert "変更を生成しなかった" in record["gateReasons"][0]
         # builder が何も生成しなくても ready を外す（再拾いで無駄な課金を繰り返さない）

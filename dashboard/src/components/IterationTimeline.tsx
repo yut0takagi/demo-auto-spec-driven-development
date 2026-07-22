@@ -4,6 +4,7 @@ import type { RunRecord } from '@/lib/types';
 // 契約に `dry-run` が増えたので、ここに追加しないと typecheck が落ちる（レビューでの修正）。
 const VERDICT_STYLES: Record<RunRecord['verdict'], string> = {
   merged: 'text-emerald-400',
+  abandoned: 'text-orange-400',
   'needs-human': 'text-amber-400',
   paused: 'text-sky-400',
   'dry-run': 'text-fuchsia-400',

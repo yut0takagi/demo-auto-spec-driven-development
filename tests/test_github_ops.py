@@ -74,6 +74,15 @@ class TestMutations:
         assert "--remove-label" in cmd
         assert "loop:ready" in cmd
 
+    def test_close_issue_with_comment(self):
+        gh, runner = ops([CommandResult(0, "", "")])
+        gh.close_issue(42, "自動見送り")
+        cmd = runner.calls[0][0]
+        assert cmd[:3] == ["gh", "issue", "close"]
+        assert "42" in cmd
+        assert "--comment" in cmd
+        assert "自動見送り" in cmd
+
     def test_create_issue_returns_number(self):
         gh, _ = ops([CommandResult(0, "https://github.com/o/r/issues/45\n", "")])
         assert gh.create_issue(title="t", body="b", labels=["loop:ready"]) == 45
