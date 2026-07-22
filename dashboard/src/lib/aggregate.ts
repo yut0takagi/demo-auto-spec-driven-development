@@ -14,6 +14,9 @@ const BREAKER_TRIP_VERDICTS: readonly Verdict[] = ['failed', 'abandoned', 'needs
  */
 const BREAKER_THRESHOLD = 3;
 
+/** これを超える reviseCycles を外れ値として扱う表示用の閾値。 */
+export const REVISE_CYCLES_OUTLIER_THRESHOLD = 3;
+
 export interface Summary {
   totalRuns: number;
   mergedRuns: number;
@@ -23,6 +26,8 @@ export interface Summary {
   mergeRate: number;
   avgCycleTimeSec: number;
   avgReviseCycles: number;
+  /** revise 回数の中央値。外れ値（極端に多い revise）に平均より引きずられない指標。 */
+  medianReviseCycles: number;
   totalCostUsd: number;
   /**
    * verify に到達した最新 iteration のカバレッジ。`failed` run は verify に
@@ -79,6 +84,20 @@ function mean(values: number[]): number {
   return values.reduce((a, b) => a + b, 0) / values.length;
 }
 
+/**
+ * 中央値。奇数/偶数で分岐せず、常に「中央2要素（奇数個なら同じ要素を2回）の平均」
+ * という単一の式で求める。分岐による添字ずれ（off-by-one）を構造的に排除するため。
+ * 例: [1,2,3] → lastIndex=2, lower=upper=1 → sorted[1] を2回平均 = 2（sorted[1]と一致）。
+ */
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const lastIndex = sorted.length - 1;
+  const lower = Math.floor(lastIndex / 2);
+  const upper = Math.ceil(lastIndex / 2);
+  return (sorted[lower] + sorted[upper]) / 2;
+}
+
 function byIterationAsc(runs: RunRecord[]): RunRecord[] {
   return [...runs].sort((a, b) => a.iteration - b.iteration);
 }
@@ -101,6 +120,7 @@ export function summarize(runs: RunRecord[]): Summary {
       mergeRate: 0,
       avgCycleTimeSec: 0,
       avgReviseCycles: 0,
+      medianReviseCycles: 0,
       totalCostUsd: 0,
       latestCoveragePct: 0,
       latestCoverageIteration: 0,
@@ -128,6 +148,7 @@ export function summarize(runs: RunRecord[]): Summary {
     mergeRate: mergedRuns / runs.length,
     avgCycleTimeSec: mean(completed.map((r) => r.durationSec)),
     avgReviseCycles: mean(completed.map((r) => r.reviseCycles)),
+    medianReviseCycles: reviseCyclesMedian(runs),
     totalCostUsd: runs.reduce((sum, r) => sum + r.cost.totalUsd, 0),
     latestCoveragePct: latestMeasured.verify.coveragePct,
     latestCoverageIteration: latestMeasured.iteration,
@@ -161,4 +182,28 @@ export function costTrend(runs: RunRecord[]): TrendPoint[] {
     cumulative += r.cost.totalUsd;
     return { iteration: r.iteration, value: cumulative };
   });
+}
+
+/**
+ * revise 回数の推移。coverageTrend と同様、verify に到達しなかった `failed` run は
+ * 「途中でクラッシュするまでの revise 回数」であり他の run と意味が異なるため除外する
+ * （avgReviseCycles / medianReviseCycles の母集団と揃える）。
+ */
+export function reviseCyclesTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs)
+    .filter(reachedVerify)
+    .map((r) => ({
+      iteration: r.iteration,
+      value: r.reviseCycles,
+    }));
+}
+
+/** reviseCyclesTrend のうち、REVISE_CYCLES_OUTLIER_THRESHOLD を超える外れ値だけを抜き出す。 */
+export function reviseCyclesOutliers(runs: RunRecord[]): TrendPoint[] {
+  return reviseCyclesTrend(runs).filter((p) => p.value > REVISE_CYCLES_OUTLIER_THRESHOLD);
+}
+
+/** Summary.medianReviseCycles と同じ計算を、summarize() 抜きで単体利用するための関数。 */
+export function reviseCyclesMedian(runs: RunRecord[]): number {
+  return median(reviseCyclesTrend(runs).map((p) => p.value));
 }

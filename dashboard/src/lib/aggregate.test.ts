@@ -1,5 +1,13 @@
 import { describe, it, expect } from 'vitest';
-import { summarize, coverageTrend, costTrend } from './aggregate';
+import {
+  summarize,
+  coverageTrend,
+  costTrend,
+  reviseCyclesTrend,
+  reviseCyclesOutliers,
+  reviseCyclesMedian,
+  REVISE_CYCLES_OUTLIER_THRESHOLD,
+} from './aggregate';
 import type { RunRecord } from './types';
 
 function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
@@ -33,6 +41,7 @@ describe('summarize', () => {
     expect(s.mergeRate).toBe(0);
     expect(s.avgCycleTimeSec).toBe(0);
     expect(s.avgReviseCycles).toBe(0);
+    expect(s.medianReviseCycles).toBe(0);
     expect(s.totalCostUsd).toBe(0);
     expect(s.latestCoveragePct).toBe(0);
     expect(s.latestCoverageIteration).toBe(0);
@@ -287,5 +296,97 @@ describe('costTrend', () => {
   it('coverageTrend/costTrend は空配列で空配列を返す', () => {
     expect(coverageTrend([])).toEqual([]);
     expect(costTrend([])).toEqual([]);
+  });
+});
+
+describe('reviseCyclesMedian', () => {
+  it('要素数が奇数(3件、既に昇順)なら中央の値を返す — 1件おきの平均に引きずられて off-by-one しないことを直接確認', () => {
+    const runs = [
+      makeRun({ iteration: 1, reviseCycles: 1 }),
+      makeRun({ iteration: 2, reviseCycles: 2 }),
+      makeRun({ iteration: 3, reviseCycles: 3 }),
+    ];
+    // [1, 2, 3] の中央値は 2（Math.floor(length/2)=1 を安易に使うと sorted[0]=1 を返す実装ミスがあり得るため明示的に確認）
+    expect(reviseCyclesMedian(runs)).toBe(2);
+  });
+
+  it('要素数が1件なら、その値をそのまま返す', () => {
+    const runs = [makeRun({ iteration: 1, reviseCycles: 7 })];
+    expect(reviseCyclesMedian(runs)).toBe(7);
+  });
+
+  it('要素数が偶数なら中央2値の平均を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, reviseCycles: 0 }),
+      makeRun({ iteration: 2, reviseCycles: 4 }),
+    ];
+    expect(reviseCyclesMedian(runs)).toBe(2);
+  });
+
+  it('failed run を除外した奇数個の母集団で正しい中央値を計算する', () => {
+    // 生データ全4件をそのまま(除外なしで)ソートすると [1, 3, 5, 99] で中央値は (3+5)/2=4 になってしまう。
+    // reachedVerify で failed(99) を除外すると merged の3件 [1, 3, 5] だけが残り、
+    // 奇数個の中央値である 3 が正しい期待値になる。
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 5 }),
+      makeRun({ iteration: 3, verdict: 'failed', reviseCycles: 99 }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 3 }),
+    ];
+    expect(reviseCyclesMedian(runs)).toBe(3);
+  });
+
+  it('空配列では0を返す', () => {
+    expect(reviseCyclesMedian([])).toBe(0);
+  });
+});
+
+describe('reviseCyclesTrend / reviseCyclesOutliers', () => {
+  it('iteration 昇順に revise 回数を並べる', () => {
+    const runs = [
+      makeRun({ iteration: 3, reviseCycles: 2 }),
+      makeRun({ iteration: 1, reviseCycles: 0 }),
+    ];
+    expect(reviseCyclesTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 3, value: 2 },
+    ]);
+  });
+
+  it('failed run は coverageTrend と同様に含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 2, verdict: 'failed', reviseCycles: 9 }),
+    ];
+    expect(reviseCyclesTrend(runs)).toEqual([{ iteration: 1, value: 1 }]);
+  });
+
+  it('閾値(3)ちょうどは外れ値に含めない境界値', () => {
+    const runs = [makeRun({ iteration: 1, reviseCycles: REVISE_CYCLES_OUTLIER_THRESHOLD })];
+    expect(reviseCyclesOutliers(runs)).toEqual([]);
+  });
+
+  it('閾値(3)を1でも超えると外れ値として拾う', () => {
+    const runs = [makeRun({ iteration: 1, reviseCycles: REVISE_CYCLES_OUTLIER_THRESHOLD + 1 })];
+    expect(reviseCyclesOutliers(runs)).toEqual([
+      { iteration: 1, value: REVISE_CYCLES_OUTLIER_THRESHOLD + 1 },
+    ]);
+  });
+
+  it('複数の外れ値を iteration 昇順で全て拾う', () => {
+    const runs = [
+      makeRun({ iteration: 1, reviseCycles: 1 }),
+      makeRun({ iteration: 5, reviseCycles: 6 }),
+      makeRun({ iteration: 3, reviseCycles: 4 }),
+    ];
+    expect(reviseCyclesOutliers(runs)).toEqual([
+      { iteration: 3, value: 4 },
+      { iteration: 5, value: 6 },
+    ]);
+  });
+
+  it('外れ値が無ければ空配列を返す', () => {
+    const runs = [makeRun({ iteration: 1, reviseCycles: 1 }), makeRun({ iteration: 2, reviseCycles: 3 })];
+    expect(reviseCyclesOutliers(runs)).toEqual([]);
   });
 });
