@@ -1,0 +1,45 @@
+{
+  "id": "20260722T180653Z-23",
+  "iteration": 12,
+  "issue": {
+    "number": 23,
+    "title": "ゲート棄却理由を iteration ごとの分布で可視化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/23-iteration",
+  "startedAt": "2026-07-22T18:06:53Z",
+  "finishedAt": "2026-07-22T18:46:48Z",
+  "durationSec": 2395,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "e2e(Playwright) が失敗している",
+    "adversary が approve していない",
+    "変更行数 636 が上限 400 を超えている"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "verify/e2e が未通過のためレビュー未実施"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 636,
+  "cost": {
+    "builderUsd": 11.682287,
+    "adversaryUsd": 0.212245,
+    "ideationUsd": 0.0,
+    "totalUsd": 11.894532
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
