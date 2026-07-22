@@ -11,7 +11,7 @@ def test_defaults_match_spec():
     assert cfg.per_iter_cost_budget_usd == 0.5
     assert cfg.ideation_max_issues == 3
     assert cfg.builder_model == "claude-sonnet-5"
-    assert cfg.adversary_model == "claude-haiku-4-5"
+    assert cfg.adversary_model == "claude-sonnet-5"
     assert cfg.ideation_model == "claude-haiku-4-5"
     assert cfg.orchestrator == "native"
     assert cfg.dry_run is False

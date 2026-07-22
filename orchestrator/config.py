@@ -26,7 +26,7 @@ class Config:
     per_iter_cost_budget_usd: float = 0.5
     ideation_max_issues: int = 3
     builder_model: str = "claude-sonnet-5"
-    adversary_model: str = "claude-haiku-4-5"
+    adversary_model: str = "claude-sonnet-5"
     ideation_model: str = "claude-haiku-4-5"
     #: "native" | "h5i"
     orchestrator: str = "native"
@@ -49,7 +49,7 @@ class Config:
             per_iter_cost_budget_usd=float(env.get("PER_ITER_COST_BUDGET_USD", 0.5)),
             ideation_max_issues=int(env.get("IDEATION_MAX_ISSUES", 3)),
             builder_model=env.get("BUILDER_MODEL", "claude-sonnet-5"),
-            adversary_model=env.get("ADVERSARY_MODEL", "claude-haiku-4-5"),
+            adversary_model=env.get("ADVERSARY_MODEL", "claude-sonnet-5"),
             ideation_model=env.get("IDEATION_MODEL", "claude-haiku-4-5"),
             orchestrator=env.get("ORCHESTRATOR", "native"),
             dry_run=_flag(env, "LOOP_DRY_RUN"),

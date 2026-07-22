@@ -135,4 +135,4 @@ def test_uses_configured_models_for_each_role():
     )
     builder_cmd, adversary_cmd = runner.calls[0][0], runner.calls[3][0]
     assert builder_cmd[builder_cmd.index("--model") + 1] == "claude-sonnet-5"
-    assert adversary_cmd[adversary_cmd.index("--model") + 1] == "claude-haiku-4-5"
+    assert adversary_cmd[adversary_cmd.index("--model") + 1] == "claude-sonnet-5"
