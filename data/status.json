@@ -1,7 +1,7 @@
 {
   "state": "HALTED",
-  "reason": "本日のコスト $8.03 が予算 $5.00 を超過した",
+  "reason": "本日のコスト $20.48 が予算 $5.00 を超過した",
   "actor": "breaker:daily-budget",
-  "updatedAt": "2026-07-22T16:19:39Z",
+  "updatedAt": "2026-07-22T17:38:48Z",
   "resumeHint": "原因を確認後 gh variable set LOOP_ENABLED --body true"
 }
