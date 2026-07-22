@@ -19,6 +19,7 @@ const summary: Summary = {
   mergeRate: 0.75,
   avgCycleTimeSec: 420,
   avgReviseCycles: 1.5,
+  medianReviseCycles: 1,
   totalCostUsd: 1.234,
   latestCoveragePct: 87.5,
   latestCoverageIteration: 12,

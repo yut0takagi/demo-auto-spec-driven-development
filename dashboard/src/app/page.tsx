@@ -4,6 +4,7 @@ import { StatusBadge } from '@/components/StatusBadge';
 import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
 import { TrendChart } from '@/components/TrendChart';
+import { ReviseCyclesChart } from '@/components/ReviseCyclesChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
 
@@ -35,6 +36,7 @@ export default function Home() {
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
         </div>
+        <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>
