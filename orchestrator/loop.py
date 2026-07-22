@@ -228,6 +228,10 @@ def run_iteration(
         )
 
     gh.merge_pr(pr)
+    # issue を明示的にクローズする。PR 本文の "Closes #N" は default ブランチ(main)への
+    # マージでしか発火せず、このループは develop へマージするため効かない。閉じないと
+    # loop:ready が残り、マージ済み issue が次反復で再び拾われて無駄に再実装される。
+    gh.close_issue(issue.number, f"✅ PR #{pr} で develop にマージ済み。")
 
     proposals, ideation_cost = ideation_runner(
         context=f"iteration {iteration} で「{issue.title}」を完了した", cfg=cfg, cwd=repo_root
