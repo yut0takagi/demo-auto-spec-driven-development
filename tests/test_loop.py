@@ -149,6 +149,19 @@ class TestHappyPath:
         assert "merge:123" in gh.actions
         record = json.loads((tmp_path / "runs" / "0001.json").read_text())
         assert record["verdict"] == "merged"
+
+    def test_merge_closes_the_source_issue(self, tmp_path):
+        # "Closes #N" は default ブランチ以外のマージでは効かないため、明示的にクローズする。
+        # 閉じないとマージ済み issue が loop:ready のまま残り再拾いされる。
+        gh = FakeGh()
+        run(tmp_path, gh=gh)
+        assert "close:42" in gh.actions
+
+    def test_gate_passing_records_details(self, tmp_path):
+        gh = FakeGh()
+        run(tmp_path, gh=gh)
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["verdict"] == "merged"
         assert record["iteration"] == 1
         assert record["issue"]["number"] == 42
         assert record["prNumber"] == 123
