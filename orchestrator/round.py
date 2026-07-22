@@ -26,7 +26,7 @@ BUILDER_PROMPT_TEMPLATE = """\
 - 変更は `dashboard/` と `data/` の中だけに限る。`.github/`, `orchestrator/`, `tests/` は絶対に変更しない
 - 実装だけでなく、その振る舞いを**実質的に検証する**テストを書く（通すためだけのテストは禁止）
 - `cd dashboard && npm run verify` と `npm run test:e2e` が緑になること
-- 変更は最小限に保つ（400 行以内）
+- 変更は最小限に保つ（3000 行以内）
 """
 
 REVISE_PROMPT_TEMPLATE = """\
