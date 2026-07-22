@@ -1,5 +1,5 @@
 import { loadRuns, loadStatus } from '@/lib/loadData';
-import { summarize, coverageTrend, costTrend } from '@/lib/aggregate';
+import { summarize, coverageTrend, costTrend, approvalRateTrend, mergeRateTrend } from '@/lib/aggregate';
 import { StatusBadge } from '@/components/StatusBadge';
 import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
@@ -35,6 +35,10 @@ export default function Home() {
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
+        </div>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <TrendChart title="承認率推移" points={approvalRateTrend(runs)} unit="%" />
+          <TrendChart title="マージ率推移" points={mergeRateTrend(runs)} unit="%" />
         </div>
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />

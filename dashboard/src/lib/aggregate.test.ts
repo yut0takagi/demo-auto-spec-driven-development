@@ -6,6 +6,8 @@ import {
   reviseCyclesTrend,
   reviseCyclesOutliers,
   reviseCyclesMedian,
+  approvalRateTrend,
+  mergeRateTrend,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
 } from './aggregate';
 import type { RunRecord } from './types';
@@ -388,5 +390,120 @@ describe('reviseCyclesTrend / reviseCyclesOutliers', () => {
   it('外れ値が無ければ空配列を返す', () => {
     const runs = [makeRun({ iteration: 1, reviseCycles: 1 }), makeRun({ iteration: 2, reviseCycles: 3 })];
     expect(reviseCyclesOutliers(runs)).toEqual([]);
+  });
+});
+
+describe('approvalRateTrend', () => {
+  it('空配列では空配列を返す', () => {
+    expect(approvalRateTrend([])).toEqual([]);
+  });
+
+  it('iteration 昇順に、その時点までの累積承認率(%)を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, adversary: { approved: true, summary: '' } }),
+    ];
+    // 1件目: 1/1=100%, 2件目: 1/2=50%, 3件目: 2/3≈66.7%
+    expect(approvalRateTrend(runs)).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 2, value: 50 },
+      { iteration: 3, value: (2 / 3) * 100 },
+    ]);
+  });
+
+  it('failed run は verify に到達していないため点を持たない（reviseCyclesTrend と同様）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+      }),
+      makeRun({ iteration: 3, verdict: 'merged', adversary: { approved: false, summary: '' } }),
+    ];
+    // failed(iteration 2) を除外した [approved, not-approved] の累積: 100%, 50%
+    expect(approvalRateTrend(runs)).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 3, value: 50 },
+    ]);
+  });
+
+  it('全て非承認なら 0% が続く（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, adversary: { approved: false, summary: '' } }),
+    ];
+    expect(approvalRateTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 0 },
+    ]);
+  });
+
+  it('最終点は summarize(runs).approvalRate * 100 と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+      }),
+      makeRun({ iteration: 3, verdict: 'needs-human', adversary: { approved: false, summary: '' } }),
+    ];
+    const trend = approvalRateTrend(runs);
+    const summary = summarize(runs);
+    expect(trend[trend.length - 1].value).toBeCloseTo(summary.approvalRate * 100);
+  });
+});
+
+describe('mergeRateTrend', () => {
+  it('空配列では空配列を返す', () => {
+    expect(mergeRateTrend([])).toEqual([]);
+  });
+
+  it('iteration 昇順に、その時点までの累積マージ率(%)を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    // 1件目: 1/1=100%, 2件目: 1/2=50%, 3件目: 2/3≈66.7%
+    expect(mergeRateTrend(runs)).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 2, value: 50 },
+      { iteration: 3, value: (2 / 3) * 100 },
+    ]);
+  });
+
+  it('costTrend と同様、failed run も verdict は必ず記録されているため点として含める', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+    ];
+    // failed は非マージとして分母にのみ算入される: 1/2=50%
+    expect(mergeRateTrend(runs)).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 2, value: 50 },
+    ]);
+  });
+
+  it('一件もマージされていなければ 0% が続く（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'paused' }),
+    ];
+    expect(mergeRateTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 0 },
+    ]);
+  });
+
+  it('最終点は summarize(runs).mergeRate * 100 と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ];
+    const trend = mergeRateTrend(runs);
+    const summary = summarize(runs);
+    expect(trend[trend.length - 1].value).toBeCloseTo(summary.mergeRate * 100);
   });
 });
