@@ -122,3 +122,27 @@ test('カバレッジは failed 反復を拾わず、verify 到達済みの最�
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
 });
+
+test('承認率・マージ率の推移グラフが表示され、最新値が MetricCards の値と一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = summarize(runs);
+
+  // グラフ本体（svg）が両方描画されていること
+  const approvalChart = page.getByRole('img', { name: '承認率推移' });
+  const mergeChart = page.getByRole('img', { name: 'マージ率推移' });
+  await expect(approvalChart).toBeVisible();
+  await expect(mergeChart).toBeVisible();
+
+  // 各グラフのヘッダに表示される最新値は、累積推移の最終点＝summarize() の
+  // approvalRate/mergeRate と一致するはず（グラフとカードで数値が食い違わないことの検証）。
+  const approvalCard = page.locator('div.rounded-xl').filter({ hasText: '承認率推移' });
+  const mergeCard = page.locator('div.rounded-xl').filter({ hasText: 'マージ率推移' });
+  await expect(approvalCard).toContainText(`${(summary.approvalRate * 100).toFixed(1)}%`);
+  await expect(mergeCard).toContainText(`${(summary.mergeRate * 100).toFixed(1)}%`);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+});

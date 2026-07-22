@@ -207,3 +207,33 @@ export function reviseCyclesOutliers(runs: RunRecord[]): TrendPoint[] {
 export function reviseCyclesMedian(runs: RunRecord[]): number {
   return median(reviseCyclesTrend(runs).map((p) => p.value));
 }
+
+/**
+ * 承認率の累積推移（0..100）。iteration 昇順に見て、その時点までの
+ * 「verify に到達した run のうち adversary が approve した割合」を各点に持つ。
+ * Summary.approvalRate と同じ母集団定義（reachedVerify）を使うので、最終点は
+ * summarize(runs).approvalRate * 100 と一致する。failed run は verify に到達して
+ * いないため coverageTrend / reviseCyclesTrend と同様に点を持たない。
+ */
+export function approvalRateTrend(runs: RunRecord[]): TrendPoint[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  let approvedCount = 0;
+  return completed.map((r, i) => {
+    if (r.adversary.approved) approvedCount++;
+    return { iteration: r.iteration, value: (approvedCount / (i + 1)) * 100 };
+  });
+}
+
+/**
+ * マージ率の累積推移（0..100）。Summary.mergeRate と同じ母集団定義（全 run）を
+ * 使うので、最終点は summarize(runs).mergeRate * 100 と一致する。costTrend と同様、
+ * verdict はどの run にも必ず記録されているため failed run も点として含める。
+ */
+export function mergeRateTrend(runs: RunRecord[]): TrendPoint[] {
+  const sorted = byIterationAsc(runs);
+  let mergedCount = 0;
+  return sorted.map((r, i) => {
+    if (r.verdict === 'merged') mergedCount++;
+    return { iteration: r.iteration, value: (mergedCount / (i + 1)) * 100 };
+  });
+}
