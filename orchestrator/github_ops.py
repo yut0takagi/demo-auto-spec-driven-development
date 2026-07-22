@@ -106,6 +106,9 @@ class GitHubOps:
     def add_label(self, number: int, label: str) -> None:
         self._run(["gh", "issue", "edit", str(number), "--add-label", label])
 
+    def remove_label(self, number: int, label: str) -> None:
+        self._run(["gh", "issue", "edit", str(number), "--remove-label", label])
+
     def create_issue(self, *, title: str, body: str, labels: list[str]) -> int:
         cmd = ["gh", "issue", "create", "--title", title, "--body", body]
         for label in labels:

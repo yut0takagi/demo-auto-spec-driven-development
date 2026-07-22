@@ -37,6 +37,7 @@ class GhLike(Protocol):
     def comment_pr(self, number: int, body: str) -> None: ...
     def merge_pr(self, number: int) -> None: ...
     def add_label(self, number: int, label: str) -> None: ...
+    def remove_label(self, number: int, label: str) -> None: ...
     def create_issue(self, *, title: str, body: str, labels: list[str]) -> int: ...
 
 
@@ -58,6 +59,18 @@ def _seconds_between(start_iso: str, end_iso: str) -> int:
     start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
     end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
     return max(0, round((end - start).total_seconds()))
+
+
+def _retire_from_queue(gh: GhLike, issue_number: int, terminal_label: str, cfg: Config) -> None:
+    """Issue を自動処理キューから外す: loop:ready を剥がし terminal ラベルを付ける。
+
+    これをしないと ready のまま残り、次反復で `ready[0]` が同じ issue を拾い直す。
+    その issue が既に PR 用ブランチを push 済みだと、再作成したブランチの push が
+    non-fast-forward で失敗し、builder に課金した末にクラッシュしてループが前進しなくなる
+    （#14 / #15 で実際に発生）。terminal ラベル = needs-human / paused。
+    """
+    gh.remove_label(issue_number, cfg.ready_label)
+    gh.add_label(issue_number, terminal_label)
 
 
 def run_iteration(
@@ -107,7 +120,7 @@ def run_iteration(
     # gate は commit 済み diff を見るため changed_lines が常に0・保護パス検出も空になって
     # 判定が形骸化し、空の PR を作ろうとして失敗する（dry-run で判明したバグ）。
     if not gh.commit_all(f"loop: {issue.title} (#{issue.number})"):
-        gh.add_label(issue.number, cfg.needs_human_label)
+        _retire_from_queue(gh, issue.number, cfg.needs_human_label, cfg)
         reasons = ("builder が変更を生成しなかった",)
         _record(
             data_dir, iteration, issue, branch, outcome, 0,
@@ -144,7 +157,7 @@ def run_iteration(
     # レビュー指摘: 以前はここで記録を書かずに return していたため、実際に
     # builder+adversary の 1 ラウンド分の課金が発生したのに痕跡が残らなかった。
     if not kill_switch_reader():
-        gh.add_label(issue.number, cfg.paused_label)
+        _retire_from_queue(gh, issue.number, cfg.paused_label, cfg)
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="paused", started_at=started_at, finished_at=clock(),
@@ -157,7 +170,7 @@ def run_iteration(
         )
 
     if not gate.passed:
-        gh.add_label(issue.number, cfg.needs_human_label)
+        _retire_from_queue(gh, issue.number, cfg.needs_human_label, cfg)
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="needs-human", started_at=started_at, finished_at=clock(),

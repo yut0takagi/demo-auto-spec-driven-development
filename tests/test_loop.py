@@ -35,6 +35,7 @@ class FakeGh:
     def comment_pr(self, number, body): self.actions.append(f"comment:{number}")
     def merge_pr(self, number): self.actions.append(f"merge:{number}")
     def add_label(self, number, label): self.actions.append(f"label:{label}")
+    def remove_label(self, number, label): self.actions.append(f"unlabel:{label}")
     def create_issue(self, *, title, body, labels):
         self.created_issues.append(title)
         return 900 + len(self.created_issues)
@@ -121,6 +122,13 @@ class TestCheckpoint3:
         assert not any(a.startswith("merge:") for a in gh.actions)
         assert "label:loop:paused" in gh.actions
 
+    def test_paused_retires_issue_from_ready_queue(self, tmp_path):
+        # paused も PR を開いたまま終わるので、ready を残すと次反復で拾い直して
+        # push 衝突する。needs-human と同じく自動処理キューから外すこと。
+        gh = FakeGh()
+        run(tmp_path, gh=gh, disable_on_call=3)
+        assert "unlabel:loop:ready" in gh.actions
+
     def test_disabled_before_merge_writes_a_paused_record(self, tmp_path):
         # レビュー指摘: 以前はこのチェックポイントで記録を書かずに終了しており、
         # 実際に課金されたラウンドの痕跡が消えていた。
@@ -168,6 +176,24 @@ class TestGateFailures:
         assert result.status == "needs-human"
         assert not any(a.startswith("merge:") for a in gh.actions)
         assert "label:loop:needs-human" in gh.actions
+
+    def test_needs_human_retires_issue_from_ready_queue(self, tmp_path):
+        # 毒饅頭バグの回帰（#14 / #15）: needs-human 判定で loop:ready を外さないと、
+        # 次反復で ready[0] が同じ issue を拾い直し、push 済みブランチと衝突して
+        # 失敗し続ける。ready を剥がして自動処理キューから外すこと。
+        gh = FakeGh()
+        result = run(
+            tmp_path, gh=gh,
+            round_outcome=approved_round(
+                adversary=AdversaryVerdict(approved=False, summary="薄い")
+            ),
+        )
+        assert result.status == "needs-human"
+        assert "unlabel:loop:ready" in gh.actions
+        # ready を外してから terminal ラベルを付ける順序であること
+        assert gh.actions.index("unlabel:loop:ready") < gh.actions.index(
+            "label:loop:needs-human"
+        )
 
     def test_protected_path_change_blocks_merge(self, tmp_path):
         gh = FakeGh(changed_files=["orchestrator/loop.py"])
@@ -244,6 +270,8 @@ class TestNoChanges:
         assert record["verdict"] == "needs-human"
         assert record["prNumber"] is None
         assert "変更を生成しなかった" in record["gateReasons"][0]
+        # builder が何も生成しなくても ready を外す（再拾いで無駄な課金を繰り返さない）
+        assert "unlabel:loop:ready" in gh.actions
 
     def test_committed_changes_proceed_to_pr(self, tmp_path):
         gh = FakeGh(committed=True)
