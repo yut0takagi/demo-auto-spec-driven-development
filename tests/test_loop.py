@@ -223,7 +223,7 @@ class TestGateFailures:
         assert "open_pr" not in gh.actions
 
     def test_oversized_diff_is_abandoned(self, tmp_path):
-        gh = FakeGh(changed_lines=999)
+        gh = FakeGh(changed_lines=9999)
         result = run(tmp_path, gh=gh)
         assert result.status == "abandoned"
 
@@ -241,7 +241,7 @@ class TestGateFailures:
         assert record["gateReasons"]  # 不通過理由が記録されている
 
     def test_blocked_iteration_does_not_create_follow_up_issues(self, tmp_path):
-        gh = FakeGh(changed_lines=999)
+        gh = FakeGh(changed_lines=9999)
         run(tmp_path, gh=gh)
         assert gh.created_issues == []
 
