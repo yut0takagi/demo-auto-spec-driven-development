@@ -24,6 +24,7 @@ import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
+import { IdeationCostQualityPanel } from '@/components/IdeationCostQualityPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
@@ -85,6 +86,7 @@ export default function Home() {
           <CostEfficiencyPanel runs={runs} />
         </div>
         <IdeationFailurePanel runs={runs} />
+        <IdeationCostQualityPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <GateReasonsPanel runs={runs} />
           <GateFailureTypesPanel runs={runs} />

@@ -50,6 +50,7 @@ import {
   adversaryApprovalCommentStats,
   recentAdversaryComments,
   ADVERSARY_COMMENT_DIGEST_LIMIT,
+  ideationCostQualityCorrelation,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -2806,5 +2807,171 @@ describe('recentAdversaryComments', () => {
 
   it('空配列で空配列を返す', () => {
     expect(recentAdversaryComments([])).toEqual([]);
+  });
+});
+
+describe('ideationCostQualityCorrelation', () => {
+  it('空配列なら batches 空・相関はnull・サンプル数0（境界値）', () => {
+    const result = ideationCostQualityCorrelation([]);
+    expect(result).toEqual({
+      batches: [],
+      costVsApprovalRateCorrelation: null,
+      approvalRateSampleSize: 0,
+      costVsMergeRateCorrelation: null,
+      mergeRateSampleSize: 0,
+    });
+  });
+
+  it('ideationUsd が0（ideation未実行）の反復は batch に含めない（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [2, 3], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 } }),
+    ];
+    expect(ideationCostQualityCorrelation(runs).batches).toEqual([]);
+  });
+
+  it('ideationUsd>0でも nextIssues が空（提案0件）の反復は batch に含めない（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 } }),
+    ];
+    expect(ideationCostQualityCorrelation(runs).batches).toEqual([]);
+  });
+
+  it('提案issueが後続反復でまだ着手されていない場合、attemptedCount=0・承認率/マージ率ともnull', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2, 3],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 },
+      }),
+    ];
+    const result = ideationCostQualityCorrelation(runs);
+    expect(result.batches).toEqual([
+      {
+        iteration: 1,
+        proposedCount: 2,
+        costPerIssueUsd: 0.05,
+        attemptedCount: 0,
+        childApprovalRate: null,
+        childMergeRate: null,
+      },
+    ]);
+    expect(result.costVsApprovalRateCorrelation).toBeNull();
+    expect(result.costVsMergeRateCorrelation).toBeNull();
+    expect(result.approvalRateSampleSize).toBe(0);
+    expect(result.mergeRateSampleSize).toBe(0);
+  });
+
+  it('提案元自身の issue番号が nextIssues に含まれていても、自分自身を着手済みにカウントしない（自己参照の境界値。data/runs/0014.json のパターン）', () => {
+    const runs = [
+      makeRun({
+        iteration: 5,
+        issue: { number: 10, title: 'self', labels: [] },
+        nextIssues: [10, 11],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 },
+      }),
+      makeRun({
+        iteration: 6,
+        issue: { number: 11, title: 'child', labels: [] },
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = ideationCostQualityCorrelation(runs);
+    expect(result.batches).toEqual([
+      {
+        iteration: 5,
+        proposedCount: 2,
+        costPerIssueUsd: 0.05,
+        attemptedCount: 1,
+        childApprovalRate: 1,
+        childMergeRate: 1,
+      },
+    ]);
+  });
+
+  it('failed run（verify未到達）は childApprovalRate の母集団から除くが、childMergeRate の母集団には含める（verdictは常に記録されるため）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 },
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 2, title: 'c', labels: [] },
+        verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+        adversary: { approved: false, summary: '' },
+      }),
+    ];
+    const result = ideationCostQualityCorrelation(runs);
+    expect(result.batches[0].attemptedCount).toBe(1);
+    // verify未到達なので承認率の母集団からは除外され、着手はしたが承認結果が無い(null)
+    expect(result.batches[0].childApprovalRate).toBeNull();
+    // verdict自体は常に記録されるため、failedもマージ率の母集団(0/1=0)には含まれる
+    expect(result.batches[0].childMergeRate).toBe(0);
+  });
+
+  it('コスト単価が高いbatchほど品質(承認率・マージ率)が低い明確なケースで相関係数 r=-1.00 を算出する（部分一致に頼らない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2, 3],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 },
+      }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({
+        iteration: 4,
+        issue: { number: 4, title: 'b', labels: [] },
+        nextIssues: [5, 6],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.2, totalUsd: 0.31 },
+      }),
+      makeRun({
+        iteration: 5,
+        issue: { number: 5, title: 'c3', labels: [] },
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+      }),
+      makeRun({
+        iteration: 6,
+        issue: { number: 6, title: 'c4', labels: [] },
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+      }),
+    ];
+    const result = ideationCostQualityCorrelation(runs);
+    expect(result.batches).toHaveLength(2);
+    expect(result.batches[0].costPerIssueUsd).toBeCloseTo(0.005, 10);
+    expect(result.batches[0].childApprovalRate).toBe(1);
+    expect(result.batches[0].childMergeRate).toBe(1);
+    expect(result.batches[1].costPerIssueUsd).toBeCloseTo(0.1, 10);
+    expect(result.batches[1].childApprovalRate).toBe(0);
+    expect(result.batches[1].childMergeRate).toBe(0);
+    expect(result.approvalRateSampleSize).toBe(2);
+    expect(result.mergeRateSampleSize).toBe(2);
+    expect(result.costVsApprovalRateCorrelation).toBeCloseTo(-1, 10);
+    expect(result.costVsMergeRateCorrelation).toBeCloseTo(-1, 10);
+  });
+
+  it('コスト単価が全batchで同値（分散0）だと相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [3],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 },
+      }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [4], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 } }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c1', labels: [] }, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 4, issue: { number: 4, title: 'c2', labels: [] }, verdict: 'abandoned', adversary: { approved: false, summary: '' } }),
+    ];
+    const result = ideationCostQualityCorrelation(runs);
+    expect(result.batches.map((b) => b.costPerIssueUsd)).toEqual([0.1, 0.1]);
+    expect(result.costVsApprovalRateCorrelation).toBeNull();
+    expect(result.costVsMergeRateCorrelation).toBeNull();
   });
 });

@@ -17,6 +17,7 @@ import {
   modelEffectiveness,
   ideationFailureSummary,
   ideationFailureRateTrend,
+  ideationCostQualityCorrelation,
   e2eFailureReviseCorrelation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
@@ -187,8 +188,11 @@ test('承認率・マージ率の推移グラフが表示され、最新値が M
 
   // 各グラフのヘッダに表示される最新値は、累積推移の最終点＝summarize() の
   // approvalRate/mergeRate と一致するはず（グラフとカードで数値が食い違わないことの検証）。
-  const approvalCard = page.locator('div.rounded-xl').filter({ hasText: '承認率推移' });
-  const mergeCard = page.locator('div.rounded-xl').filter({ hasText: 'マージ率推移' });
+  // カード全体を hasText で探すと、他パネルの自由記述テキスト（adversary の要約等）に
+  // 偶然「承認率推移」等の部分文字列が含まれた場合に strict mode 違反になるため、
+  // グラフ本体（svg、name で一意）の直接の親要素をカードとして特定する。
+  const approvalCard = approvalChart.locator('xpath=..');
+  const mergeCard = mergeChart.locator('xpath=..');
   await expect(approvalCard).toContainText(`${(summary.approvalRate * 100).toFixed(1)}%`);
   await expect(mergeCard).toContainText(`${(summary.mergeRate * 100).toFixed(1)}%`);
 
@@ -774,6 +778,51 @@ test('Ideation失敗率パネルが実データから導出した実行件数・
   for (const point of trend) {
     await expect(page.getByTestId(`ideation-failure-trend-bar-${point.iteration}`)).toBeVisible();
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideationコスト効率と生成品質の関連性パネルが実データから導出したbatch内訳・相関係数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = ideationCostQualityCorrelation(runs);
+  expect(
+    stats.batches.length,
+    'data/runs に ideation が提案を行った反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.mergeRateSampleSize,
+    'data/runs に提案issueが実際に着手された反復が1件も無く、相関算出の経路を検証できない。',
+  ).toBeGreaterThan(1);
+
+  const panel = page.getByTestId('ideation-cost-quality-panel');
+  await expect(panel).toBeVisible();
+
+  const approvalEl = page.getByTestId('ideation-cost-quality-correlation-approval');
+  if (stats.costVsApprovalRateCorrelation === null) {
+    await expect(approvalEl).toHaveText('算出不可');
+  } else {
+    await expect(approvalEl).toHaveText(`r = ${stats.costVsApprovalRateCorrelation.toFixed(2)}`);
+  }
+
+  const mergeEl = page.getByTestId('ideation-cost-quality-correlation-merge');
+  if (stats.costVsMergeRateCorrelation === null) {
+    await expect(mergeEl).toHaveText('算出不可');
+  } else {
+    await expect(mergeEl).toHaveText(`r = ${stats.costVsMergeRateCorrelation.toFixed(2)}`);
+  }
+
+  // batch行は ideationCostQualityCorrelation()（別の計算経路）と同数・同iterationで存在するはず
+  const rows = page.locator('[data-testid^="ideation-cost-quality-row-"]');
+  await expect(rows).toHaveCount(stats.batches.length);
+  const lastBatch = stats.batches[stats.batches.length - 1];
+  await expect(page.getByTestId(`ideation-cost-quality-row-${lastBatch.iteration}`)).toContainText(
+    `$${lastBatch.costPerIssueUsd.toFixed(3)}`,
+  );
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

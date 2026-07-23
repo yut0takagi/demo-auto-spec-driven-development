@@ -1560,3 +1560,105 @@ export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
   }
   return points;
 }
+
+export interface IdeationBatchQuality {
+  /** ideation を実行し issue を提案した反復番号 */
+  iteration: number;
+  /** この反復が提案した issue 数（nextIssues.length） */
+  proposedCount: number;
+  /** 提案 issue 1件あたりのideationコスト(USD) = cost.ideationUsd / proposedCount */
+  costPerIssueUsd: number;
+  /** 提案 issue のうち、実際に別反復として着手された（後続反復の issue.number に現れた）件数 */
+  attemptedCount: number;
+  /**
+   * 着手された提案issueのうち、verify到達済みでadversaryが承認した割合(0..1)。
+   * 1件も着手されていなければ null（まだ結果が出ていないだけ、と「全て却下された」を区別するため）。
+   */
+  childApprovalRate: number | null;
+  /** 着手された提案issueのうち、developにマージされた割合(0..1)。着手0件ならnull */
+  childMergeRate: number | null;
+}
+
+export interface IdeationCostQualityCorrelation {
+  /** ideation を実行し、かつ1件以上提案した反復ごとの内訳。iteration昇順 */
+  batches: IdeationBatchQuality[];
+  /** 提案issue1件あたりコストと、着手後の承認率のPearson相関係数(-1..1)。算出可能なbatchが2件未満ならnull */
+  costVsApprovalRateCorrelation: number | null;
+  /** 相関算出に使ったbatch数（childApprovalRateがnullでないbatchの数） */
+  approvalRateSampleSize: number;
+  /** 提案issue1件あたりコストと、着手後のマージ率のPearson相関係数(-1..1)。算出可能なbatchが2件未満ならnull */
+  costVsMergeRateCorrelation: number | null;
+  /** 相関算出に使ったbatch数（childMergeRateがnullでないbatchの数） */
+  mergeRateSampleSize: number;
+}
+
+/**
+ * Ideation（バックログ補充）のコスト効率と、実際に提案したissueが後で着手されたときの
+ * 生成品質（承認率・マージ率）の関連性分析。costEfficiency が「承認PR 1件あたりの実コスト」
+ * という単一指標なのに対し、こちらは ideation が提案した issue の単価（安く大量提案 vs
+ * 高くても厳選提案）と、その提案が実際に良い結果（承認・マージ）に繋がったかを反復ごとに
+ * 対応付けて相関を見る。
+ *
+ * 「着手」は、提案した issue 番号が後続反復の issue.number として現れたことで判定する
+ * （orchestrator は nextIssues をそのまま次の issue として起票するため、issue番号が
+ * 実際の作業単位を一意に特定できる）。iteration > 提案元の iteration に限定するのは、
+ * data/runs/0014.json のように nextIssues が提案元自身の issue番号を含む（同issueの
+ * 再提案）ケースがあり、それを「自分自身が自分の提案に着手した」と誤カウントしないため。
+ *
+ * childMergeRate は e2eFailureReviseCorrelation 等と異なり reachedVerify で絞り込まない
+ * （マージ判定は verdict なので failed run でも意味を持つ値が付く。costTrend と同じ理由）。
+ * childApprovalRate は adversary.approved が failed run では測定されなかった sentinel の
+ * ため、reachedVerify な child run のみを対象にする（approvalRateTrend と同じ理由）。
+ */
+export function ideationCostQualityCorrelation(runs: RunRecord[]): IdeationCostQualityCorrelation {
+  const sorted = byIterationAsc(runs);
+
+  const byIssueNumber = new Map<number, RunRecord[]>();
+  for (const r of sorted) {
+    const list = byIssueNumber.get(r.issue.number);
+    if (list) {
+      list.push(r);
+    } else {
+      byIssueNumber.set(r.issue.number, [r]);
+    }
+  }
+
+  const proposingRuns = sorted.filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0);
+
+  const batches: IdeationBatchQuality[] = proposingRuns.map((r) => {
+    const childRuns = r.nextIssues
+      .flatMap((issueNumber) => byIssueNumber.get(issueNumber) ?? [])
+      .filter((child) => child.iteration > r.iteration);
+    const childCompleted = childRuns.filter(reachedVerify);
+
+    return {
+      iteration: r.iteration,
+      proposedCount: r.nextIssues.length,
+      costPerIssueUsd: r.cost.ideationUsd / r.nextIssues.length,
+      attemptedCount: childRuns.length,
+      childApprovalRate:
+        childCompleted.length === 0
+          ? null
+          : childCompleted.filter((c) => c.adversary.approved).length / childCompleted.length,
+      childMergeRate:
+        childRuns.length === 0 ? null : childRuns.filter((c) => c.verdict === 'merged').length / childRuns.length,
+    };
+  });
+
+  const approvalSamples = batches.filter((b) => b.childApprovalRate !== null);
+  const mergeSamples = batches.filter((b) => b.childMergeRate !== null);
+
+  return {
+    batches,
+    costVsApprovalRateCorrelation: pearsonCorrelation(
+      approvalSamples.map((b) => b.costPerIssueUsd),
+      approvalSamples.map((b) => b.childApprovalRate as number),
+    ),
+    approvalRateSampleSize: approvalSamples.length,
+    costVsMergeRateCorrelation: pearsonCorrelation(
+      mergeSamples.map((b) => b.costPerIssueUsd),
+      mergeSamples.map((b) => b.childMergeRate as number),
+    ),
+    mergeRateSampleSize: mergeSamples.length,
+  };
+}
