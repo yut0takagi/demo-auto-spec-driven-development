@@ -1,0 +1,41 @@
+{
+  "id": "20260723T120710Z-49",
+  "iteration": 23,
+  "issue": {
+    "number": 49,
+    "title": "モデルコストの内訳ダッシュボード",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/49-task",
+  "startedAt": "2026-07-23T12:07:10Z",
+  "finishedAt": "2026-07-23T12:28:17Z",
+  "durationSec": 1267,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 55,
+  "adversary": {
+    "approved": true,
+    "summary": "モデルコストの内訳ダッシュボード (issue #49) を完全実装。ロール別・モデル別内訳を正確に計算し、UI に統合。テストは空・境界値・異常系を網羅的に検証し、既存機能も保護。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 429,
+  "cost": {
+    "builderUsd": 6.956942,
+    "adversaryUsd": 0.056852,
+    "ideationUsd": 0.0,
+    "totalUsd": 7.013794
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
