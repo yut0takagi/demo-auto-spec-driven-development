@@ -1,5 +1,12 @@
 import { loadRuns, loadStatus } from '@/lib/loadData';
-import { summarize, coverageTrend, costTrend, approvalRateTrend, mergeRateTrend } from '@/lib/aggregate';
+import {
+  summarize,
+  coverageTrend,
+  costTrend,
+  approvalRateTrend,
+  mergeRateTrend,
+  e2eFailureRateTrend,
+} from '@/lib/aggregate';
 import { StatusBadge } from '@/components/StatusBadge';
 import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
@@ -40,6 +47,7 @@ export default function Home() {
           <TrendChart title="承認率推移" points={approvalRateTrend(runs)} unit="%" />
           <TrendChart title="マージ率推移" points={mergeRateTrend(runs)} unit="%" />
         </div>
+        <TrendChart title="E2E失敗率推移" points={e2eFailureRateTrend(runs)} unit="%" />
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />

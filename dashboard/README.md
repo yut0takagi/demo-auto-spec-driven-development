@@ -28,6 +28,7 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 - **累計コスト**: 各反復にかかった Builder/Adversary/Ideation 合計費用(USD)の推移。
 - **承認率推移**: Adversary レビューが承認 (approved) した割合(%)の推移。
 - **マージ率推移**: 反復した PR が実際にマージされた割合(%)の推移。
+- **E2E失敗率推移**: verify に到達した反復のうち `npm run test:e2e` が失敗した割合(%)の累積推移。failed（クラッシュ）反復は verify に到達しておらず未測定のため含めない。
 - **revise 回数の分布**: 各反復の revise 回数を棒グラフで示し、中央値（実線）と外れ値の閾値（破線）を重ねたもの。閾値を超えるバーは赤色で強調される。
 - **直近の反復**: 直近 20 件の反復を新しい順に並べ、判定 (verdict)・revise 回数・コストを一覧表示したもの。
 - **ループが生成した改善バックログ**: 各反復の完了時にループが自動生成した次の issue 候補の一覧。

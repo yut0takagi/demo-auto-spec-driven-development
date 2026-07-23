@@ -33,11 +33,11 @@ describe('README のダッシュボード解説と実際の画面表示の整合
   const readme = readSource(README_PATH);
   const pageSource = readSource(PAGE_PATH);
 
-  it('page.tsx には TrendChart が 4 つ（カバレッジ/コスト/承認率/マージ率）ある前提が崩れていない', () => {
+  it('page.tsx には TrendChart が 5 つ（カバレッジ/コスト/承認率/マージ率/E2E失敗率）ある前提が崩れていない', () => {
     // このテスト自体が前提を検証しつつ、以降のアサーションが空リストで
     // 無意味に成功してしまう（=何もチェックしない）事態を防ぐ。
     const titles = extractTrendChartTitles(pageSource);
-    expect(titles).toEqual(['カバレッジ推移', '累計コスト', '承認率推移', 'マージ率推移']);
+    expect(titles).toEqual(['カバレッジ推移', '累計コスト', '承認率推移', 'マージ率推移', 'E2E失敗率推移']);
   });
 
   it.each([
