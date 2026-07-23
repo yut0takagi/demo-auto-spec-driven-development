@@ -1,0 +1,45 @@
+{
+  "id": "20260723T142059Z-63",
+  "iteration": 32,
+  "issue": {
+    "number": 63,
+    "title": "Model 別の revise cycles 分布パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/63-model-revise-cycles",
+  "startedAt": "2026-07-23T14:20:59Z",
+  "finishedAt": "2026-07-23T14:27:08Z",
+  "durationSec": 369,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 72,
+  "adversary": {
+    "approved": true,
+    "summary": "Model別revise回数分布パネルの実装が要件を完全に満たしており、統計計算・ソート順・テスト網羅性すべて正確。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 318,
+  "cost": {
+    "builderUsd": 1.722451,
+    "adversaryUsd": 0.070173,
+    "ideationUsd": 0.10662679999999998,
+    "totalUsd": 1.899251
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    69,
+    70,
+    71
+  ]
+}
