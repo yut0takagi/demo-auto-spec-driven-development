@@ -1,0 +1,45 @@
+{
+  "id": "20260723T171745Z-81",
+  "iteration": 46,
+  "issue": {
+    "number": 81,
+    "title": "モデル別の承認率・マージ率比較パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/81-task",
+  "startedAt": "2026-07-23T17:17:45Z",
+  "finishedAt": "2026-07-23T17:32:23Z",
+  "durationSec": 878,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 90,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク #81（モデル別承認率・マージ率比較パネル）の要件を完全に満たした実装。承認→マージのギャップを可視化する役割が正確に果たされており、テストは境界値・エッジケース・UI 要件を実質的に検証している。既存機能への影響もない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 317,
+  "cost": {
+    "builderUsd": 4.617203,
+    "adversaryUsd": 0.073865,
+    "ideationUsd": 0.1275591,
+    "totalUsd": 4.818627
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    87,
+    88,
+    89
+  ]
+}
