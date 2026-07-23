@@ -10,6 +10,7 @@ import {
   gateReasonBreakdown,
   gateReasonBurdenTrend,
   gateReasonTrendSignal,
+  gateReasonChains,
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
@@ -561,6 +562,42 @@ test('ゲート不通過理由のカテゴリ別トレンドパネルが実デ�
       await expect(panel).toContainText('データ不足のため window 未満の反復数で計算');
     }
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由の連鎖パネルが実データから導出したパス別のカテゴリ連鎖を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const chains = gateReasonChains(runs);
+  expect(
+    chains.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-chain-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${chains.length}パス`);
+
+  // 各パスが gateReasonChains()（別の計算経路）と一致する連鎖カテゴリを新しい順に表示する
+  for (const chain of chains) {
+    const row = page.getByTestId(`gate-reason-chain-row-${chain.iteration}`);
+    await expect(row).toContainText(`issue #${chain.issueNumber}`);
+    expect(await row.getAttribute('data-verdict')).toBe(chain.verdict);
+    for (const category of chain.categories) {
+      await expect(page.getByTestId(`gate-reason-chain-category-${chain.iteration}-${category}`)).toHaveCount(1);
+    }
+  }
+
+  const rows = await page.locator('[data-testid^="gate-reason-chain-row-"]').all();
+  const renderedIterations = await Promise.all(
+    rows.map(async (r) => Number((await r.getAttribute('data-testid'))!.replace('gate-reason-chain-row-', ''))),
+  );
+  expect(renderedIterations).toEqual(chains.map((c) => c.iteration));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

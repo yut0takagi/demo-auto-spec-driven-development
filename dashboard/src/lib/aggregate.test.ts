@@ -55,6 +55,7 @@ import {
   abandonedSummary,
   abandonedRateTrend,
   abandonedIterationDetails,
+  gateReasonChains,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1357,6 +1358,59 @@ describe('gateReasonTrendSignal', () => {
     expect(signal.partial).toBe(true);
     expect(signal.previousIterations).toEqual([2]);
     expect(signal.recentIterations).toEqual([3]);
+  });
+});
+
+describe('gateReasonChains', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(gateReasonChains([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonChains(runs)).toEqual([]);
+  });
+
+  it('gateReasonsが空の反復（merged/paused等）は除外され、ある反復だけが残る', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] }),
+      makeRun({ iteration: 2, verdict: 'paused', gateReasons: [] }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+      }),
+    ];
+    const chains = gateReasonChains(runs);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].iteration).toBe(3);
+    expect(chains[0].issueNumber).toBe(1);
+    expect(chains[0].verdict).toBe('abandoned');
+  });
+
+  it('1反復内の複数カテゴリを出現順に連鎖として並べ、同カテゴリの重複は除去する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: [
+          'e2e(Playwright) が失敗している',
+          'adversary が approve していない',
+          '変更行数 500 が上限 400 を超えている',
+          'adversary が approve していない',
+        ],
+      }),
+    ];
+    const chains = gateReasonChains(runs);
+    expect(chains).toHaveLength(1);
+    expect(chains[0].categories).toEqual(['e2eFailed', 'adversaryNotApproved', 'changedLinesExceeded']);
+  });
+
+  it('入力の順序に関わらずiteration降順（新しい順）で返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['builder が変更を生成しなかった'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+    ];
+    const chains = gateReasonChains(runs);
+    expect(chains.map((c) => c.iteration)).toEqual([3, 2, 1]);
   });
 });
 
