@@ -76,6 +76,37 @@ function breakerStreak(sortedAsc: RunRecord[]): number {
   return streak;
 }
 
+export interface BreakerRunway {
+  /** 直近の連続非マージ数（Summary.breakerStreak と同じ定義） */
+  streak: number;
+  /** これに達するとブレーカが発火する（表示用の目安。既定値3） */
+  threshold: number;
+  /** 発火まで残り何回連続で非マージが続けられるか（0 なら次の非マージで発火） */
+  remaining: number;
+  /** streak が threshold 以上（発火条件が既に成立している） */
+  tripped: boolean;
+  /** 現在の連続に含まれる反復番号（古い→新しい順） */
+  iterations: number[];
+}
+
+/**
+ * サーキットブレーカ発火までの「残反復数」を可視化するための集計。
+ * Summary.breakerStreak/breakerThreshold/breakerRemaining と同じ値を、
+ * 対象 iteration の一覧・発火済みフラグ込みで返す（BreakerRunwayPanel 専用）。
+ */
+export function breakerRunway(runs: RunRecord[]): BreakerRunway {
+  const sorted = byIterationAsc(runs);
+  const streak = breakerStreak(sorted);
+  const iterations = sorted.slice(sorted.length - streak).map((r) => r.iteration);
+  return {
+    streak,
+    threshold: BREAKER_THRESHOLD,
+    remaining: Math.max(0, BREAKER_THRESHOLD - streak),
+    tripped: streak >= BREAKER_THRESHOLD,
+    iterations,
+  };
+}
+
 export interface TrendPoint {
   iteration: number;
   value: number;

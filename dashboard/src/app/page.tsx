@@ -24,6 +24,7 @@ import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
+import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -50,6 +51,7 @@ export default function Home() {
         <StatusBadge status={status} />
         <VerdictSummaryBubble runs={runs} />
         <EarlyWarningCard runs={runs} />
+        <BreakerRunwayPanel runs={runs} />
         <MetricCards summary={summary} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />

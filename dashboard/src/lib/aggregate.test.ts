@@ -24,6 +24,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   reviseCyclesByModel,
+  breakerRunway,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -277,6 +278,85 @@ describe('summarize', () => {
     // 配列の並びは [3,1,2] だが、時系列(iteration昇順)は 1(failed) -> 2(merged) -> 3(failed)。
     // iteration 2 の merged で連続が途切れるため、最新(iteration 3)の failed 1件のみを数える。
     expect(s.breakerStreak).toBe(1);
+  });
+});
+
+describe('breakerRunway', () => {
+  it('run が無ければ streak 0・remaining は threshold と同じ・iterations は空', () => {
+    const r = breakerRunway([]);
+    expect(r.streak).toBe(0);
+    expect(r.threshold).toBe(3);
+    expect(r.remaining).toBe(3);
+    expect(r.tripped).toBe(false);
+    expect(r.iterations).toEqual([]);
+  });
+
+  it('summarize() の breakerStreak/breakerThreshold/breakerRemaining と同じ値を返す（別経路の一致）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'needs-human' }),
+    ];
+    const s = summarize(runs);
+    const r = breakerRunway(runs);
+    expect(r.streak).toBe(s.breakerStreak);
+    expect(r.threshold).toBe(s.breakerThreshold);
+    expect(r.remaining).toBe(s.breakerRemaining);
+    // 連続に含まれるのは iteration 2, 3（1 は merged で途切れているので含まない）
+    expect(r.iterations).toEqual([2, 3]);
+    expect(r.tripped).toBe(false);
+  });
+
+  it('連続が閾値ちょうどに達すると tripped が true になる（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+    ];
+    const r = breakerRunway(runs);
+    expect(r.streak).toBe(3);
+    expect(r.remaining).toBe(0);
+    expect(r.tripped).toBe(true);
+    expect(r.iterations).toEqual([1, 2, 3]);
+  });
+
+  it('連続が閾値を超えても remaining は負にならず、iterations は連続分すべてを含む', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'needs-human' }),
+    ];
+    const r = breakerRunway(runs);
+    expect(r.streak).toBe(4);
+    expect(r.remaining).toBe(0);
+    expect(r.tripped).toBe(true);
+    expect(r.iterations).toEqual([1, 2, 3, 4]);
+  });
+
+  it('paused で連続がリセットされた直後は streak 0・iterations 空（発火から一転して平常に戻る）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+    ];
+    const r = breakerRunway(runs);
+    expect(r.streak).toBe(0);
+    expect(r.remaining).toBe(3);
+    expect(r.tripped).toBe(false);
+    expect(r.iterations).toEqual([]);
+  });
+
+  it('iterations は配列順ではなく iteration 昇順（時系列）で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+    ];
+    const r = breakerRunway(runs);
+    // 時系列: 1(merged) -> 2(failed) -> 3(failed)。1 で途切れるので 2,3 が連続。
+    expect(r.streak).toBe(2);
+    expect(r.iterations).toEqual([2, 3]);
   });
 });
 
