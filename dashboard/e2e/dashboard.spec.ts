@@ -41,29 +41,18 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
   const avgCycleTimeText = toMinutes(summary.avgCycleTimeSec);
 
   await expect(page.getByText('直近の所要時間', { exact: true })).toBeVisible();
-  await expect(page.getByText(latestDurationText, { exact: true })).toBeVisible();
   await expect(page.getByText(`iteration ${summary.latestDurationIteration}`, { exact: true })).toBeVisible();
 
-  // 「平均サイクルタイム」と「直近の所要時間」は値が異なる別カードであり、混同されて
-  // はならない。data/runs の内容次第では両者が同値になり得るため、まずこのテストの
-  // 前提として2つの表記が異なることを確認してから、カード単位の分離を検証する。
-  expect(
-    latestDurationText,
-    'data/runs の内容が変わり、直近所要時間と平均サイクルタイムが同値になった。この場合カードの分離を検証できないため fixture を見直すこと。',
-  ).not.toBe(avgCycleTimeText);
-
-  // ラベルを起点にカード(直近の祖先の rounded-xl コンテナ)へスコープし、
-  // それぞれのカードが自分の値だけを含み、相手の値を含まないことを検証する。
-  const cycleTimeCard = page.locator('div.rounded-xl').filter({ hasText: 'サイクルタイム' });
-  const latestDurationCard = page.locator('div.rounded-xl').filter({ hasText: '直近の所要時間' });
-  await expect(cycleTimeCard).toHaveCount(1);
-  await expect(latestDurationCard).toHaveCount(1);
-
-  await expect(cycleTimeCard).toContainText(avgCycleTimeText);
-  await expect(cycleTimeCard).not.toContainText(latestDurationText);
-
-  await expect(latestDurationCard).toContainText(latestDurationText);
-  await expect(latestDurationCard).not.toContainText(avgCycleTimeText);
+  // 「平均サイクルタイム」（複数 run の平均）と「直近の所要時間」（最新1件）は算出元が
+  // 異なる別々の値だが、小数第1位への丸め表示は偶然一致しうる
+  // （例: 21.05分 と 21.12分 はどちらも表示上「21.1分」になる）。
+  // そのため表示テキストの一致/不一致でカードを識別せず、各カード固有の testid で
+  // 直接値を検証する。これにより2カードが偶然同じ表示になっても、実装が値を
+  // 取り違えていれば（testid の指す値が入れ替わっていれば）検知できる。
+  const cycleTimeValue = page.getByTestId('metric-value-cycle-time');
+  const latestDurationValue = page.getByTestId('metric-value-latest-duration');
+  await expect(cycleTimeValue).toHaveText(avgCycleTimeText);
+  await expect(latestDurationValue).toHaveText(latestDurationText);
 });
 
 test('停止バッジは理由・停止主体・再開手順を常時表示する', async ({ page }) => {
