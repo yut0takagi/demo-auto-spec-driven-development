@@ -28,6 +28,7 @@ import {
   costPerApprovedPrTrend,
   reviseCyclesByModel,
   reviseCyclesByVerdict,
+  durationByVerdict,
   breakerRunway,
   modelEffectiveness,
   ideationFailureSummary,
@@ -1710,6 +1711,52 @@ describe('reviseCyclesByVerdict', () => {
       makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 2 }),
     ];
     const result = reviseCyclesByVerdict(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('durationByVerdict', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(durationByVerdict([])).toEqual([]);
+  });
+
+  it('reviseCyclesByVerdict と同様、failed run を除外せず独立した verdict グループとして集計する', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', durationSec: 999 })];
+    expect(durationByVerdict(runs)).toEqual([
+      { verdict: 'failed', count: 1, mean: 999, median: 999, min: 999, max: 999, iterations: [1] },
+    ]);
+  });
+
+  it('verdict ごとに mean/median/min/max/count/iterations を正確な値で集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 300 }),
+      makeRun({ iteration: 2, verdict: 'merged', durationSec: 600 }),
+      makeRun({ iteration: 3, verdict: 'merged', durationSec: 900 }),
+      makeRun({ iteration: 4, verdict: 'abandoned', durationSec: 120 }),
+    ];
+    const result = durationByVerdict(runs);
+    // 平均所要時間降順: merged(mean=600) > abandoned(mean=120)
+    expect(result).toEqual([
+      { verdict: 'merged', count: 3, mean: 600, median: 600, min: 300, max: 900, iterations: [1, 2, 3] },
+      { verdict: 'abandoned', count: 1, mean: 120, median: 120, min: 120, max: 120, iterations: [4] },
+    ]);
+  });
+
+  it('平均所要時間が同値のときは深刻度順（failed > abandoned > needs-human > paused > dry-run > merged）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 300 }),
+      makeRun({ iteration: 2, verdict: 'abandoned', durationSec: 300 }),
+    ];
+    const result = durationByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['abandoned', 'merged']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged', durationSec: 300 }),
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 600 }),
+    ];
+    const result = durationByVerdict(runs);
     expect(result[0].iterations).toEqual([1, 3]);
   });
 });

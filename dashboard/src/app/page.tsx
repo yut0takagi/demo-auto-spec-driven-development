@@ -26,6 +26,7 @@ import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
+import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMergeComparisonPanel';
@@ -90,6 +91,7 @@ export default function Home() {
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
         <ReviseCyclesByVerdictPanel runs={runs} />
+        <VerdictDurationComparisonPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <ModelApprovalMergeComparisonPanel runs={runs} />

@@ -990,6 +990,68 @@ export function reviseCyclesByVerdict(runs: RunRecord[]): VerdictReviseCyclesSum
     });
 }
 
+export interface VerdictDurationSummary {
+  verdict: Verdict;
+  /** この verdict に該当した反復数 */
+  count: number;
+  /** 秒 */
+  mean: number;
+  /** 秒 */
+  median: number;
+  /** 秒 */
+  min: number;
+  /** 秒 */
+  max: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/** 平均所要時間が同値のときの表示順（VERDICT_REVISE_ORDER と同じ深刻度順に合わせる）。 */
+const VERDICT_DURATION_ORDER: readonly Verdict[] = [
+  'failed',
+  'abandoned',
+  'needs-human',
+  'paused',
+  'dry-run',
+  'merged',
+];
+
+/**
+ * verdict別のCI/ゲート通過時間(durationSec)の分布。CycleTimeTrendPanel は全反復を通した
+ * 時系列トレンドしか見せないため、「どの verdict に落ち着いた反復が時間を要しているか」を
+ * 比較できない。reviseCyclesByVerdict と同様、durationSec は verdict に関係なく全 run で
+ * 必ず記録される（failed でもクラッシュするまでの経過時間として意味を持つ）ため、
+ * reviseCyclesByModel と異なり failed run も除外せず独立したグループとして扱う。
+ */
+export function durationByVerdict(runs: RunRecord[]): VerdictDurationSummary[] {
+  const byVerdict = new Map<Verdict, { values: number[]; iterations: number[] }>();
+
+  for (const run of byIterationAsc(runs)) {
+    let entry = byVerdict.get(run.verdict);
+    if (!entry) {
+      entry = { values: [], iterations: [] };
+      byVerdict.set(run.verdict, entry);
+    }
+    entry.values.push(run.durationSec);
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byVerdict.entries()]
+    .map(([verdict, entry]) => ({
+      verdict,
+      count: entry.values.length,
+      mean: mean(entry.values),
+      median: median(entry.values),
+      min: Math.min(...entry.values),
+      max: Math.max(...entry.values),
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => {
+      if (b.mean !== a.mean) return b.mean - a.mean;
+      return VERDICT_DURATION_ORDER.indexOf(a.verdict) - VERDICT_DURATION_ORDER.indexOf(b.verdict);
+    });
+}
+
 export interface ModelEffectivenessSummary {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */
