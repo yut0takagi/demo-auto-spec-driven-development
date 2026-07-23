@@ -2441,3 +2441,77 @@ export function pausedDryRunSummary(runs: RunRecord[]): PausedDryRunSummary {
 
   return { count: details.length, reasons, longestSurviving };
 }
+
+export interface AdversaryOutcomeDivergenceSummary {
+  model: string;
+  /** adversary の判定対象になった件数（verify に到達した run のみ。failed はレビュー自体に未到達のため除く） */
+  decidedCount: number;
+  approvedCount: number;
+  rejectedCount: number;
+  /** 承認した(approved=true)のに実結果が merged にならなかった件数＝見落とし */
+  falseApproveCount: number;
+  /** falseApproveCount / approvedCount の百分率。approvedCount=0 のときは0 */
+  falseApproveRatePct: number;
+  /** 却下した(approved=false)のに実結果が merged になった件数 */
+  falseRejectCount: number;
+  /** falseRejectCount / rejectedCount の百分率。rejectedCount=0 のときは0 */
+  falseRejectRatePct: number;
+  /** (falseApproveCount + falseRejectCount) / decidedCount の百分率。承認⇔実結果の全体乖離率 */
+  divergenceRatePct: number;
+  /** 見落とし（false approve）が発生した反復番号。古い→新しい順 */
+  falseApproveIterations: number[];
+  /** この adversary モデルが判定した全反復番号。古い→新しい順 */
+  iterations: number[];
+}
+
+/**
+ * Adversary の「承認したか」という判断(adversary.approved)と、その反復が最終的にどうなったか
+ * という「実結果」(verdict === 'merged')を adversary モデルごとに突き合わせ、両者が食い違う
+ * ケース（見落とし）を定量化する。ModelApprovalMergeComparisonPanel が builder モデル別に
+ * 承認率とマージ率という2本の集計値のギャップ(pt)を見せるのに対し、こちらは adversary モデル別に
+ * 「個々の反復単位で判断と実結果が一致していたか」を件数ベースで突き合わせる点が異なる
+ * （集計値の差分では、承認したPRのうち何件が実際に非マージだったかという発生率は分からない）。
+ * 承認したのに非マージだった＝見落とし(falseApprove)を主指標とし、理論上は起きないはずの
+ * 却下したのにマージされた(falseReject)も対称に算出する。failed（レビュー未到達）は
+ * reachedVerify と同じ基準で母集団から除く。
+ */
+export function adversaryOutcomeDivergence(runs: RunRecord[]): AdversaryOutcomeDivergenceSummary[] {
+  const byModel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (!reachedVerify(run)) continue;
+    const model = run.models.adversary;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const approved = modelRuns.filter((r) => r.adversary.approved);
+      const rejected = modelRuns.filter((r) => !r.adversary.approved);
+      const falseApprove = approved.filter((r) => r.verdict !== 'merged');
+      const falseReject = rejected.filter((r) => r.verdict === 'merged');
+
+      return {
+        model,
+        decidedCount: modelRuns.length,
+        approvedCount: approved.length,
+        rejectedCount: rejected.length,
+        falseApproveCount: falseApprove.length,
+        falseApproveRatePct: approved.length === 0 ? 0 : (falseApprove.length / approved.length) * 100,
+        falseRejectCount: falseReject.length,
+        falseRejectRatePct: rejected.length === 0 ? 0 : (falseReject.length / rejected.length) * 100,
+        divergenceRatePct: ((falseApprove.length + falseReject.length) / modelRuns.length) * 100,
+        falseApproveIterations: falseApprove.map((r) => r.iteration),
+        iterations: modelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) => {
+      if (b.divergenceRatePct !== a.divergenceRatePct) return b.divergenceRatePct - a.divergenceRatePct;
+      return a.model.localeCompare(b.model);
+    });
+}

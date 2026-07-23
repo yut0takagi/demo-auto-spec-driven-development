@@ -66,6 +66,7 @@ import {
   ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT,
   pausedDryRunDetails,
   pausedDryRunSummary,
+  adversaryOutcomeDivergence,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -4173,5 +4174,145 @@ describe('pausedDryRunSummary', () => {
     expect(s.longestSurviving?.iteration).toBe(1);
     expect(s.longestSurviving?.issueTitle).toBe('古い');
     expect(s.longestSurviving?.survivalIterations).toBe(9);
+  });
+});
+
+describe('adversaryOutcomeDivergence', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(adversaryOutcomeDivergence([])).toEqual([]);
+  });
+
+  it('failedのみの場合はレビュー未到達のため対象0件（空配列）になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', adversary: { approved: false, summary: '' } }),
+    ];
+    expect(adversaryOutcomeDivergence(runs)).toEqual([]);
+  });
+
+  it('承認して実際にmergedになったケースは乖離0件・乖離率0%として集計される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryOutcomeDivergence(runs);
+    expect(row.model).toBe('model-a');
+    expect(row.decidedCount).toBe(1);
+    expect(row.approvedCount).toBe(1);
+    expect(row.rejectedCount).toBe(0);
+    expect(row.falseApproveCount).toBe(0);
+    expect(row.falseApproveRatePct).toBe(0);
+    expect(row.falseRejectCount).toBe(0);
+    expect(row.divergenceRatePct).toBe(0);
+    expect(row.falseApproveIterations).toEqual([]);
+    expect(row.iterations).toEqual([1]);
+  });
+
+  it('却下して実際にmergedにならなかったケースも乖離0件として集計される（一致の別パターン）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryOutcomeDivergence(runs);
+    expect(row.approvedCount).toBe(0);
+    expect(row.rejectedCount).toBe(1);
+    expect(row.falseRejectCount).toBe(0);
+    expect(row.divergenceRatePct).toBe(0);
+  });
+
+  it('承認したのにmerged以外（見落とし=falseApprove）を件数・率・反復番号つきで検出する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'paused',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryOutcomeDivergence(runs);
+    expect(row.approvedCount).toBe(3);
+    expect(row.falseApproveCount).toBe(2);
+    expect(row.falseApproveRatePct).toBeCloseTo((2 / 3) * 100, 5);
+    expect(row.falseApproveIterations).toEqual([2, 3]);
+    expect(row.divergenceRatePct).toBeCloseTo((2 / 3) * 100, 5);
+  });
+
+  it('却下したのにmergedになった異常ケース（誤却下=falseReject）も対称に検出する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryOutcomeDivergence(runs);
+    expect(row.rejectedCount).toBe(1);
+    expect(row.falseRejectCount).toBe(1);
+    expect(row.falseRejectRatePct).toBe(100);
+    expect(row.falseApproveCount).toBe(0);
+    expect(row.falseApproveRatePct).toBe(0); // 承認0件が分母のため0であって100/0ではない
+    expect(row.divergenceRatePct).toBe(100);
+  });
+
+  it('adversaryモデルごとに独立して集計し、母集団を混同しない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-b', ideation: 'i' },
+      }),
+    ];
+    const rows = adversaryOutcomeDivergence(runs);
+    expect(rows).toHaveLength(2);
+    const a = rows.find((r) => r.model === 'model-a')!;
+    const b = rows.find((r) => r.model === 'model-b')!;
+    expect(a.divergenceRatePct).toBe(0);
+    expect(b.divergenceRatePct).toBe(100);
+  });
+
+  it('乖離率の降順で並び、同率のときはモデル名昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-zeta', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-alpha', ideation: 'i' },
+      }),
+    ];
+    // 両モデルとも乖離率0%で同率 → モデル名昇順
+    expect(adversaryOutcomeDivergence(runs).map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
   });
 });

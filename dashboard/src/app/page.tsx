@@ -37,6 +37,7 @@ import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComp
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMergeComparisonPanel';
+import { AdversaryOutcomeDivergencePanel } from '@/components/AdversaryOutcomeDivergencePanel';
 import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPanel';
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
@@ -117,6 +118,7 @@ export default function Home() {
         <E2eDiffSizeCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <ModelApprovalMergeComparisonPanel runs={runs} />
+        <AdversaryOutcomeDivergencePanel runs={runs} />
         <BuilderModelSwitchAbPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
         <IterationTimeline runs={runs} />
