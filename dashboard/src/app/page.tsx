@@ -44,6 +44,7 @@ import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelation
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
+import { IssueResolutionTimeTrendPanel } from '@/components/IssueResolutionTimeTrendPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -75,6 +76,7 @@ export default function Home() {
         <MetricCards summary={summary} />
         <CycleTimeTrendPanel runs={runs} />
         <TimeToFirstPrTrendPanel runs={runs} />
+        <IssueResolutionTimeTrendPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />

@@ -60,8 +60,12 @@ import {
   abandonedIterationDetails,
   gateReasonChains,
   adversaryApprovalByReasonAndModel,
+  issueResolutionTimeTrend,
+  issueResolutionTimeTrendSignal,
+  ISSUE_RESOLUTION_TIME_TREND_WINDOW,
+  ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT,
 } from './aggregate';
-import type { RunRecord } from './types';
+import type { RunRecord, Verdict } from './types';
 
 function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
@@ -3280,6 +3284,217 @@ describe('timeToFirstPrTrendSignal', () => {
     const signal = timeToFirstPrTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+describe('issueResolutionTimeTrend', () => {
+  it('nextIssuesに現れた反復のfinishedAtを生成時刻、merged/abandonedに達した反復のfinishedAtをクローズ時刻として解決時間(秒)を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [10],
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        finishedAt: '2026-07-20T00:10:00Z',
+        verdict: 'merged',
+      }),
+    ];
+    expect(issueResolutionTimeTrend(runs)).toEqual([
+      { iteration: 2, issueNumber: 10, value: 600, createdIteration: 1 },
+    ]);
+  });
+
+  it('abandonedもクローズとして扱う（types.tsの通りissueはクローズされる）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, finishedAt: '2026-07-20T00:00:00Z', nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        finishedAt: '2026-07-20T00:05:00Z',
+        verdict: 'abandoned',
+      }),
+    ];
+    expect(issueResolutionTimeTrend(runs)).toEqual([
+      { iteration: 2, issueNumber: 10, value: 300, createdIteration: 1 },
+    ]);
+  });
+
+  it.each<Verdict>(['failed', 'paused', 'dry-run', 'needs-human'])(
+    'verdict:%s はクローズとみなさず対象外',
+    (verdict) => {
+      const runs = [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+        makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict }),
+      ];
+      expect(issueResolutionTimeTrend(runs)).toEqual([]);
+    },
+  );
+
+  it('nextIssuesにも自分自身のissue番号にも一度も現れないissue（生成元不明）は対象外', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'x', labels: [] }, verdict: 'merged' })];
+    expect(issueResolutionTimeTrend(runs)).toEqual([]);
+  });
+
+  it('生成反復のiterationがクローズ反復以上（自己参照）の場合は対象外', () => {
+    // ideationCostQualityCorrelation と同じ自己参照ケース: nextIssuesに提案元自身の番号を含む
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 5, title: 'x', labels: [] }, verdict: 'merged', nextIssues: [5] }),
+    ];
+    expect(issueResolutionTimeTrend(runs)).toEqual([]);
+  });
+
+  it('同一issue番号が複数回dispatchされても、生成後最初のクローズだけを1件として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, finishedAt: '2026-07-20T00:00:00Z', nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        finishedAt: '2026-07-20T00:10:00Z',
+        verdict: 'merged',
+      }),
+      // 誤って再dispatchされた2回目。重複カウントされてはいけない
+      makeRun({
+        iteration: 3,
+        issue: { number: 10, title: 'x', labels: [] },
+        finishedAt: '2026-07-20T05:00:00Z',
+        verdict: 'merged',
+      }),
+    ];
+    const points = issueResolutionTimeTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0]).toEqual({ iteration: 2, issueNumber: 10, value: 600, createdIteration: 1 });
+  });
+
+  it('生成元の反復のnextIssuesに複数issueが含まれていても、それぞれのクローズ時に個別の点として現れる', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, finishedAt: '2026-07-20T00:00:00Z', nextIssues: [10, 20] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'a', labels: [] }, finishedAt: '2026-07-20T00:05:00Z', verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 20, title: 'b', labels: [] }, finishedAt: '2026-07-20T00:20:00Z', verdict: 'abandoned' }),
+    ];
+    expect(issueResolutionTimeTrend(runs)).toEqual([
+      { iteration: 2, issueNumber: 10, value: 300, createdIteration: 1 },
+      { iteration: 3, issueNumber: 20, value: 1200, createdIteration: 1 },
+    ]);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(issueResolutionTimeTrend([])).toEqual([]);
+  });
+});
+
+describe('issueResolutionTimeTrendSignal', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(issueResolutionTimeTrendSignal([])).toBeNull();
+  });
+
+  it('解決済みissueが1件だけなら直前ウィンドウが取れず null（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    expect(issueResolutionTimeTrendSignal(runs)).toBeNull();
+  });
+
+  function genAndClose(
+    genIteration: number,
+    closeIteration: number,
+    issueNumber: number,
+    resolutionSec: number,
+  ): RunRecord[] {
+    return [
+      makeRun({
+        iteration: genIteration,
+        issue: { number: genIteration, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [issueNumber],
+      }),
+      makeRun({
+        iteration: closeIteration,
+        issue: { number: issueNumber, title: 'x', labels: [] },
+        finishedAt: new Date(new Date('2026-07-20T00:00:00Z').getTime() + resolutionSec * 1000).toISOString(),
+        verdict: 'merged',
+      }),
+    ];
+  }
+
+  it('解決時間の直近平均が直前平均より閾値以上長いと increasing(悪化)', () => {
+    expect(ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT).toBe(5);
+    const runs = [
+      ...genAndClose(1, 2, 101, 100),
+      ...genAndClose(3, 4, 102, 100),
+      ...genAndClose(5, 6, 103, 100),
+      ...genAndClose(7, 8, 104, 200),
+      ...genAndClose(9, 10, 105, 200),
+      ...genAndClose(11, 12, 106, 200),
+    ];
+    const signal = issueResolutionTimeTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(ISSUE_RESOLUTION_TIME_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgSec).toBeCloseTo(200, 10);
+    expect(signal!.deltaPct).toBeCloseTo(100, 10);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.recentIterations).toEqual([8, 10, 12]);
+    expect(signal!.previousIterations).toEqual([2, 4, 6]);
+  });
+
+  it('解決時間の直近平均が直前平均より短いと decreasing(改善)', () => {
+    const runs = [
+      ...genAndClose(1, 2, 101, 200),
+      ...genAndClose(3, 4, 102, 200),
+      ...genAndClose(5, 6, 103, 200),
+      ...genAndClose(7, 8, 104, 100),
+      ...genAndClose(9, 10, 105, 100),
+      ...genAndClose(11, 12, 106, 100),
+    ];
+    const signal = issueResolutionTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('decreasing');
+    expect(signal!.deltaPct).toBeCloseTo(-50, 10);
+  });
+
+  it('変化率が閾値未満なら flat（僅かなブレをトレンドと誤認しない）', () => {
+    const runs = [
+      ...genAndClose(1, 2, 101, 100),
+      ...genAndClose(3, 4, 102, 100),
+      ...genAndClose(5, 6, 103, 100),
+      // +4% は閾値(5%)未満なので flat になるはず
+      ...genAndClose(7, 8, 104, 104),
+      ...genAndClose(9, 10, 105, 104),
+      ...genAndClose(11, 12, 106, 104),
+    ];
+    const signal = issueResolutionTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('2件ちょうどならwindow=1でpartial=trueになる', () => {
+    const runs = [...genAndClose(1, 2, 101, 100), ...genAndClose(3, 4, 102, 200)];
+    const signal = issueResolutionTimeTrendSignal(runs);
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgSec).toBeCloseTo(200, 10);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でもゼロ除算を回避してdirectionを判定する', () => {
+    const runs = [...genAndClose(1, 2, 101, 0), ...genAndClose(3, 4, 102, 50)];
+    const signal = issueResolutionTimeTrendSignal(runs);
+    expect(signal!.previousAvgSec).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('未解決（クローズしていない）issueは母集団から除外される', () => {
+    const runs = [
+      ...genAndClose(1, 2, 101, 100),
+      // issue #103 は生成されたがまだクローズしていない
+      makeRun({ iteration: 3, issue: { number: 3, title: 'gen', labels: [] }, nextIssues: [103] }),
+    ];
+    expect(issueResolutionTimeTrendSignal(runs)).toBeNull();
   });
 });
 
