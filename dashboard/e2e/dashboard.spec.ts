@@ -147,6 +147,38 @@ test('承認率・マージ率の推移グラフが表示され、最新値が M
   expect(body).not.toContain('NaN');
 });
 
+test('直近の反復サマリー吹き出しが最新 iteration の verdict とレビュー内容を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const latest = [...runs].sort((a, b) => b.iteration - a.iteration)[0];
+
+  const bubble = page.getByTestId('verdict-summary-bubble');
+  await expect(bubble).toBeVisible();
+  await expect(bubble).toHaveAttribute('data-verdict', latest.verdict);
+  await expect(bubble).toContainText(`#${latest.iteration}`);
+  await expect(bubble).toContainText(`issue #${latest.issue.number}`);
+
+  // 吹き出し本文は adversary.summary（空なら gateReasons へフォールバック）。
+  // 実データを実装と同じロジックで導出し、ハードコードしない。
+  const expectedBody =
+    latest.adversary.summary.trim().length > 0
+      ? latest.adversary.summary.trim()
+      : latest.gateReasons.length > 0
+        ? latest.gateReasons.join(' / ')
+        : '（この反復にはサマリーが記録されていません）';
+  await expect(bubble).toContainText(expectedBody);
+
+  // 他の iteration の verdict が誤って選ばれていないことの回帰防止: 最新と異なる
+  // verdict を持つ run が他に存在するなら、吹き出しはその verdict ではなく
+  // 「最新 iteration」の verdict を表示しているはず。
+  const conflicting = runs.find((r) => r.iteration !== latest.iteration && r.verdict !== latest.verdict);
+  if (conflicting) {
+    await expect(bubble).not.toHaveAttribute('data-verdict', conflicting.verdict);
+  }
+});
+
 test('E2E失敗率推移グラフが表示され、最新値が data/runs から導出した累積失敗率と一致する', async ({ page }) => {
   await page.goto('/');
 

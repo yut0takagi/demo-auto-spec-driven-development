@@ -14,6 +14,7 @@ import { TrendChart } from '@/components/TrendChart';
 import { ReviseCyclesChart } from '@/components/ReviseCyclesChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
+import { VerdictSummaryBubble } from '@/components/VerdictSummaryBubble';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -38,6 +39,7 @@ export default function Home() {
       <div className="space-y-6">
         <LoadErrorBanner errors={errors} />
         <StatusBadge status={status} />
+        <VerdictSummaryBubble runs={runs} />
         <MetricCards summary={summary} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
