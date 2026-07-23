@@ -793,6 +793,110 @@ export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummar
     });
 }
 
+export interface GateReasonCostSummary {
+  category: GateReasonCategory;
+  /** このカテゴリの gateReasons 出現数（gateReasonBreakdown と同じ定義。1 run が複数件持てば複数カウント） */
+  count: number;
+  /** 該当した反復番号（重複なし・昇順） */
+  iterations: number[];
+  /** このカテゴリが1回以上出現した run の数（cost/duration/reviseCycles の集計母数。同一 run が同一カテゴリを複数回出しても1件として数える） */
+  runCount: number;
+  /** runCount 件の run の cost.totalUsd 合計 */
+  totalCostUsd: number;
+  /** runCount 件の run の durationSec 合計 */
+  totalDurationSec: number;
+  /** runCount 件の run の reviseCycles 合計 */
+  totalReviseCycles: number;
+  /** totalCostUsd / runCount */
+  avgCostUsdPerRun: number;
+  /**
+   * totalCostUsd / totalReviseCycles。「このカテゴリでゲートが止まったとき、
+   * revise 1回あたり実際に何USDかかっているか」という実質コスト。gateReasonBreakdown の
+   * count（出現回数）だけでは、revise を伴わず即abandonした安価な失敗と、何度もrevise
+   * を重ねた高コストな失敗を区別できない。totalReviseCycles が0（revise せず失敗した run
+   * だけのカテゴリ）のときは0除算になるため null。
+   */
+  avgCostUsdPerReviseCycle: number | null;
+  /** totalDurationSec / totalReviseCycles。avgCostUsdPerReviseCycle と同じ理由で totalReviseCycles が0のときは null。 */
+  avgDurationSecPerReviseCycle: number | null;
+}
+
+/**
+ * ゲート不通過理由のカテゴリ別に、実際にかかったコスト（USD）・所要時間・revise回数を
+ * 集計する。gateReasonBreakdown / gateReasonBurdenTrend が「何件起きたか」という頻度を
+ * 見るのに対し、こちらは「その頻度が実際にどれだけの実質コストを伴ったか」を見る。
+ * 同じ出現件数でも、revise を繰り返して初めて解消するカテゴリ（例: e2eFailed）と、
+ * revise 前に即座に abandon するカテゴリ（例: crashed）とではループが払うコストの
+ * 実態が大きく異なるため、頻度だけの集計では見えない負担を可視化する。
+ *
+ * cost/duration/reviseCycles は run 単位の値であり reason 単位の値ではないため、1 run が
+ * 同じカテゴリに属する reason を複数持っていても二重計上しないよう run.iteration で
+ * 重複排除する（gateReasonBreakdown の count 自体は出現件数のまま変えない）。run.id では
+ * なく iteration をキーに使うのは、このファイルの他の集計関数（iterations: Set<number> 等）
+ * と同じく、runs 配列内で 1 run を一意に識別できる値が iteration だから。
+ */
+export function gateReasonCostBreakdown(runs: RunRecord[]): GateReasonCostSummary[] {
+  const byCategory = new Map<
+    GateReasonCategory,
+    {
+      count: number;
+      iterations: Set<number>;
+      costRuns: Set<number>;
+      totalCostUsd: number;
+      totalDurationSec: number;
+      totalReviseCycles: number;
+    }
+  >();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const reason of run.gateReasons) {
+      const category = classifyGateReason(reason, run.adversary.summary);
+      let entry = byCategory.get(category);
+      if (!entry) {
+        entry = {
+          count: 0,
+          iterations: new Set(),
+          costRuns: new Set(),
+          totalCostUsd: 0,
+          totalDurationSec: 0,
+          totalReviseCycles: 0,
+        };
+        byCategory.set(category, entry);
+      }
+      entry.count++;
+      entry.iterations.add(run.iteration);
+      if (!entry.costRuns.has(run.iteration)) {
+        entry.costRuns.add(run.iteration);
+        entry.totalCostUsd += run.cost.totalUsd;
+        entry.totalDurationSec += run.durationSec;
+        entry.totalReviseCycles += run.reviseCycles;
+      }
+    }
+  }
+
+  return [...byCategory.entries()]
+    .map(([category, entry]) => {
+      const runCount = entry.costRuns.size;
+      return {
+        category,
+        count: entry.count,
+        iterations: [...entry.iterations].sort((a, b) => a - b),
+        runCount,
+        totalCostUsd: entry.totalCostUsd,
+        totalDurationSec: entry.totalDurationSec,
+        totalReviseCycles: entry.totalReviseCycles,
+        avgCostUsdPerRun: runCount === 0 ? 0 : entry.totalCostUsd / runCount,
+        avgCostUsdPerReviseCycle: entry.totalReviseCycles === 0 ? null : entry.totalCostUsd / entry.totalReviseCycles,
+        avgDurationSecPerReviseCycle:
+          entry.totalReviseCycles === 0 ? null : entry.totalDurationSec / entry.totalReviseCycles,
+      };
+    })
+    .sort((a, b) => {
+      if (b.totalCostUsd !== a.totalCostUsd) return b.totalCostUsd - a.totalCostUsd;
+      return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+    });
+}
+
 export interface AdversaryReasonModelCell {
   model: string;
   /** この理由カテゴリ×モデルの組み合わせで gateReasons に出現した件数 */
