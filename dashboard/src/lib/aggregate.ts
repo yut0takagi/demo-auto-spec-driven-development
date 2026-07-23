@@ -1692,6 +1692,139 @@ export function reviseSizeSuccessPatterns(runs: RunRecord[]): ReviseSizeSuccessC
     });
 }
 
+export interface SizeBucketReviseStat {
+  sizeBucket: ChangeSizeBucketLabel;
+  /** このサイズ区分に属した反復数 */
+  total: number;
+  /** 区分内の平均変更行数（表示用の代表値。changeSizeBucket の閾値とは別に実際の分布を見せる） */
+  avgChangedLines: number;
+  avgReviseCycles: number;
+  /** 区分内revise回数の中央値。外れ値に引きずられない参考値（Summary.medianReviseCycles と同じ考え方） */
+  medianReviseCycles: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * 変更サイズ区分(small/medium/large)ごとに revise 回数の平均・中央値を集計する。
+ * reviseSizeSuccessPatterns がサイズ×revise回数(bucket)の2軸クロス集計でmerge到達率を見るのに
+ * 対し、こちらはサイズ区分を主軸にして revise 回数そのもの（連続値の平均・中央値）を見る。
+ * changedLinesTrend と同じ理由で failed run（verify未到達で changedLines が測定されなかった
+ * sentinel 0）は母集団から除外する。出現した区分だけを CHANGE_SIZE_BUCKET_ORDER 順で返す。
+ */
+export function reviseCyclesBySizeBucket(runs: RunRecord[]): SizeBucketReviseStat[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const byBucket = new Map<ChangeSizeBucketLabel, RunRecord[]>();
+
+  for (const run of completed) {
+    const bucket = changeSizeBucket(run.changedLines);
+    const list = byBucket.get(bucket);
+    if (list) {
+      list.push(run);
+    } else {
+      byBucket.set(bucket, [run]);
+    }
+  }
+
+  return CHANGE_SIZE_BUCKET_ORDER.filter((bucket) => byBucket.has(bucket)).map((bucket) => {
+    const bucketRuns = byBucket.get(bucket) as RunRecord[];
+    return {
+      sizeBucket: bucket,
+      total: bucketRuns.length,
+      avgChangedLines: mean(bucketRuns.map((r) => r.changedLines)),
+      avgReviseCycles: mean(bucketRuns.map((r) => r.reviseCycles)),
+      medianReviseCycles: median(bucketRuns.map((r) => r.reviseCycles)),
+      iterations: bucketRuns.map((r) => r.iteration).sort((a, b) => a - b),
+    };
+  });
+}
+
+/**
+ * small→medium→large の各区分がすべて揃っていて、かつ各区分の反復数がこの値以上でないと
+ * カーブ形状の判定を行わない。区分の反復数が少ないと平均revise回数が1件の外れ値で
+ * 大きく振れ、"convex"/"concave" が偶然のノイズに過ぎなくなるため。
+ */
+export const REVISE_SIZE_CURVE_MIN_SAMPLES = 3;
+
+/**
+ * 2区間の傾き差（accelerationDelta）がこの値未満なら「ほぼ比例（線形）」とみなす。
+ * revise回数は小さい整数値が中心のため、cycleTimeTrendSignal 等の％しきい値ではなく
+ * revise回数の絶対値（0.5回分の傾き差）をしきい値にしている。
+ */
+export const REVISE_SIZE_CURVE_FLAT_THRESHOLD = 0.5;
+
+/**
+ * convex:   区分が大きくなるほど revise回数の増分が拡大している（size:large の負担が
+ *           不釣り合いに重い＝非線形に悪化）。
+ * concave:  逆に増分が縮小している（大きい変更でも revise回数の伸びは頭打ち）。
+ * linear:   増分がほぼ一定（サイズに比例して revise回数が増える）。
+ * insufficient-data: small/medium/large のいずれかが欠けている、または
+ *           REVISE_SIZE_CURVE_MIN_SAMPLES未満の区分がある。
+ */
+export type ReviseSizeCurveShape = 'convex' | 'concave' | 'linear' | 'insufficient-data';
+
+export interface ReviseSizeCurveSignal {
+  /** reviseCyclesBySizeBucket と同じ内容（Panel がテーブル表示に再利用する） */
+  buckets: SizeBucketReviseStat[];
+  shape: ReviseSizeCurveShape;
+  /** medium.avgReviseCycles - small.avgReviseCycles。判定不能なら null */
+  smallToMediumDelta: number | null;
+  /** large.avgReviseCycles - medium.avgReviseCycles。判定不能なら null */
+  mediumToLargeDelta: number | null;
+  /** mediumToLargeDelta - smallToMediumDelta。正なら加速(convex)、負なら減速(concave) */
+  accelerationDelta: number | null;
+}
+
+function reviseSizeCurveShape(accelerationDelta: number): ReviseSizeCurveShape {
+  if (Math.abs(accelerationDelta) < REVISE_SIZE_CURVE_FLAT_THRESHOLD) return 'linear';
+  return accelerationDelta > 0 ? 'convex' : 'concave';
+}
+
+/**
+ * 変更サイズ(small→medium→large)が大きくなるにつれ、revise回数の平均がどう伸びるかの
+ * 「カーブ形状」を判定する。reviseCyclesBySizeBucket が区分ごとの単純な平均・中央値を
+ * 返すのに対し、こちらは small→medium と medium→large の2区間の増分（傾き）を比較し、
+ * サイズと修正サイクルの関係が比例(linear)から外れて加速(convex)/減速(concave)して
+ * いないかを検出する。3区分すべてが揃い REVISE_SIZE_CURVE_MIN_SAMPLES 以上のサンプルを
+ * 持つ場合のみ判定し、それ以外は insufficient-data（傾きは null）を返す。
+ */
+export function reviseCyclesSizeCurve(runs: RunRecord[]): ReviseSizeCurveSignal {
+  const buckets = reviseCyclesBySizeBucket(runs);
+  const byLabel = new Map(buckets.map((b) => [b.sizeBucket, b]));
+  const small = byLabel.get('small');
+  const medium = byLabel.get('medium');
+  const large = byLabel.get('large');
+
+  if (
+    small === undefined ||
+    medium === undefined ||
+    large === undefined ||
+    small.total < REVISE_SIZE_CURVE_MIN_SAMPLES ||
+    medium.total < REVISE_SIZE_CURVE_MIN_SAMPLES ||
+    large.total < REVISE_SIZE_CURVE_MIN_SAMPLES
+  ) {
+    return {
+      buckets,
+      shape: 'insufficient-data',
+      smallToMediumDelta: null,
+      mediumToLargeDelta: null,
+      accelerationDelta: null,
+    };
+  }
+
+  const smallToMediumDelta = medium.avgReviseCycles - small.avgReviseCycles;
+  const mediumToLargeDelta = large.avgReviseCycles - medium.avgReviseCycles;
+  const accelerationDelta = mediumToLargeDelta - smallToMediumDelta;
+
+  return {
+    buckets,
+    shape: reviseSizeCurveShape(accelerationDelta),
+    smallToMediumDelta,
+    mediumToLargeDelta,
+    accelerationDelta,
+  };
+}
+
 export interface VerdictDurationSummary {
   verdict: Verdict;
   /** この verdict に該当した反復数 */

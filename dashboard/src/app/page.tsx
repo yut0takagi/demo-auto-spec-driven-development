@@ -34,6 +34,7 @@ import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel'
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { ReviseSizeSuccessPatternPanel } from '@/components/ReviseSizeSuccessPatternPanel';
+import { RevisionSizeCurvePanel } from '@/components/RevisionSizeCurvePanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
 import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
@@ -119,6 +120,7 @@ export default function Home() {
         <ReviseCyclesByVerdictPanel runs={runs} />
         <ReviseVerdictMatrixPanel runs={runs} />
         <ReviseSizeSuccessPatternPanel runs={runs} />
+        <RevisionSizeCurvePanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
         <VerdictTransitionPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />

@@ -48,6 +48,7 @@ import {
   verdictTransitions,
   verdictTransitionSummary,
   dropoutStreaks,
+  reviseCyclesSizeCurve,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1764,4 +1765,63 @@ test('Verdict遷移の自動分類・離脱パターン検知パネルが実デ�
   const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('変更規模と修正サイクルの非線形カーブパネルが実データから導出したサイズ区分別revise回数・カーブ形状を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+
+  const signal = reviseCyclesSizeCurve(runs);
+  expect(
+    signal.buckets.length,
+    'changedLines>0でverifyに到達した反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('revision-size-curve-panel');
+  await expect(panel).toBeVisible();
+
+  const shapeLabels = {
+    convex: '加速（非線形に悪化）',
+    concave: '減速（伸びは頭打ち）',
+    linear: 'ほぼ比例',
+    'insufficient-data': 'データ不足',
+  } as const;
+  await expect(page.getByTestId('revision-size-curve-shape')).toHaveText(shapeLabels[signal.shape]);
+
+  // 区分ごとの行が reviseCyclesSizeCurve()（別の計算経路と同一の集計）の平均・中央値・件数と一致するはず
+  for (const b of signal.buckets) {
+    const row = page.getByTestId(`revision-size-curve-row-${b.sizeBucket}`);
+    await expect(row).toBeVisible();
+    const stats = page.getByTestId(`revision-size-curve-stats-${b.sizeBucket}`);
+    await expect(stats).toContainText(`平均revise ${b.avgReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`中央値 ${b.medianReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`${b.total}件`);
+  }
+
+  // 出現しないサイズ区分（例: large が1件も無い）は行が描画されてはいけない
+  const allSizeBuckets = ['small', 'medium', 'large'] as const;
+  const presentBuckets = new Set(signal.buckets.map((b) => b.sizeBucket));
+  for (const sizeBucket of allSizeBuckets) {
+    if (!presentBuckets.has(sizeBucket)) {
+      await expect(page.getByTestId(`revision-size-curve-row-${sizeBucket}`)).toHaveCount(0);
+    }
+  }
+
+  if (signal.shape === 'insufficient-data') {
+    await expect(page.getByTestId('revision-size-curve-deltas')).toHaveCount(0);
+  } else {
+    const deltas = page.getByTestId('revision-size-curve-deltas');
+    const fmt = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+    await expect(deltas).toContainText(`小→中 ${fmt(signal.smallToMediumDelta as number)}回`);
+    await expect(deltas).toContainText(`中→大 ${fmt(signal.mediumToLargeDelta as number)}回`);
+    await expect(deltas).toContainText(`傾き差 ${fmt(signal.accelerationDelta as number)}回`);
+  }
+
+  const body3 = await bodyTextExcludingFreeform(page);
+  expect(body3).not.toContain('NaN');
+  expect(body3).not.toContain('undefined');
 });
