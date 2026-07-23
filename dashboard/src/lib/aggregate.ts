@@ -1389,6 +1389,90 @@ export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary
     });
 }
 
+export interface BuilderModelSwitchSegment {
+  model: string;
+  /** この区間の最初の反復番号 */
+  fromIteration: number;
+  /** この区間の最後の反復番号 */
+  toIteration: number;
+  /** この区間の反復数（verdict に関係なく全件） */
+  count: number;
+  /** develop にマージされた割合 0..1。分母は区間内の全件 */
+  mergeRate: number;
+  /** adversary が approve した割合 0..1。分母は区間内で verify に到達した反復のみ */
+  approvalRate: number;
+}
+
+export interface BuilderModelSwitchComparison {
+  /** 何回目の切り替えか（1始まり） */
+  switchIndex: number;
+  before: BuilderModelSwitchSegment;
+  after: BuilderModelSwitchSegment;
+  /** after.approvalRate - before.approvalRate（pt換算前、0..1スケールの差） */
+  approvalRateDelta: number;
+  /** after.mergeRate - before.mergeRate（pt換算前、0..1スケールの差） */
+  mergeRateDelta: number;
+  approvalVerdict: ComparisonVerdict;
+  mergeVerdict: ComparisonVerdict;
+}
+
+function toBuilderModelSwitchSegment(model: string, segmentRuns: RunRecord[]): BuilderModelSwitchSegment {
+  const completed = segmentRuns.filter(reachedVerify);
+  const approvedCount = completed.filter((r) => r.adversary.approved).length;
+  const mergedCount = segmentRuns.filter((r) => r.verdict === 'merged').length;
+  return {
+    model,
+    fromIteration: segmentRuns[0].iteration,
+    toIteration: segmentRuns[segmentRuns.length - 1].iteration,
+    count: segmentRuns.length,
+    mergeRate: mergedCount / segmentRuns.length,
+    approvalRate: completed.length === 0 ? 0 : approvedCount / completed.length,
+  };
+}
+
+/**
+ * Builder に使われたモデルが iteration 順で切り替わった各タイミングを「A/Bテスト」として
+ * 直前・直後の承認率・マージ率を突き合わせる。modelEffectiveness / ModelApprovalMergeComparisonPanel
+ * が時系列を無視してモデルごとに全反復を合算するのに対し、こちらは「切り替え直前の連続区間(A)」対
+ * 「切り替え直後の連続区間(B)」という発生順を保った比較に特化する。同じモデルが後で再登板した場合
+ * （A→B→A のような揺り戻し）は、そのたびに独立した切り替えイベントとして扱う（=A の合算はしない）。
+ * 切り替えが1回も無い（builder が同一モデルのまま）場合は比較対象が無いため空配列を返す。
+ */
+export function builderModelSwitchComparisons(runs: RunRecord[]): BuilderModelSwitchComparison[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+
+  const segments: { model: string; runs: RunRecord[] }[] = [];
+  for (const run of sorted) {
+    const lastSegment = segments[segments.length - 1];
+    if (lastSegment && lastSegment.model === run.models.builder) {
+      lastSegment.runs.push(run);
+    } else {
+      segments.push({ model: run.models.builder, runs: [run] });
+    }
+  }
+
+  if (segments.length < 2) return [];
+
+  const comparisons: BuilderModelSwitchComparison[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const before = toBuilderModelSwitchSegment(segments[i - 1].model, segments[i - 1].runs);
+    const after = toBuilderModelSwitchSegment(segments[i].model, segments[i].runs);
+    const approvalRateDelta = after.approvalRate - before.approvalRate;
+    const mergeRateDelta = after.mergeRate - before.mergeRate;
+    comparisons.push({
+      switchIndex: i,
+      before,
+      after,
+      approvalRateDelta,
+      mergeRateDelta,
+      approvalVerdict: builderMetricVerdict(approvalRateDelta, false),
+      mergeVerdict: builderMetricVerdict(mergeRateDelta, false),
+    });
+  }
+  return comparisons;
+}
+
 export interface IdeationFailureSummary {
   /** ideation が実際に実行された反復数（cost.ideationUsd > 0）。ready が既に足りていて
    *  ideation 自体がスキップされた反復（ideationUsd === 0）は分母に含めない。 */
