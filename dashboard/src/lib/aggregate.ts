@@ -774,6 +774,71 @@ export function reviseCyclesByModel(runs: RunRecord[]): ModelReviseCyclesSummary
     });
 }
 
+export interface ModelEffectivenessSummary {
+  model: string;
+  /** この model が builder として使われた反復数（verdict に関係なく全件） */
+  count: number;
+  /** develop にマージされた割合 0..1。分母は全件（verdict は必ず記録されるため） */
+  mergeRate: number;
+  /** adversary が approve した割合 0..1。分母は verify に到達した反復のみ */
+  approvalRate: number;
+  /** e2e が失敗した割合 0..1。分母は approvalRate と同じ母集団 */
+  e2eFailureRate: number;
+  /** verify に到達した反復での平均 revise 回数 */
+  avgReviseCycles: number;
+  /** verify に到達した反復での平均カバレッジ(%) */
+  avgCoveragePct: number;
+  /** 反復1件あたりの平均コスト(USD)。コストは verdict に関係なく発生するため全件が母集団 */
+  avgCostUsd: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * builder に使われたモデル別の「効果」測定（モデル選択の意思決定に使う比較指標）。
+ * reviseCyclesByModel が revise 回数の分布だけを見るのに対し、こちらはマージ率・承認率・
+ * e2e失敗率・コストまで含めた総合比較を行う。builder が実際にコードを書き、verdict/
+ * cost/reviseCycles を左右する役割であるため、costBreakdown.byModel（builder/adversary/
+ * ideation の全役割を合算）とは異なり run.models.builder のみで集計する。
+ * マージ率の降順（同値はモデル名の昇順）で、効果が高いモデルから並べる。
+ */
+export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary[] {
+  const byModel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const completed = modelRuns.filter(reachedVerify);
+      const mergedCount = modelRuns.filter((r) => r.verdict === 'merged').length;
+      const approvedCount = completed.filter((r) => r.adversary.approved).length;
+      const e2eFailedCount = completed.filter((r) => !r.verify.e2ePassed).length;
+      return {
+        model,
+        count: modelRuns.length,
+        mergeRate: mergedCount / modelRuns.length,
+        approvalRate: completed.length === 0 ? 0 : approvedCount / completed.length,
+        e2eFailureRate: completed.length === 0 ? 0 : e2eFailedCount / completed.length,
+        avgReviseCycles: mean(completed.map((r) => r.reviseCycles)),
+        avgCoveragePct: mean(completed.map((r) => r.verify.coveragePct)),
+        avgCostUsd: mean(modelRuns.map((r) => r.cost.totalUsd)),
+        iterations: modelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) => {
+      if (b.mergeRate !== a.mergeRate) return b.mergeRate - a.mergeRate;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 /**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は

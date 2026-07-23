@@ -25,6 +25,7 @@ import {
   costPerApprovedPrTrend,
   reviseCyclesByModel,
   breakerRunway,
+  modelEffectiveness,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1560,5 +1561,151 @@ describe('reviseCyclesByModel', () => {
     ];
     const result = reviseCyclesByModel(runs);
     expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('modelEffectiveness', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(modelEffectiveness([])).toEqual([]);
+  });
+
+  it('builder モデルごとにマージ率・承認率・e2e失敗率・平均revise・平均カバレッジ・平均コストを分けて集計する', () => {
+    const runs = [
+      // sonnet: merged 2件, needs-human 1件 → mergeRate = 2/3
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        reviseCycles: 0,
+        adversary: { approved: true, summary: '' },
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 90 },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        reviseCycles: 2,
+        adversary: { approved: true, summary: '' },
+        verify: { unitPassed: true, e2ePassed: false, coveragePct: 70 },
+        cost: { builderUsd: 3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 3 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        reviseCycles: 4,
+        adversary: { approved: false, summary: '' },
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 50 },
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      // haiku: needs-human 1件のみ → mergeRate = 0
+      makeRun({
+        iteration: 4,
+        verdict: 'needs-human',
+        reviseCycles: 1,
+        adversary: { approved: false, summary: '' },
+        verify: { unitPassed: false, e2ePassed: true, coveragePct: 40 },
+        cost: { builderUsd: 0.5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.5 },
+        models: { builder: 'claude-haiku-4-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+
+    const result = modelEffectiveness(runs);
+
+    // マージ率降順: sonnet(2/3) が haiku(0/1) より先
+    expect(result.map((r) => r.model)).toEqual(['claude-sonnet-5', 'claude-haiku-4-5']);
+
+    const sonnet = result[0];
+    expect(sonnet.count).toBe(3);
+    expect(sonnet.mergeRate).toBeCloseTo(2 / 3, 10);
+    expect(sonnet.approvalRate).toBeCloseTo(2 / 3, 10);
+    expect(sonnet.e2eFailureRate).toBeCloseTo(2 / 3, 10);
+    expect(sonnet.avgReviseCycles).toBeCloseTo(2, 10);
+    expect(sonnet.avgCoveragePct).toBeCloseTo(70, 10);
+    expect(sonnet.avgCostUsd).toBeCloseTo(2, 10);
+    expect(sonnet.iterations).toEqual([1, 2, 3]);
+
+    const haiku = result[1];
+    expect(haiku.count).toBe(1);
+    expect(haiku.mergeRate).toBe(0);
+    expect(haiku.approvalRate).toBe(0);
+    expect(haiku.e2eFailureRate).toBe(0);
+    expect(haiku.avgReviseCycles).toBeCloseTo(1, 10);
+    expect(haiku.avgCoveragePct).toBeCloseTo(40, 10);
+    expect(haiku.avgCostUsd).toBeCloseTo(0.5, 10);
+  });
+
+  it('failed run（verify未到達）は approvalRate/e2eFailureRate/avgReviseCycles/avgCoveragePct の母集団から除くが、mergeRate と avgCostUsd の母集団には含める', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 99,
+        adversary: { approved: false, summary: '' },
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+        cost: { builderUsd: 5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 5 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+
+    const result = modelEffectiveness(runs);
+    expect(result).toHaveLength(1);
+    const sonnet = result[0];
+
+    // mergeRate/avgCostUsd の分母は全2件
+    expect(sonnet.count).toBe(2);
+    expect(sonnet.mergeRate).toBeCloseTo(1 / 2, 10);
+    expect(sonnet.avgCostUsd).toBeCloseTo(3, 10);
+
+    // approvalRate/e2eFailureRate/avgReviseCycles/avgCoveragePct の分母は failed を除いた1件のみ
+    expect(sonnet.approvalRate).toBe(1);
+    expect(sonnet.e2eFailureRate).toBe(0);
+    expect(sonnet.avgReviseCycles).toBeCloseTo(1, 10);
+    expect(sonnet.avgCoveragePct).toBeCloseTo(80, 10);
+  });
+
+  it('全反復が failed（verify未到達）なら approvalRate/e2eFailureRate を 0 にしてNaNを避ける', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 5,
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = modelEffectiveness(runs);
+    expect(result[0].approvalRate).toBe(0);
+    expect(result[0].e2eFailureRate).toBe(0);
+    expect(result[0].avgReviseCycles).toBe(0);
+    expect(result[0].avgCoveragePct).toBe(0);
+    expect(result[0].mergeRate).toBe(0);
+  });
+
+  it('マージ率が同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        models: { builder: 'zeta-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        models: { builder: 'alpha-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = modelEffectiveness(runs);
+    expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
   });
 });
