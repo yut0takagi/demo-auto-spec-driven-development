@@ -39,7 +39,10 @@ class FakeGh:
     def close_issue(self, number, comment): self.actions.append(f"close:{number}")
     def create_issue(self, *, title, body, labels):
         self.created_issues.append(title)
-        return 900 + len(self.created_issues)
+        number = 900 + len(self.created_issues)
+        # 給油後に list_ready_issues を再取得したとき新しい燃料が見えるよう _issues にも反映する
+        self._issues.append(Issue(number=number, title=title, labels=list(labels)))
+        return number
 
 
 def approved_round(**overrides) -> RoundOutcome:
@@ -65,12 +68,13 @@ def make_clock(*timestamps: str):
 
 
 def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
-        proposals=("next idea",), clock=None):
+        proposals=("next idea",), clock=None, ideation_runner=None):
     """1 反復を実行するヘルパ。
 
     kill_switch_reader は 3 回呼ばれる:
       1 回目 = 反復開始時, 2 回目 = ラウンド後・PR 前, 3 回目 = マージ直前。
     `disable_on_call=N` で N 回目以降を無効にし、任意のチェックポイントを検証する。
+    `ideation_runner` を渡すと給油の挙動（呼び出し回数・提案内容）を差し替えられる。
     """
     calls = {"n": 0}
 
@@ -83,6 +87,9 @@ def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
     def round_runner(**_kwargs):
         return round_outcome or approved_round()
 
+    default_ideation = lambda **_k: (
+        [{"title": t, "body": "b"} for t in proposals], 0.01
+    )
     return run_iteration(
         gh=gh,
         cfg=cfg or Config.from_env({}),
@@ -91,7 +98,7 @@ def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
         clock=clock or make_clock(),
         kill_switch_reader=kill_switch_reader,
         round_runner=round_runner,
-        ideation_runner=lambda **_k: ([{"title": t, "body": "b"} for t in proposals], 0.01),
+        ideation_runner=ideation_runner or default_ideation,
     )
 
 
@@ -167,7 +174,9 @@ class TestHappyPath:
         assert record["prNumber"] == 123
         assert record["gateReasons"] == []
 
-    def test_creates_follow_up_issues_after_merge(self, tmp_path):
+    def test_low_backlog_is_refueled_with_proposed_issues(self, tmp_path):
+        # ready 1 件 < low_water(2) なので反復先頭で給油し、提案が loop:ready 付きで作成される
+        # （旧構造では merge 後にのみ生成していた）。
         gh = FakeGh()
         run(tmp_path, gh=gh, proposals=("idea A", "idea B"))
         assert gh.created_issues == ["idea A", "idea B"]
@@ -240,16 +249,82 @@ class TestGateFailures:
         assert record["prNumber"] is None
         assert record["gateReasons"]  # 不通過理由が記録されている
 
-    def test_blocked_iteration_does_not_create_follow_up_issues(self, tmp_path):
-        gh = FakeGh(changed_lines=9999)
-        run(tmp_path, gh=gh)
+    def test_blocked_iteration_still_refuels_low_backlog(self, tmp_path):
+        # 旧: 失敗反復は follow-up を作らなかった。新設計では給油は gate 結果と独立に反復先頭で
+        # 先回りするため、abandon で終わる反復でもバックログは補充される（枯れさせない意図的変更）。
+        gh = FakeGh(changed_lines=9999)  # ready 1 件 < low_water(2) → 冒頭で給油
+        result = run(tmp_path, gh=gh, proposals=("refuel idea",))
+        assert result.status == "abandoned"
+        assert gh.created_issues == ["refuel idea"]
+
+
+class TestSelfRefuel:
+    """バックログが枯れないよう、反復先頭で低水位なら ideation を先回り実行する。
+    ideation を merge 後だけに縛る旧構造では、ready が 0 になると二度と復活しなかった。
+    """
+
+    def test_empty_backlog_is_refueled_and_then_worked(self, tmp_path):
+        # ready が空でも給油して補充し、その issue に着手して前進する（旧構造は no-work で死ぬ）。
+        gh = FakeGh(issues=[])
+        result = run(tmp_path, gh=gh, proposals=("fresh idea",))
+        assert "fresh idea" in gh.created_issues
+        assert result.status == "merged"
+
+    def test_no_refuel_when_backlog_at_or_above_low_water(self, tmp_path):
+        # ready が閾値(2)以上なら給油しない。merge 後 ideation も廃止したので生成は 0 件。
+        gh = FakeGh(issues=[
+            Issue(number=1, title="a", labels=["loop:ready"]),
+            Issue(number=2, title="b", labels=["loop:ready"]),
+        ])
+        calls = {"n": 0}
+
+        def ideation(**_k):
+            calls["n"] += 1
+            return ([{"title": "x", "body": "b"}], 0.01)
+
+        run(tmp_path, gh=gh, ideation_runner=ideation)
+        assert calls["n"] == 0
         assert gh.created_issues == []
+
+    def test_drained_backlog_attempts_refuel_then_noops_if_nothing_proposed(self, tmp_path):
+        # 給油を試みても提案が 0 件なら no-work（クラッシュしない・次 cron で再挑戦）。
+        gh = FakeGh(issues=[])
+        calls = {"n": 0}
+
+        def ideation(**_k):
+            calls["n"] += 1
+            return ([], 0.0)
+
+        result = run(tmp_path, gh=gh, ideation_runner=ideation)
+        assert calls["n"] == 1
+        assert result.status == "no-work"
+        assert gh.created_issues == []
+
+    def test_refuel_dedupes_against_open_ready_titles(self, tmp_path):
+        # 枯れ際に既存オープンと同名を再生成しない（重複 issue 事故の防止）。
+        gh = FakeGh(issues=[Issue(number=5, title="keep me", labels=["loop:ready"])])
+        proposals = [{"title": "keep me", "body": "dup"}, {"title": "new one", "body": "b"}]
+        run(tmp_path, gh=gh, ideation_runner=lambda **_k: (proposals, 0.01))
+        assert gh.created_issues == ["new one"]
+
+    def test_refuel_cost_is_recorded_even_when_iteration_abandoned(self, tmp_path):
+        # 冒頭給油の ideation コストは、その反復が abandon で終わっても記録から消えない。
+        gh = FakeGh(issues=[])
+        result = run(
+            tmp_path, gh=gh,
+            ideation_runner=lambda **_k: ([{"title": "fresh idea", "body": "b"}], 0.02),
+            round_outcome=approved_round(e2e_passed=False),
+        )
+        assert result.status == "abandoned"
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["cost"]["ideationUsd"] == 0.02
 
 
 class TestNoWork:
-    def test_no_ready_issue_is_a_noop(self, tmp_path):
+    def test_no_ready_issue_and_no_proposals_is_a_noop(self, tmp_path):
+        # 給油を試みても提案が無ければ no-work。build 系の副作用も一切起きない。
         gh = FakeGh(issues=[])
-        result = run(tmp_path, gh=gh)
+        result = run(tmp_path, gh=gh, proposals=())
         assert result.status == "no-work"
         assert gh.actions == []
 
