@@ -9,6 +9,7 @@ import {
   earlyWarningSignal,
   gateReasonBreakdown,
   gateReasonBurdenTrend,
+  gateReasonTrendSignal,
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
@@ -493,6 +494,54 @@ test('ゲート理由の時系列burdenチャートが実データから導出�
   await expect(page.getByTestId('gate-reason-burden-iterations')).toContainText(
     `対象iteration: ${points.map((p) => p.iteration).join(', ')}`,
   );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由のカテゴリ別トレンドパネルが実データから導出した悪化/改善カテゴリ・比較windowを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = gateReasonTrendSignal(runs);
+
+  const panel = page.getByTestId('gate-reason-trend-panel');
+  await expect(panel).toBeVisible();
+
+  if (signal === null) {
+    // gateReasons を持つ反復が現状データでは1件しか無く（直前windowが取れない）、
+    // 判定不能メッセージのみが表示される経路。将来 run が積み増されればこの分岐は
+    // 下の else 側（実際の悪化/改善表示）に切り替わる。
+    await expect(panel).toContainText('反復数が少なく');
+    await expect(page.locator('[data-testid^="gate-reason-trend-row-"]')).toHaveCount(0);
+  } else {
+    // gateReasonTrendSignal()（別の計算経路）が返すカテゴリのうち横ばい以外を、
+    // コンポーネントと同じ「変化幅の大きい順」に並べ替えて期待値を作る。
+    const changed = signal.categories
+      .filter((c) => c.direction !== 'flat')
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+    if (changed.length === 0) {
+      await expect(page.getByTestId('gate-reason-trend-all-flat')).toBeVisible();
+    } else {
+      const rows = await page.locator('[data-testid^="gate-reason-trend-row-"]').all();
+      const renderedCategories = await Promise.all(
+        rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-trend-row-', '')),
+      );
+      expect(renderedCategories).toEqual(changed.map((c) => c.category));
+
+      for (const c of changed) {
+        const delta = page.getByTestId(`gate-reason-trend-delta-${c.category}`);
+        await expect(delta).toContainText(`${c.previousAvgCount.toFixed(1)} → ${c.recentAvgCount.toFixed(1)}件/反復`);
+      }
+    }
+
+    if (signal.partial) {
+      await expect(panel).toContainText('データ不足のため window 未満の反復数で計算');
+    }
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
