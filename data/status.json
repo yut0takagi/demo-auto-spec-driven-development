@@ -1,7 +1,7 @@
 {
-  "state": "HALTED",
-  "reason": "本日のコスト $11.61 が予算 $5.00 を超過した",
-  "actor": "breaker:daily-budget",
-  "updatedAt": "2026-07-23T06:54:52Z",
-  "resumeHint": "原因を確認後 gh variable set LOOP_ENABLED --body true"
+  "state": "RUNNING",
+  "reason": "直近の反復: merged",
+  "actor": "system",
+  "updatedAt": "2026-07-23T07:35:43Z",
+  "resumeHint": "gh variable set LOOP_ENABLED --body true && gh workflow enable loop.yml"
 }

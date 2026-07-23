@@ -1,0 +1,41 @@
+{
+  "id": "20260723T070956Z-38",
+  "iteration": 15,
+  "issue": {
+    "number": 38,
+    "title": "E2E テスト失敗率トレンド",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/38-e2e",
+  "startedAt": "2026-07-23T07:09:56Z",
+  "finishedAt": "2026-07-23T07:35:43Z",
+  "durationSec": 1547,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 43,
+  "adversary": {
+    "approved": true,
+    "summary": "要件と実装が正確に対応し、テストも母集団定義・累積計算・境界値を多角的に検証している。既存実装との一貫性も保持されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 205,
+  "cost": {
+    "builderUsd": 6.647497,
+    "adversaryUsd": 0.208552,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.856049
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
