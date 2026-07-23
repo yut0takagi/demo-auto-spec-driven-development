@@ -1,0 +1,43 @@
+{
+  "id": "20260723T234124Z-127",
+  "iteration": 77,
+  "issue": {
+    "number": 127,
+    "title": "ゲート理由の時系列カオス分析：連続非通過の根本原因パターン",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/127-task",
+  "startedAt": "2026-07-23T23:41:24Z",
+  "finishedAt": "2026-07-23T23:48:30Z",
+  "durationSec": 426,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク #127 の要件を完全に満たし、既存コードを壊さず、テストが実装の本質を検証している。チャオス分析の3段階判定、streak の適切な分断、新しい順の表示、型安全性の全てが実装されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.377869,
+    "adversaryUsd": 0.065205,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.443074
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
