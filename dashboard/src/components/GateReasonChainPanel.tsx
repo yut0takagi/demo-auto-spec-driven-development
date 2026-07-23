@@ -8,6 +8,7 @@ const CATEGORY_LABELS: Record<GateReasonCategory, string> = {
   verifyFailed: 'verify失敗',
   e2eFailed: 'e2e失敗',
   adversaryNotApproved: 'adversary未承認',
+  adversaryUnparseable: 'adversary出力解析不能',
   changedLinesExceeded: '変更行数超過',
   protectedPathViolation: '保護パス変更',
   noChanges: '変更なし',
