@@ -8,6 +8,7 @@ import {
   builderComparison,
   earlyWarningSignal,
   gateReasonBreakdown,
+  gateReasonCostBreakdown,
   gateReasonBurdenTrend,
   gateReasonTrendSignal,
   gateReasonChains,
@@ -521,6 +522,50 @@ test('ゲート理由の時系列burdenチャートが実データから導出�
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
+});
+
+test('ゲート失敗別 revise実質コストパネルが実データから導出した合計コスト・revise1回あたりコストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateReasonCostBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-cost-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCostUsd = breakdown.reduce((sum, b) => sum + b.totalCostUsd, 0);
+  await expect(panel).toContainText(`総コスト $${totalCostUsd.toFixed(2)}`);
+
+  // 各カテゴリ行が gateReasonCostBreakdown()（別の計算経路）と一致する合計コスト・反復数・
+  // revise1回あたりコストを表示する
+  for (const b of breakdown) {
+    const totalEl = page.getByTestId(`gate-reason-cost-total-${b.category}`);
+    await expect(totalEl).toHaveText(`$${b.totalCostUsd.toFixed(2)}（${b.runCount}反復）`);
+
+    const perReviseEl = page.getByTestId(`gate-reason-cost-per-revise-${b.category}`);
+    const expectedPerRevise =
+      b.avgCostUsdPerReviseCycle === null || b.avgDurationSecPerReviseCycle === null
+        ? 'revise無し（即abandon等）'
+        : `$${b.avgCostUsdPerReviseCycle.toFixed(3)} / ${(b.avgDurationSecPerReviseCycle / 60).toFixed(1)}分`;
+    await expect(perReviseEl).toHaveText(`revise 1回あたり: ${expectedPerRevise}`);
+  }
+
+  // 合計コスト降順で描画されていること（パネルの主張である「実質コスト」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="gate-reason-cost-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-cost-row-', '')),
+  );
+  expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
 });
 
 test('ゲート不通過理由のカテゴリ別トレンドパネルが実データから導出した悪化/改善カテゴリ・比較windowを表示する', async ({ page }) => {

@@ -19,6 +19,7 @@ import {
   REVISE_CYCLES_OUTLIER_THRESHOLD,
   classifyGateReason,
   gateReasonBreakdown,
+  gateReasonCostBreakdown,
   gateReasonBurdenTrend,
   gateReasonTrendSignal,
   GATE_REASON_TREND_WINDOW,
@@ -1262,6 +1263,105 @@ describe('gateReasonBreakdown', () => {
     const b = gateReasonBreakdown(runs);
     expect(b.find((x) => x.category === 'adversaryUnparseable')?.iterations).toEqual([1]);
     expect(b.find((x) => x.category === 'adversaryNotApproved')?.iterations).toEqual([2]);
+  });
+});
+
+describe('gateReasonCostBreakdown', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(gateReasonCostBreakdown([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonCostBreakdown(runs)).toEqual([]);
+  });
+
+  it('reviseCyclesが0より大きいrunでは cost/duration/reviseCycles を合算し、revise1回あたりの実質コストを算出する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        reviseCycles: 2,
+        durationSec: 600,
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        reviseCycles: 2,
+        durationSec: 400,
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+    ];
+    const b = gateReasonCostBreakdown(runs);
+    expect(b).toHaveLength(1);
+    expect(b[0].category).toBe('e2eFailed');
+    expect(b[0].count).toBe(2);
+    expect(b[0].runCount).toBe(2);
+    expect(b[0].totalCostUsd).toBeCloseTo(2, 5);
+    expect(b[0].totalDurationSec).toBe(1000);
+    expect(b[0].totalReviseCycles).toBe(4);
+    expect(b[0].avgCostUsdPerRun).toBeCloseTo(1, 5);
+    // 2USD合計 / revise4回 = 0.5USD/revise
+    expect(b[0].avgCostUsdPerReviseCycle).toBeCloseTo(0.5, 5);
+    // 1000秒合計 / revise4回 = 250秒/revise
+    expect(b[0].avgDurationSecPerReviseCycle).toBeCloseTo(250, 5);
+  });
+
+  it('該当カテゴリの全runが reviseCycles=0（即abandon等）なら revise1回あたりコストは null（0除算を避ける）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['反復が例外で異常終了した: boom'],
+        reviseCycles: 0,
+        cost: { builderUsd: 0.5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.5 },
+      }),
+    ];
+    const b = gateReasonCostBreakdown(runs);
+    expect(b[0].category).toBe('crashed');
+    expect(b[0].totalCostUsd).toBeCloseTo(0.5, 5);
+    expect(b[0].avgCostUsdPerReviseCycle).toBeNull();
+    expect(b[0].avgDurationSecPerReviseCycle).toBeNull();
+  });
+
+  it('1 run が同一カテゴリの reason を複数持っていても cost/duration/reviseCycles は run 単位で1回だけ加算する（重複計上しない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', 'adversary が approve していない'],
+        reviseCycles: 3,
+        durationSec: 900,
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+      }),
+    ];
+    const b = gateReasonCostBreakdown(runs);
+    expect(b[0].count).toBe(2); // 出現件数はgateReasonBreakdownと同じ定義で2件
+    expect(b[0].runCount).toBe(1); // だがcost集計の母数は1run
+    expect(b[0].totalCostUsd).toBeCloseTo(2, 5); // 2重計上されず2USDのまま
+    expect(b[0].totalReviseCycles).toBe(3);
+    expect(b[0].avgCostUsdPerReviseCycle).toBeCloseTo(2 / 3, 5);
+  });
+
+  it('複数カテゴリにまたがる場合、totalCostUsd降順で返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        reviseCycles: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        reviseCycles: 3,
+        cost: { builderUsd: 5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 5 },
+      }),
+    ];
+    const b = gateReasonCostBreakdown(runs);
+    expect(b.map((x) => x.category)).toEqual(['e2eFailed', 'noChanges']);
   });
 });
 
