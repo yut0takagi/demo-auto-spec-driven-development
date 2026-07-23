@@ -13,6 +13,7 @@ const PAGE_PATH = path.join(process.cwd(), 'src/app/page.tsx');
 const REVISE_CHART_PATH = path.join(process.cwd(), 'src/components/ReviseCyclesChart.tsx');
 const TIMELINE_PATH = path.join(process.cwd(), 'src/components/IterationTimeline.tsx');
 const BACKLOG_PATH = path.join(process.cwd(), 'src/components/BacklogPanel.tsx');
+const MODEL_COST_PATH = path.join(process.cwd(), 'src/components/ModelCostBreakdown.tsx');
 
 function readSource(file: string): string {
   return fs.readFileSync(file, 'utf8');
@@ -42,6 +43,7 @@ describe('README のダッシュボード解説と実際の画面表示の整合
 
   it.each([
     ...extractTrendChartTitles(pageSource),
+    'モデルコストの内訳',
     'revise 回数の分布',
     '直近の反復',
     'ループが生成した改善バックログ',
@@ -63,6 +65,7 @@ describe('README のダッシュボード解説と実際の画面表示の整合
     expect(readSource(REVISE_CHART_PATH)).toContain('revise 回数の分布');
     expect(readSource(TIMELINE_PATH)).toContain('直近の反復');
     expect(readSource(BACKLOG_PATH)).toContain('ループが生成した改善バックログ');
+    expect(readSource(MODEL_COST_PATH)).toContain('モデルコストの内訳');
   });
 
   it('ダッシュボードの見方セクションが Getting Started より後、Learn More より前に存在する', () => {
