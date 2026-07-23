@@ -1,0 +1,41 @@
+{
+  "id": "20260723T191121Z-101",
+  "iteration": 55,
+  "issue": {
+    "number": 101,
+    "title": "ゲート不通過の「連鎖的な理由」をパス別に可視化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/101-task",
+  "startedAt": "2026-07-23T19:11:21Z",
+  "finishedAt": "2026-07-23T19:33:57Z",
+  "durationSec": 1356,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 103,
+  "adversary": {
+    "approved": true,
+    "summary": "ゲート不通過の連鎖的理由をパス別に可視化する機能が完成。新規コンポーネント GateReasonChainPanel と aggregate.ts の gateReasonChains() 関数で要件を正確に実装。重複除外・反復降順の並びをテストが検証。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 306,
+  "cost": {
+    "builderUsd": 7.200125,
+    "adversaryUsd": 0.235726,
+    "ideationUsd": 0.0,
+    "totalUsd": 7.435851
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
