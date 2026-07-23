@@ -7,6 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
+    "pretypecheck": "rm -rf .next",
     "typecheck": "tsc --noEmit",
     "test:unit": "vitest run",
     "test:unit:cov": "vitest run --coverage",
