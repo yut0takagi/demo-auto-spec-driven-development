@@ -1,6 +1,13 @@
 import { test, expect } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize, e2eFailureRateTrend, costBreakdown, changedLinesTrend, builderComparison } from '../src/lib/aggregate';
+import {
+  summarize,
+  e2eFailureRateTrend,
+  costBreakdown,
+  changedLinesTrend,
+  builderComparison,
+  earlyWarningSignal,
+} from '../src/lib/aggregate';
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -298,6 +305,39 @@ test('Builder改善の前反復比較カードが直近2件の測定済み反復
     const expectedLabel = m.verdict === 'improved' ? '改善' : m.verdict === 'regressed' ? '悪化' : '変化なし';
     await expect(verdictEl).toContainText(expectedLabel);
   }
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('高revise + 低承認率の前兆検知カードが実データから導出したレベルと直近window値を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = earlyWarningSignal(runs);
+  expect(
+    signal,
+    'data/runs に verify 到達済みの反復が1件も無く、前兆検知カードの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const card = page.getByTestId('early-warning-card');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('data-level', signal!.level);
+
+  const levelLabel = signal!.level === 'critical' ? '警戒' : signal!.level === 'watch' ? '注視' : '平常';
+  await expect(page.getByTestId('early-warning-level')).toContainText(levelLabel);
+
+  // カードが表示する window 内平均revise・承認率は aggregate.earlyWarningSignal（別経路）と一致するはず
+  await expect(page.getByTestId('early-warning-revise-value')).toHaveText(
+    `${signal!.windowAvgReviseCycles.toFixed(1)}回`,
+  );
+  await expect(page.getByTestId('early-warning-approval-value')).toHaveText(
+    `${(signal!.windowApprovalRate * 100).toFixed(0)}%`,
+  );
+
+  await expect(card).toContainText(`対象iteration: ${signal!.iterations.join(', ')}`);
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');

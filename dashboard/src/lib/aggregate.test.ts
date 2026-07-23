@@ -12,6 +12,10 @@ import {
   costBreakdown,
   changedLinesTrend,
   builderComparison,
+  earlyWarningSignal,
+  EARLY_WARNING_WINDOW,
+  EARLY_WARNING_REVISE_THRESHOLD,
+  EARLY_WARNING_APPROVAL_THRESHOLD,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
 } from './aggregate';
 import type { RunRecord } from './types';
@@ -853,5 +857,154 @@ describe('builderComparison', () => {
     const byKey = Object.fromEntries(c!.metrics.map((m) => [m.key, m]));
     expect(byKey.reviseCycles).toMatchObject({ previous: 2, current: 1 });
     expect(byKey.changedLines).toMatchObject({ previous: 100, current: 10 });
+  });
+});
+
+describe('earlyWarningSignal', () => {
+  it('空配列では null を返す', () => {
+    expect(earlyWarningSignal([])).toBeNull();
+  });
+
+  it('reachedVerify な run が1件も無ければ null を返す（全件 failed）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed' })];
+    expect(earlyWarningSignal(runs)).toBeNull();
+  });
+
+  it('高revise・低承認が揃うと critical になる', () => {
+    // 直近3反復: 平均revise = (3+3+3)/3 = 3 (>2 の閾値超え)、承認率 = 0/3 = 0% (<50%)
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s).not.toBeNull();
+    expect(s!.level).toBe('critical');
+    expect(s!.highRevise).toBe(true);
+    expect(s!.lowApproval).toBe(true);
+    expect(s!.windowAvgReviseCycles).toBe(3);
+    expect(s!.windowApprovalRate).toBe(0);
+  });
+
+  it('高reviseのみ該当する場合は watch になる（承認率は閾値以上）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 3, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 3, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 3, adversary: { approved: true, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.level).toBe('watch');
+    expect(s!.highRevise).toBe(true);
+    expect(s!.lowApproval).toBe(false);
+  });
+
+  it('低承認のみ該当する場合は watch になる（revise回数は閾値以下）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, adversary: { approved: false, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.level).toBe('watch');
+    expect(s!.highRevise).toBe(false);
+    expect(s!.lowApproval).toBe(true);
+  });
+
+  it('どちらの条件も満たさなければ normal になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.level).toBe('normal');
+  });
+
+  it('平均revideが閾値ちょうどでは highRevise にならない（境界値、超過のみ真）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: EARLY_WARNING_REVISE_THRESHOLD }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: EARLY_WARNING_REVISE_THRESHOLD }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: EARLY_WARNING_REVISE_THRESHOLD }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.windowAvgReviseCycles).toBe(EARLY_WARNING_REVISE_THRESHOLD);
+    expect(s!.highRevise).toBe(false);
+  });
+
+  it('承認率が閾値ちょうどでは lowApproval にならない（境界値、未満のみ真）', () => {
+    // 承認率をちょうど50%にするため、window内 2件承認・2件非承認にしたいが window は直近3件。
+    // 3件では 50% ちょうどを作れないため window を4件用意しても直近3件しか見ないことを踏まえ、
+    // 直近3件のうち承認1件・非承認2件は 1/3≈33%、2件承認・1件非承認は 2/3≈67% になり
+    // ちょうど EARLY_WARNING_APPROVAL_THRESHOLD(0.5) を作れる組み合わせが無い。
+    // そのため windowSize=2 になるよう reachedVerify な run を2件だけ用意し、1/2=50%を作る。
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, adversary: { approved: false, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.windowSize).toBe(2);
+    expect(s!.windowApprovalRate).toBe(0.5);
+    expect(s!.lowApproval).toBe(false);
+  });
+
+  it(`直近 ${EARLY_WARNING_WINDOW} 反復のみを見て、それより古い反復は無視する`, () => {
+    // 古い2反復は高revise・低承認（critical条件）だが、直近3反復は normal 条件。
+    // window が正しく直近3件だけを見ていれば結果は normal になるはず。
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 5, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    expect(s!.windowSize).toBe(EARLY_WARNING_WINDOW);
+    expect(s!.iterations).toEqual([3, 4, 5]);
+    expect(s!.level).toBe('normal');
+    expect(s!.partial).toBe(false);
+  });
+
+  it('window に満たないデータ数では partial=true になり、あるだけの反復数で計算する', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, adversary: { approved: false, summary: '' } })];
+    const s = earlyWarningSignal(runs);
+    expect(s!.windowSize).toBe(1);
+    expect(s!.partial).toBe(true);
+    expect(s!.iterations).toEqual([1]);
+  });
+
+  it('failed run は window の対象から除外する（revise/approve が測定されていない sentinel のため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+      makeRun({
+        iteration: 3, verdict: 'failed', reviseCycles: 99,
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+      }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 3, adversary: { approved: false, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    // failed(iteration 3) を除外すると reachedVerify は [1,2,4] の3件で window ちょうど埋まる。
+    // reviseCycles=99 が紛れ込んでいれば平均が跳ね上がるが、実際は 3 のまま。
+    expect(s!.iterations).toEqual([1, 2, 4]);
+    expect(s!.windowAvgReviseCycles).toBe(3);
+  });
+
+  it('window は配列順に依存せず iteration の時系列順で直近を選ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 9, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 9, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: '' } }),
+    ];
+    const s = earlyWarningSignal(runs);
+    // 時系列(iteration昇順)は 1,2,3,4,5。直近3件は 3,4,5 で全て reviseCycles=0, approved=true。
+    expect(s!.iterations).toEqual([3, 4, 5]);
+    expect(s!.level).toBe('normal');
+  });
+
+  it('EARLY_WARNING_APPROVAL_THRESHOLD は 0..1 の範囲の定数である', () => {
+    expect(EARLY_WARNING_APPROVAL_THRESHOLD).toBeGreaterThan(0);
+    expect(EARLY_WARNING_APPROVAL_THRESHOLD).toBeLessThan(1);
   });
 });

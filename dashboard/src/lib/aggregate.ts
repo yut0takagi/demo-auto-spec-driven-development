@@ -369,6 +369,74 @@ export function builderComparison(runs: RunRecord[]): BuilderComparison | null {
   };
 }
 
+/** 前兆検知が直近何反復を見るか。3反復未満のデータしか無い場合はあるだけの反復で計算する。 */
+export const EARLY_WARNING_WINDOW = 3;
+/** window 内の平均 revise 回数がこれを超えると「高 revise」とみなす。 */
+export const EARLY_WARNING_REVISE_THRESHOLD = 2;
+/** window 内の承認率がこれ未満だと「低 approval」とみなす。 */
+export const EARLY_WARNING_APPROVAL_THRESHOLD = 0.5;
+
+/**
+ * critical: 高revise かつ 低approval の両方が揃っている（reviseCyclesが伸びているのに
+ *           adversaryの承認が付いていない = builderが迷走している前兆）。
+ * watch:    どちらか一方だけ該当。まだ「迷走」とは言えないが注視が要る。
+ * normal:   どちらにも該当しない。
+ */
+export type EarlyWarningLevel = 'critical' | 'watch' | 'normal';
+
+export interface EarlyWarningSignal {
+  level: EarlyWarningLevel;
+  /** 実際に計算に使った反復数（データが少ない場合は EARLY_WARNING_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** window が EARLY_WARNING_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  windowAvgReviseCycles: number;
+  /** 0..1 */
+  windowApprovalRate: number;
+  reviseCyclesThreshold: number;
+  approvalRateThreshold: number;
+  highRevise: boolean;
+  lowApproval: boolean;
+  /** window に含まれる iteration 番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * 「高 reviseCycles + 低 approval rate」の前兆パターンを検知する。
+ * サーキットブレーカ（breakerStreak）が実際に非マージの連続を数える「事後」の指標なのに対し、
+ * こちらは非マージにすら至っていない段階の「builderがrevise を重ねているのに承認されない」
+ * という予兆を、直近 window 反復のローリング集計で見る。
+ * reachedVerify で failed run を除外するのは他の trend 系関数と同じ理由
+ * （failed は revise/approve が測定されなかった sentinel を持つため）。
+ */
+export function earlyWarningSignal(runs: RunRecord[]): EarlyWarningSignal | null {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  if (completed.length === 0) return null;
+
+  const recentWindow = completed.slice(-EARLY_WARNING_WINDOW);
+  const windowAvgReviseCycles = mean(recentWindow.map((r) => r.reviseCycles));
+  const approvedCount = recentWindow.filter((r) => r.adversary.approved).length;
+  const windowApprovalRate = approvedCount / recentWindow.length;
+
+  const highRevise = windowAvgReviseCycles > EARLY_WARNING_REVISE_THRESHOLD;
+  const lowApproval = windowApprovalRate < EARLY_WARNING_APPROVAL_THRESHOLD;
+  const level: EarlyWarningLevel =
+    highRevise && lowApproval ? 'critical' : highRevise || lowApproval ? 'watch' : 'normal';
+
+  return {
+    level,
+    windowSize: recentWindow.length,
+    partial: recentWindow.length < EARLY_WARNING_WINDOW,
+    windowAvgReviseCycles,
+    windowApprovalRate,
+    reviseCyclesThreshold: EARLY_WARNING_REVISE_THRESHOLD,
+    approvalRateThreshold: EARLY_WARNING_APPROVAL_THRESHOLD,
+    highRevise,
+    lowApproval,
+    iterations: recentWindow.map((r) => r.iteration),
+  };
+}
+
 export type CostRole = 'builder' | 'adversary' | 'ideation';
 
 const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
