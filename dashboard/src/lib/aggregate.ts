@@ -437,6 +437,85 @@ export function earlyWarningSignal(runs: RunRecord[]): EarlyWarningSignal | null
   };
 }
 
+/**
+ * gateReasons の分類。orchestrator/gates.py の evaluate_gate 等が生成する文字列
+ * テンプレートに合わせている。変更行数・保護パス・例外メッセージは値が動的に埋め込まれる
+ * ため、完全一致ではなくプレフィックス/サフィックスで判定する。どれにも合致しなければ 'other'。
+ */
+export type GateReasonCategory =
+  | 'verifyFailed'
+  | 'e2eFailed'
+  | 'adversaryNotApproved'
+  | 'changedLinesExceeded'
+  | 'protectedPathViolation'
+  | 'noChanges'
+  | 'crashed'
+  | 'other';
+
+/** count 同値のときの表示順（gates.py の evaluate_gate が理由を積む順に揃えている）。 */
+const GATE_REASON_CATEGORY_ORDER: readonly GateReasonCategory[] = [
+  'verifyFailed',
+  'e2eFailed',
+  'adversaryNotApproved',
+  'changedLinesExceeded',
+  'protectedPathViolation',
+  'noChanges',
+  'crashed',
+  'other',
+];
+
+export function classifyGateReason(reason: string): GateReasonCategory {
+  if (reason === 'verify(lint/typecheck/unit/build) が失敗している') return 'verifyFailed';
+  if (reason === 'e2e(Playwright) が失敗している') return 'e2eFailed';
+  if (reason === 'adversary が approve していない') return 'adversaryNotApproved';
+  if (reason === 'builder が変更を生成しなかった') return 'noChanges';
+  if (reason.startsWith('変更行数 ') && reason.endsWith('を超えている')) return 'changedLinesExceeded';
+  if (reason.startsWith('保護パスを変更している: ')) return 'protectedPathViolation';
+  if (reason.startsWith('反復が例外で異常終了した: ')) return 'crashed';
+  return 'other';
+}
+
+export interface GateReasonCategorySummary {
+  category: GateReasonCategory;
+  /** このカテゴリの gateReasons 出現数（1 run が複数件持つ場合は複数カウント） */
+  count: number;
+  /** 該当した反復番号（重複なし・昇順） */
+  iterations: number[];
+  /** 実際に出現した理由文字列（重複除去・昇順） */
+  examples: string[];
+}
+
+/** 全 run の gateReasons を分類ごとに集計する。count 降順、同数は評価順で安定させる。 */
+export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummary[] {
+  const byCategory = new Map<GateReasonCategory, { count: number; iterations: Set<number>; examples: Set<string> }>();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const reason of run.gateReasons) {
+      const category = classifyGateReason(reason);
+      let entry = byCategory.get(category);
+      if (!entry) {
+        entry = { count: 0, iterations: new Set(), examples: new Set() };
+        byCategory.set(category, entry);
+      }
+      entry.count++;
+      entry.iterations.add(run.iteration);
+      entry.examples.add(reason);
+    }
+  }
+
+  return [...byCategory.entries()]
+    .map(([category, entry]) => ({
+      category,
+      count: entry.count,
+      iterations: [...entry.iterations].sort((a, b) => a - b),
+      examples: [...entry.examples].sort(),
+    }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+    });
+}
+
 export type CostRole = 'builder' | 'adversary' | 'ideation';
 
 const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
