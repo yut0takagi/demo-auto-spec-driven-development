@@ -44,6 +44,9 @@ import {
   ideationToStartLeadTimes,
   ideationToStartLeadTimeTrendSignal,
   ideationStartSuccessSummary,
+  verdictTransitions,
+  verdictTransitionSummary,
+  dropoutStreaks,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1653,4 +1656,47 @@ test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実デ�
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
+});
+
+test('Verdict遷移の自動分類・離脱パターン検知パネルが実データから導出した遷移種別・離脱区間を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const transitions = verdictTransitions(runs);
+  expect(
+    transitions.length,
+    'data/runs の反復数が2件未満で、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('verdict-transition-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${transitions.length}遷移`);
+
+  // 遷移種別ごとの件数・割合が verdictTransitionSummary()（別の計算経路）と一致するはず
+  const summary = verdictTransitionSummary(runs);
+  for (const s of summary) {
+    const countEl = page.getByTestId(`verdict-transition-kind-count-${s.kind}`);
+    await expect(countEl).toHaveText(`${s.count}件 (${s.pct.toFixed(1)}%)`);
+  }
+  // count降順で描画されていること
+  const kindEls = await page.locator('[data-testid^="verdict-transition-kind-count-"]').all();
+  const renderedKinds = await Promise.all(
+    kindEls.map(async (el) => (await el.getAttribute('data-testid'))!.replace('verdict-transition-kind-count-', '')),
+  );
+  expect(renderedKinds).toEqual(summary.map((s) => s.kind));
+
+  // 離脱パターン（非マージ連続）が dropoutStreaks()（別の計算経路）と一致する件数・区間・結末を表示するはず
+  const streaks = dropoutStreaks(runs);
+  await expect(page.getByTestId('dropout-streak-count')).toHaveText(`${streaks.length}件`);
+  for (const s of streaks) {
+    const row = page.getByTestId(`dropout-streak-row-${s.startIteration}`);
+    await expect(row).toContainText(`iteration ${s.startIteration}〜${s.endIteration}（${s.length}反復連続）`);
+    await expect(row).toContainText(`浪費コスト $${s.totalCostUsd.toFixed(2)}`);
+    expect(await row.getAttribute('data-outcome')).toBe(s.outcome);
+  }
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
 });

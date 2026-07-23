@@ -72,6 +72,10 @@ import {
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
   IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
   ideationStartSuccessSummary,
+  verdictTransitions,
+  verdictTransitionSummary,
+  dropoutStreaks,
+  DROPOUT_STREAK_MIN_LENGTH,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -4564,5 +4568,172 @@ describe('adversaryOutcomeDivergence', () => {
     ];
     // 両モデルとも乖離率0%で同率 → モデル名昇順
     expect(adversaryOutcomeDivergence(runs).map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
+  });
+});
+
+describe('verdictTransitions / verdictTransitionSummary', () => {
+  it('run が1件以下なら空配列を返す（比較対象となる隣接ペアが無い）', () => {
+    expect(verdictTransitions([])).toEqual([]);
+    expect(verdictTransitions([makeRun({ iteration: 1, verdict: 'merged' })])).toEqual([]);
+    expect(verdictTransitionSummary([makeRun({ iteration: 1 })])).toEqual([]);
+  });
+
+  it('iteration昇順で隣接する2件ごとに from/to/kind を持つ遷移を作る（入力順に依存しない）', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+    ];
+    const transitions = verdictTransitions(runs);
+    expect(transitions).toEqual([
+      { fromIteration: 1, toIteration: 2, from: 'failed', to: 'abandoned', kind: 'shiftedFailure' },
+      { fromIteration: 2, toIteration: 3, from: 'abandoned', to: 'merged', kind: 'recovered' },
+    ]);
+  });
+
+  it('merged→非merged は regressed、非merged→merged は recovered、merged→merged は sustainedSuccess', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const kinds = verdictTransitions(runs).map((t) => t.kind);
+    expect(kinds).toEqual(['sustainedSuccess', 'regressed', 'recovered']);
+  });
+
+  it('非merged→同じverdict は repeatedFailure、非merged→別verdict は shiftedFailure', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'needs-human' }),
+    ];
+    const kinds = verdictTransitions(runs).map((t) => t.kind);
+    expect(kinds).toEqual(['repeatedFailure', 'shiftedFailure']);
+  });
+
+  it('summaryは出現した種別だけをcount降順で返し、0件の種別は含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+    ];
+    const summary = verdictTransitionSummary(runs);
+    // 3遷移中: merged→merged(sustainedSuccess)×2, merged→failed(regressed)×1
+    expect(summary).toEqual([
+      { kind: 'sustainedSuccess', count: 2, pct: expect.closeTo(66.6666, 3) },
+      { kind: 'regressed', count: 1, pct: expect.closeTo(33.3333, 3) },
+    ]);
+    expect(summary.some((s) => s.kind === 'recovered')).toBe(false);
+  });
+
+  it('countが同数のときはVERDICT_TRANSITION_KIND_ORDER（sustainedSuccess→recovered→repeatedFailure→shiftedFailure→regressed）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }), // regressed
+      makeRun({ iteration: 3, verdict: 'merged' }), // recovered
+      makeRun({ iteration: 4, verdict: 'merged' }), // sustainedSuccess
+    ];
+    // 3遷移すべてcount=1で同数 → 定義順
+    expect(verdictTransitionSummary(runs).map((s) => s.kind)).toEqual(['sustainedSuccess', 'recovered', 'regressed']);
+  });
+});
+
+describe('dropoutStreaks', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(dropoutStreaks([])).toEqual([]);
+  });
+
+  it('DROPOUT_STREAK_MIN_LENGTH(既定2)未満の単発非マージは連続として扱わない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    expect(DROPOUT_STREAK_MIN_LENGTH).toBe(2);
+    expect(dropoutStreaks(runs)).toEqual([]);
+  });
+
+  it('非マージが2回以上連続しmergedで途切れると recovered として区切る', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'needs-human',
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+      }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const streaks = dropoutStreaks(runs);
+    expect(streaks).toHaveLength(1);
+    expect(streaks[0]).toEqual({
+      startIteration: 1,
+      endIteration: 2,
+      length: 2,
+      verdicts: ['failed', 'needs-human'],
+      iterations: [1, 2],
+      outcome: 'recovered',
+      endedInAbandonment: false,
+      totalCostUsd: 3,
+    });
+  });
+
+  it('連続がデータ終端まで続き最後がabandonedなら droppedOut と分類する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ];
+    const streaks = dropoutStreaks(runs);
+    expect(streaks).toHaveLength(1);
+    expect(streaks[0].outcome).toBe('droppedOut');
+    expect(streaks[0].endedInAbandonment).toBe(true);
+    expect(streaks[0].startIteration).toBe(2);
+    expect(streaks[0].endIteration).toBe(3);
+  });
+
+  it('連続がデータ終端まで続くが最後がabandonedでなければ ongoing と分類する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+    ];
+    const streaks = dropoutStreaks(runs);
+    expect(streaks).toHaveLength(1);
+    expect(streaks[0].outcome).toBe('ongoing');
+    expect(streaks[0].endedInAbandonment).toBe(false);
+  });
+
+  it('mergedを挟んで複数の独立した連続区間を検知し、それぞれ独立に分類する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+      makeRun({ iteration: 5, verdict: 'abandoned' }),
+      makeRun({ iteration: 6, verdict: 'abandoned' }),
+    ];
+    const streaks = dropoutStreaks(runs);
+    expect(streaks.map((s) => [s.startIteration, s.endIteration, s.outcome])).toEqual([
+      [1, 2, 'recovered'],
+      [5, 6, 'droppedOut'],
+    ]);
+  });
+
+  it('paused/dry-runもmergedではない非マージとして連続の一部にカウントする（breakerStreakとは異なる母集団）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused' }),
+      makeRun({ iteration: 2, verdict: 'dry-run' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const streaks = dropoutStreaks(runs);
+    expect(streaks).toHaveLength(1);
+    expect(streaks[0].verdicts).toEqual(['paused', 'dry-run']);
+    expect(streaks[0].outcome).toBe('recovered');
   });
 });
