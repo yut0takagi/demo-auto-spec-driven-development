@@ -1,0 +1,41 @@
+{
+  "id": "20260723T144707Z-70",
+  "iteration": 35,
+  "issue": {
+    "number": 70,
+    "title": "モデル選択の効果測定（Sonnet vs Haiku 別集計）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/70-sonnet-vs-haiku",
+  "startedAt": "2026-07-23T14:47:07Z",
+  "finishedAt": "2026-07-23T15:05:21Z",
+  "durationSec": 1094,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 74,
+  "adversary": {
+    "approved": true,
+    "summary": "モデル別効果測定（Sonnet vs Haiku）の要件を正確に実装。集計ロジックは正しくモデル分離し、UI は重要度順に指標を表示。テストが具体的なシナリオで数値精度と並び順を検証している。既存の挙動・データ契約を壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 443,
+  "cost": {
+    "builderUsd": 6.105106,
+    "adversaryUsd": 0.127964,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.23307
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
