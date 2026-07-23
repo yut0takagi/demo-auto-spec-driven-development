@@ -38,6 +38,8 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   adversaryApprovalByReasonAndModel,
+  pausedDryRunSummary,
+  pausedDryRunDetails,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1443,6 +1445,76 @@ test('Abandoned反復の追跡・分析パネルが実データから導出し�
   const nonAbandonedIterations = runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(nonAbandonedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = pausedDryRunSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に paused/dry-run な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('paused-dryrun-survival-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは pausedDryRunSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('paused-dryrun-count')).toHaveText(`${summary.count}件`);
+
+  // 停止理由別の行は該当件数がある理由だけ存在し、平均/最長生存反復数・PR開設件数・合計コストが一致するはず
+  for (const r of summary.reasons) {
+    const row = page.getByTestId(`paused-dryrun-reason-${r.stopReason}`);
+    await expect(row).toContainText(`${r.count}件`);
+    await expect(row).toContainText(`平均生存${r.avgSurvivalIterations.toFixed(1)}反復`);
+    await expect(row).toContainText(`最長生存${r.maxSurvivalIterations}反復`);
+    await expect(row).toContainText(`PR開設${r.openPrCount}件`);
+    await expect(row).toContainText(`$${r.totalCostUsd.toFixed(2)}`);
+  }
+  const allStopReasons = ['paused', 'dry-run'] as const;
+  for (const stopReason of allStopReasons) {
+    if (!summary.reasons.some((r) => r.stopReason === stopReason)) {
+      await expect(page.getByTestId(`paused-dryrun-reason-${stopReason}`)).toHaveCount(0);
+    }
+  }
+
+  if (summary.longestSurviving) {
+    const longest = page.getByTestId('paused-dryrun-longest');
+    await expect(longest).toContainText(`issue #${summary.longestSurviving.issueNumber}`);
+    await expect(longest).toContainText(`${summary.longestSurviving.survivalIterations}反復経過`);
+  }
+
+  // 一覧は pausedDryRunDetails()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = pausedDryRunDetails(runs);
+  const rows = page.locator('[data-testid^="paused-dryrun-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`paused-dryrun-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+    await expect(row).toContainText(d.prNumber !== null ? `PR #${d.prNumber}` : 'PRなし');
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('paused-dryrun-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: paused/dry-run 以外の verdict はこの一覧に現れてはいけない
+  const otherVerdictIterations = runs
+    .filter((r) => r.verdict !== 'paused' && r.verdict !== 'dry-run')
+    .map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(otherVerdictIterations).not.toContain(it);
   }
 
   const body = await bodyTextExcludingFreeform(page);

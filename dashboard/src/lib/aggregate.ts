@@ -2337,3 +2337,107 @@ export function abandonedIterationDetails(runs: RunRecord[]): AbandonedIteration
       builderModel: r.models.builder,
     }));
 }
+
+/**
+ * types.ts の Verdict コメントの通り、paused は「人間がキルスイッチで止めた」、
+ * dry-run は「最初からマージしない設定だった」という別事象。gateReasons はどちらも
+ * ゲート自体は通過しているため常に空配列で、abandoned のように理由を分類できない。
+ * 「停止理由」はこの2値そのものが表す。
+ */
+export type PausedDryRunStopReason = 'paused' | 'dry-run';
+
+const PAUSED_DRY_RUN_STOP_REASONS: readonly PausedDryRunStopReason[] = ['paused', 'dry-run'];
+
+export interface PausedDryRunDetail {
+  iteration: number;
+  issueNumber: number;
+  issueTitle: string;
+  stopReason: PausedDryRunStopReason;
+  /** PRが実際に開かれていれば番号、そうでなければ null */
+  prNumber: number | null;
+  durationSec: number;
+  costUsd: number;
+  /**
+   * この反復の完了後、runs 全体の最新反復に至るまで何反復が経過したか。
+   * paused/dry-run はマージされず PR が開いたまま次の反復に進むため、値が大きいほど
+   * 「後続の反復から取り残され、放置され続けている」ことを意味する（＝生存時間）。
+   * 経過時刻(Date.now)ではなく反復数で測るのは、このダッシュボードが静的ビルド時点の
+   * データのみから決定的に計算する設計だから（ビルド時刻に依存する値は持たない）。
+   */
+  survivalIterations: number;
+}
+
+/**
+ * paused/dry-run 反復ごとの追跡用詳細一覧。abandonedIterationDetails と同様、新しい
+ * 反復から順に並べる。survivalIterations の基準となる最新反復は runs 全体（paused/dry-run
+ * に絞る前）から決める: そうしないと「ループ全体で何反復進んだか」ではなく「他のpaused/
+ * dry-run反復と比べて」という別の意味になってしまう。
+ */
+export function pausedDryRunDetails(runs: RunRecord[]): PausedDryRunDetail[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+  const latestIteration = sorted[sorted.length - 1].iteration;
+
+  return sorted
+    .filter((r): r is RunRecord & { verdict: PausedDryRunStopReason } => r.verdict === 'paused' || r.verdict === 'dry-run')
+    .reverse()
+    .map((r) => ({
+      iteration: r.iteration,
+      issueNumber: r.issue.number,
+      issueTitle: r.issue.title,
+      stopReason: r.verdict,
+      prNumber: r.prNumber,
+      durationSec: r.durationSec,
+      costUsd: r.cost.totalUsd,
+      survivalIterations: latestIteration - r.iteration,
+    }));
+}
+
+export interface PausedDryRunReasonSummary {
+  stopReason: PausedDryRunStopReason;
+  count: number;
+  avgSurvivalIterations: number;
+  maxSurvivalIterations: number;
+  /** この停止理由に属する反復の合計コスト(USD)。実際に消費された値をそのまま合算する */
+  totalCostUsd: number;
+  /** このうち実際に PR が開かれていた（prNumber !== null）件数 */
+  openPrCount: number;
+}
+
+export interface PausedDryRunSummary {
+  /** paused または dry-run だった反復数の合計 */
+  count: number;
+  /** 停止理由別の内訳。該当反復が0件の理由はここに含めない */
+  reasons: PausedDryRunReasonSummary[];
+  /** survivalIterations が最大（最も長く放置されている）反復。該当反復が1件も無ければ null */
+  longestSurviving: PausedDryRunDetail | null;
+}
+
+/**
+ * paused/dry-run 反復を「停止理由」（paused か dry-run か）別に集計し、あわせて
+ * 「生存時間」(survivalIterations) の平均・最大を見せる。abandonedSummary が
+ * gateReasons のカテゴリで分岐するのに対し、こちらは停止理由自体が2値で、かつ
+ * ゲート不通過ではなく「通過したのにマージされていない」状態が対象になる。
+ */
+export function pausedDryRunSummary(runs: RunRecord[]): PausedDryRunSummary {
+  const details = pausedDryRunDetails(runs);
+
+  const reasons = PAUSED_DRY_RUN_STOP_REASONS.map((stopReason) => {
+    const subset = details.filter((d) => d.stopReason === stopReason);
+    return {
+      stopReason,
+      count: subset.length,
+      avgSurvivalIterations: mean(subset.map((d) => d.survivalIterations)),
+      maxSurvivalIterations: subset.length === 0 ? 0 : Math.max(...subset.map((d) => d.survivalIterations)),
+      totalCostUsd: subset.reduce((sum, d) => sum + d.costUsd, 0),
+      openPrCount: subset.filter((d) => d.prNumber !== null).length,
+    };
+  }).filter((r) => r.count > 0);
+
+  const longestSurviving =
+    details.length === 0
+      ? null
+      : details.reduce((longest, d) => (d.survivalIterations > longest.survivalIterations ? d : longest));
+
+  return { count: details.length, reasons, longestSurviving };
+}
