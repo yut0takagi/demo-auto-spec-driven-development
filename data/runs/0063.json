@@ -1,0 +1,45 @@
+{
+  "id": "20260723T204416Z-107",
+  "iteration": 63,
+  "issue": {
+    "number": 107,
+    "title": "Issue 生成から Issue クローズまでの解決時間トレンド",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/107-issue-issue",
+  "startedAt": "2026-07-23T20:44:16Z",
+  "finishedAt": "2026-07-23T20:58:17Z",
+  "durationSec": 841,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 116,
+  "adversary": {
+    "approved": true,
+    "summary": "要件（Issue 生成から Issue クローズまでの解決時間トレンド）を正確に実装し、境界値・エッジケース・UI の一貫性を網羅したテストで検証。既存コンポーネントとの設計パターン統一も確認。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 748,
+  "cost": {
+    "builderUsd": 5.092257,
+    "adversaryUsd": 0.152179,
+    "ideationUsd": 0.12058849999999999,
+    "totalUsd": 5.365025
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    113,
+    114,
+    115
+  ]
+}
