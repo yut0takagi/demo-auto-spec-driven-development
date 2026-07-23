@@ -1,0 +1,41 @@
+{
+  "id": "20260723T122819Z-49",
+  "iteration": 24,
+  "issue": {
+    "number": 49,
+    "title": "モデルコストの内訳ダッシュボード",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/49-task",
+  "startedAt": "2026-07-23T12:28:19Z",
+  "finishedAt": "2026-07-23T12:41:35Z",
+  "durationSec": 796,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 56,
+  "adversary": {
+    "approved": true,
+    "summary": "モデルコストの内訳ダッシュボード実装が要件を完全に満たしている。costBreakdown() は役割別・モデル別集計を正確に計算し、failed反復も含める仕様に従う。コンポーネント実装は accessibilityを含む堅牢な設計、README整合性テストは完備、e2e テストは曖昧性を排除した直接検証に改善されている。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 59,
+  "cost": {
+    "builderUsd": 3.463868,
+    "adversaryUsd": 0.134728,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.598596
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
