@@ -1,0 +1,41 @@
+{
+  "id": "20260723T134557Z-65",
+  "iteration": 29,
+  "issue": {
+    "number": 65,
+    "title": "Cost 効率（USD per 承認 PR）パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/65-cost-usd-per-pr",
+  "startedAt": "2026-07-23T13:45:57Z",
+  "finishedAt": "2026-07-23T14:08:23Z",
+  "durationSec": 1346,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 67,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を完全に満たし、承認PR判定ロジック（approved+prNumber両方で確定）と失敗コスト分子算入が正確に実装されている。テストは境界値・異常系を網羅して実装を実質的に検証している。既存コードへの破壊的変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 461,
+  "cost": {
+    "builderUsd": 6.596382,
+    "adversaryUsd": 0.122318,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.7187
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
