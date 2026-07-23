@@ -1,0 +1,41 @@
+{
+  "id": "20260723T140825Z-64",
+  "iteration": 30,
+  "issue": {
+    "number": 64,
+    "title": "Gate 理由の時系列 burden グラフ",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/64-gate-burden",
+  "startedAt": "2026-07-23T14:08:25Z",
+  "finishedAt": "2026-07-23T14:17:24Z",
+  "durationSec": 539,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 68,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たし、既存機能を損なわず、実装を実質的に検証するテストが揃っている。ゲート理由の時系列推移を積み上げ棒グラフで正確に可視化する実装は正しく動作する。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 356,
+  "cost": {
+    "builderUsd": 3.043606,
+    "adversaryUsd": 0.051319,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.094925
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
