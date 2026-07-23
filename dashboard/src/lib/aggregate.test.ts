@@ -1150,6 +1150,27 @@ describe('classifyGateReason', () => {
     expect(classifyGateReason('未知の理由')).toBe('other');
     expect(classifyGateReason('')).toBe('other');
   });
+
+  it('adversarySummary が orchestrator/review.py の技術的棄却文言のときだけ adversaryUnparseable に分岐する', () => {
+    // JSON を取り出せなかった場合の文言（review.py の _REJECT_UNPARSEABLE と完全一致）
+    expect(
+      classifyGateReason('adversary が approve していない', 'adversary の出力を解釈できないため棄却として扱う'),
+    ).toBe('adversaryUnparseable');
+    // approved が真偽値でなかった場合の文言（先頭が固定、末尾に元summaryが動的に付く）
+    expect(
+      classifyGateReason('adversary が approve していない', 'approved が真偽値でないため棄却: よさそう'),
+    ).toBe('adversaryUnparseable');
+    // 内容を読んで却下した場合の通常summaryは従来通り adversaryNotApproved のまま
+    expect(
+      classifyGateReason('adversary が approve していない', '既存の挙動を壊している'),
+    ).toBe('adversaryNotApproved');
+    // adversarySummary を渡さない呼び出しは後方互換で adversaryNotApproved に丸める
+    expect(classifyGateReason('adversary が approve していない')).toBe('adversaryNotApproved');
+    // adversary が approve していない 以外の reason では adversarySummary を渡しても影響しない
+    expect(
+      classifyGateReason('e2e(Playwright) が失敗している', 'adversary の出力を解釈できないため棄却として扱う'),
+    ).toBe('e2eFailed');
+  });
 });
 
 describe('gateReasonBreakdown', () => {
@@ -1219,6 +1240,26 @@ describe('gateReasonBreakdown', () => {
       '変更行数 500 が上限 400 を超えている',
     ]);
   });
+
+  it('reasonの文字列だけでは同一の "adversary が approve していない" でも adversary.summary で adversaryUnparseable と adversaryNotApproved に分離する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '既存の挙動を壊している' },
+      }),
+    ];
+    const b = gateReasonBreakdown(runs);
+    expect(b.find((x) => x.category === 'adversaryUnparseable')?.iterations).toEqual([1]);
+    expect(b.find((x) => x.category === 'adversaryNotApproved')?.iterations).toEqual([2]);
+  });
 });
 
 describe('gateReasonBurdenTrend', () => {
@@ -1273,6 +1314,21 @@ describe('gateReasonBurdenTrend', () => {
     const points = gateReasonBurdenTrend(runs);
     expect(points.map((p) => p.iteration)).toEqual([1, 2, 3]);
   });
+
+  it('adversary.summaryが技術的棄却の文言なら adversaryUnparseable に計上し、adversaryNotApproved は増やさない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+    ];
+    const points = gateReasonBurdenTrend(runs);
+    expect(points[0].counts.adversaryUnparseable).toBe(1);
+    expect(points[0].counts.adversaryNotApproved).toBe(0);
+    expect(points[0].total).toBe(1);
+  });
 });
 
 describe('gateReasonTrendSignal', () => {
@@ -1324,7 +1380,8 @@ describe('gateReasonTrendSignal', () => {
     expect(byCategory.e2eFailed.delta).toBe(0);
     // 一度も出現していないカテゴリも横ばいとして含まれる（全カテゴリを列挙する契約）
     expect(byCategory.crashed.direction).toBe('flat');
-    expect(signal.categories).toHaveLength(8);
+    // GATE_REASON_CATEGORY_ORDER の全カテゴリ数（adversaryUnparseable 追加後）
+    expect(signal.categories).toHaveLength(9);
   });
 
   it('閾値未満のブレは横ばい、閾値ちょうどは悪化/改善として扱う（境界値）', () => {
@@ -1411,6 +1468,27 @@ describe('gateReasonChains', () => {
     ];
     const chains = gateReasonChains(runs);
     expect(chains.map((c) => c.iteration)).toEqual([3, 2, 1]);
+  });
+
+  it('adversaryの応答が構造化できず技術的に棄却された反復は、内容を読んで却下した反復と別カテゴリ(adversaryUnparseable)になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '既存の挙動を壊している' },
+      }),
+    ];
+    const chains = gateReasonChains(runs);
+    // iteration降順で返るので[0]がiteration2、[1]がiteration1
+    expect(chains[0].categories).toEqual(['adversaryNotApproved']);
+    expect(chains[1].categories).toEqual(['adversaryUnparseable']);
   });
 });
 

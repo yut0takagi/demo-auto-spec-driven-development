@@ -100,4 +100,30 @@ describe('GateReasonChainPanel', () => {
     const panel = container.querySelector('[data-testid="gate-reason-chain-panel"]');
     expect(panel?.textContent).toContain('2パス');
   });
+
+  it('adversaryの応答が構造化できず技術的に棄却された反復は、内容を読んで却下したパスと別カテゴリとして描画される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '既存の挙動を壊している' },
+      }),
+    ];
+    const { container } = render(<GateReasonChainPanel runs={runs} />);
+
+    const row1 = container.querySelector('[data-testid="gate-reason-chain-row-1"]');
+    const row2 = container.querySelector('[data-testid="gate-reason-chain-row-2"]');
+    expect(row1?.querySelector('[data-testid="gate-reason-chain-category-1-adversaryUnparseable"]')).not.toBeNull();
+    expect(row1?.querySelector('[data-testid="gate-reason-chain-category-1-adversaryNotApproved"]')).toBeNull();
+    expect(row2?.querySelector('[data-testid="gate-reason-chain-category-2-adversaryNotApproved"]')).not.toBeNull();
+    expect(row2?.querySelector('[data-testid="gate-reason-chain-category-2-adversaryUnparseable"]')).toBeNull();
+    expect(row1?.textContent).toContain('adversary出力解析不能');
+  });
 });

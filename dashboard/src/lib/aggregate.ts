@@ -692,6 +692,7 @@ export type GateReasonCategory =
   | 'verifyFailed'
   | 'e2eFailed'
   | 'adversaryNotApproved'
+  | 'adversaryUnparseable'
   | 'changedLinesExceeded'
   | 'protectedPathViolation'
   | 'noChanges'
@@ -703,6 +704,7 @@ const GATE_REASON_CATEGORY_ORDER: readonly GateReasonCategory[] = [
   'verifyFailed',
   'e2eFailed',
   'adversaryNotApproved',
+  'adversaryUnparseable',
   'changedLinesExceeded',
   'protectedPathViolation',
   'noChanges',
@@ -710,10 +712,39 @@ const GATE_REASON_CATEGORY_ORDER: readonly GateReasonCategory[] = [
   'other',
 ];
 
-export function classifyGateReason(reason: string): GateReasonCategory {
+/**
+ * orchestrator/review.py の parse_adversary_review が、adversary の応答を構造化
+ * できなかったとき（JSON を取り出せない／`approved` が真偽値でない）に技術的棄却として
+ * summary へ書き込む文言。どちらも「内容を読んで却下した」のではなく「読めなかったので
+ * 安全側の棄却に倒した」ケースであり、実際に blocking な欠陥を指摘した却下（内容を伴う
+ * adversaryNotApproved）と混ぜると、パス別の連鎖から「何が起きたか」が読み取れなくなる
+ * （このダッシュボードの敵対レビューで指摘された曖昧さそのもの）。gateReasons 側は
+ * どちらも同じ固定文言 'adversary が approve していない' しか積まないため、reason 文字列
+ * だけでは区別できず、adversary.summary（RunRecord の言語間契約フィールド）を追加の
+ * 手がかりに使う。
+ */
+const ADVERSARY_UNPARSEABLE_SUMMARY = 'adversary の出力を解釈できないため棄却として扱う';
+const ADVERSARY_NON_BOOLEAN_SUMMARY_PREFIX = 'approved が真偽値でないため棄却';
+
+function isAdversaryParseFailureSummary(summary: string): boolean {
+  return summary === ADVERSARY_UNPARSEABLE_SUMMARY || summary.startsWith(ADVERSARY_NON_BOOLEAN_SUMMARY_PREFIX);
+}
+
+/**
+ * adversarySummary は 'adversary が approve していない' の分類を
+ * adversaryNotApproved（内容を読んで却下）と adversaryUnparseable（出力を解釈できず
+ * 安全側に倒した技術的棄却）へさらに分岐させるための追加コンテキスト。呼び出し元が
+ * run.adversary.summary を渡さない場合は今まで通り adversaryNotApproved に丸める
+ * （後方互換）。
+ */
+export function classifyGateReason(reason: string, adversarySummary?: string): GateReasonCategory {
   if (reason === 'verify(lint/typecheck/unit/build) が失敗している') return 'verifyFailed';
   if (reason === 'e2e(Playwright) が失敗している') return 'e2eFailed';
-  if (reason === 'adversary が approve していない') return 'adversaryNotApproved';
+  if (reason === 'adversary が approve していない') {
+    return adversarySummary !== undefined && isAdversaryParseFailureSummary(adversarySummary)
+      ? 'adversaryUnparseable'
+      : 'adversaryNotApproved';
+  }
   if (reason === 'builder が変更を生成しなかった') return 'noChanges';
   if (reason.startsWith('変更行数 ') && reason.endsWith('を超えている')) return 'changedLinesExceeded';
   if (reason.startsWith('保護パスを変更している: ')) return 'protectedPathViolation';
@@ -737,7 +768,7 @@ export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummar
 
   for (const run of byIterationAsc(runs)) {
     for (const reason of run.gateReasons) {
-      const category = classifyGateReason(reason);
+      const category = classifyGateReason(reason, run.adversary.summary);
       let entry = byCategory.get(category);
       if (!entry) {
         entry = { count: 0, iterations: new Set(), examples: new Set() };
@@ -785,7 +816,7 @@ export function gateReasonBurdenTrend(runs: RunRecord[]): GateReasonBurdenPoint[
         GATE_REASON_CATEGORY_ORDER.map((category) => [category, 0]),
       ) as Record<GateReasonCategory, number>;
       for (const reason of r.gateReasons) {
-        counts[classifyGateReason(reason)]++;
+        counts[classifyGateReason(reason, r.adversary.summary)]++;
       }
       return { iteration: r.iteration, counts, total: r.gateReasons.length };
     });
@@ -896,7 +927,7 @@ export function gateReasonChains(runs: RunRecord[]): GateReasonChain[] {
       const seen = new Set<GateReasonCategory>();
       const categories: GateReasonCategory[] = [];
       for (const reason of r.gateReasons) {
-        const category = classifyGateReason(reason);
+        const category = classifyGateReason(reason, r.adversary.summary);
         if (!seen.has(category)) {
           seen.add(category);
           categories.push(category);
