@@ -8,6 +8,7 @@ import {
   builderComparison,
   earlyWarningSignal,
   gateReasonBreakdown,
+  gateReasonBurdenTrend,
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
@@ -381,6 +382,47 @@ test('ゲート不通過理由の分類パネルが実データから導出し�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-row-', '')),
   );
   expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート理由の時系列burdenチャートが実データから導出した反復ごとのカテゴリ別件数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = gateReasonBurdenTrend(runs);
+  expect(
+    points.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、チャートの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const chart = page.getByTestId('gate-reason-burden-chart');
+  await expect(chart).toBeVisible();
+
+  const latest = points[points.length - 1];
+  await expect(chart).toContainText(`直近iteration ${latest.iteration}: ${latest.total}件`);
+
+  // 各反復の列が実際に描画され、count>0のカテゴリだけが棒として存在すること
+  // （gateReasonBurdenTrend という別経路の計算結果と突き合わせる）。
+  for (const p of points) {
+    const column = page.getByTestId(`gate-reason-burden-column-${p.iteration}`);
+    await expect(column).toBeVisible();
+    for (const [category, count] of Object.entries(p.counts)) {
+      const bar = page.getByTestId(`gate-reason-burden-bar-${p.iteration}-${category}`);
+      if (count > 0) {
+        await expect(bar).toHaveCount(1);
+      } else {
+        await expect(bar).toHaveCount(0);
+      }
+    }
+  }
+
+  await expect(page.getByTestId('gate-reason-burden-iterations')).toContainText(
+    `対象iteration: ${points.map((p) => p.iteration).join(', ')}`,
+  );
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');

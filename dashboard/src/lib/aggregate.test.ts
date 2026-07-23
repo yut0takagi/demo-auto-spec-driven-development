@@ -19,6 +19,7 @@ import {
   REVISE_CYCLES_OUTLIER_THRESHOLD,
   classifyGateReason,
   gateReasonBreakdown,
+  gateReasonBurdenTrend,
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
@@ -1105,6 +1106,60 @@ describe('gateReasonBreakdown', () => {
       '変更行数 450 が上限 400 を超えている',
       '変更行数 500 が上限 400 を超えている',
     ]);
+  });
+});
+
+describe('gateReasonBurdenTrend', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(gateReasonBurdenTrend([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonBurdenTrend(runs)).toEqual([]);
+  });
+
+  it('gateReasonsが空の反復（merged/paused/dry-run等）は点を持たず、ある反復だけが残る', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] }),
+      makeRun({ iteration: 2, verdict: 'paused', gateReasons: [] }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+      }),
+    ];
+    const points = gateReasonBurdenTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(3);
+  });
+
+  it('1反復内の複数カテゴリをそれぞれ数え、他カテゴリは0のまま・totalは合計と一致する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: [
+          'adversary が approve していない',
+          '変更行数 500 が上限 400 を超えている',
+          'adversary が approve していない',
+        ],
+      }),
+    ];
+    const points = gateReasonBurdenTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].total).toBe(3);
+    expect(points[0].counts.adversaryNotApproved).toBe(2);
+    expect(points[0].counts.changedLinesExceeded).toBe(1);
+    expect(points[0].counts.e2eFailed).toBe(0);
+    expect(points[0].counts.other).toBe(0);
+  });
+
+  it('入力の順序に関わらずiteration昇順で返す', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['builder が変更を生成しなかった'] }),
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+    ];
+    const points = gateReasonBurdenTrend(runs);
+    expect(points.map((p) => p.iteration)).toEqual([1, 2, 3]);
   });
 });
 

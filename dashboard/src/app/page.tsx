@@ -21,6 +21,7 @@ import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
+import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 
 const REPO_URL =
@@ -70,6 +71,7 @@ export default function Home() {
           <GateReasonsPanel runs={runs} />
           <GateFailureTypesPanel runs={runs} />
         </div>
+        <GateReasonBurdenChart runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
