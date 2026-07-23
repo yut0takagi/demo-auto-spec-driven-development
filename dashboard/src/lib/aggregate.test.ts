@@ -31,6 +31,7 @@ import {
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
+  approvalRateTrendByModel,
   ideationFailureSummary,
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
@@ -1908,6 +1909,143 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('approvalRateTrendByModel', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(approvalRateTrendByModel([])).toEqual([]);
+  });
+
+  it('builder モデルごとに独立した累積承認率推移(0..100)を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-haiku-4-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 4,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-haiku-4-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+
+    const result = approvalRateTrendByModel(runs);
+
+    // 同数(2件ずつ)なのでモデル名昇順: haiku が sonnet より先
+    expect(result.map((r) => r.model)).toEqual(['claude-haiku-4-5', 'claude-sonnet-5']);
+
+    const sonnet = result.find((r) => r.model === 'claude-sonnet-5')!;
+    // sonnet: iteration1(approved)→100%, iteration3(not approved)→1/2=50%
+    expect(sonnet.points).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 3, value: 50 },
+    ]);
+    expect(sonnet.latestRate).toBe(50);
+    expect(sonnet.count).toBe(2);
+
+    const haiku = result.find((r) => r.model === 'claude-haiku-4-5')!;
+    // haiku: iteration2(not approved)→0%, iteration4(approved)→1/2=50%
+    expect(haiku.points).toEqual([
+      { iteration: 2, value: 0 },
+      { iteration: 4, value: 50 },
+    ]);
+    expect(haiku.latestRate).toBe(50);
+    expect(haiku.count).toBe(2);
+  });
+
+  it('failed run（verify未到達）はこのmodelの推移から除外する（approvalRateTrendと同じ理由）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = approvalRateTrendByModel(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].points).toEqual([{ iteration: 2, value: 100 }]);
+    expect(result[0].count).toBe(1);
+  });
+
+  it('verify到達済み反復が1件もないmodelはpoints空・latestRate 0・count 0（境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = approvalRateTrendByModel(runs);
+    expect(result).toEqual([{ model: 'claude-sonnet-5', points: [], latestRate: 0, count: 0 }]);
+  });
+
+  it('全て非承認ならそのmodelの推移は0%が続く（境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = approvalRateTrendByModel(runs);
+    expect(result[0].points).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 0 },
+    ]);
+    expect(result[0].latestRate).toBe(0);
+  });
+
+  it('各modelの最終点はmodelEffectiveness()が返す同じmodelのapprovalRate*100と一致する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        adversary: { approved: false, summary: 'レビューに到達しなかった。' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const trendByModel = approvalRateTrendByModel(runs);
+    const effectiveness = modelEffectiveness(runs);
+    const sonnetTrend = trendByModel.find((r) => r.model === 'claude-sonnet-5')!;
+    const sonnetEffectiveness = effectiveness.find((r) => r.model === 'claude-sonnet-5')!;
+    expect(sonnetTrend.latestRate).toBeCloseTo(sonnetEffectiveness.approvalRate * 100, 10);
   });
 });
 
