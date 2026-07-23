@@ -1,0 +1,41 @@
+{
+  "id": "20260723T130650Z-59",
+  "iteration": 26,
+  "issue": {
+    "number": 59,
+    "title": "高 reviseCycles + 低 approval rate 前兆検知ダッシュボード",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/59-revisecycles-approval-rate",
+  "startedAt": "2026-07-23T13:06:50Z",
+  "finishedAt": "2026-07-23T13:21:14Z",
+  "durationSec": 864,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 61,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を満たし、既存動作を壊さず、テストが実装の境界値・異常系を実質的に検証している。直近3反復のrevise・承認率をローリング集計し3段階の前兆を検知するロジック、視覚的なUI表現、failed run 正しく除外、e2e は実データで導出値と UI 一致を確認。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 482,
+  "cost": {
+    "builderUsd": 3.619241,
+    "adversaryUsd": 0.160756,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.779997
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
