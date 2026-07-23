@@ -1,7 +1,7 @@
 {
   "state": "RUNNING",
-  "reason": "直近の反復: no-work",
+  "reason": "直近の反復: dry-run",
   "actor": "system",
-  "updatedAt": "2026-07-22T23:59:41Z",
+  "updatedAt": "2026-07-23T01:44:49Z",
   "resumeHint": "gh variable set LOOP_ENABLED --body true && gh workflow enable loop.yml"
 }
