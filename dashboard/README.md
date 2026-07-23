@@ -24,6 +24,7 @@ This project uses [`next/font`](https://nextjs.org/docs/app/building-your-applic
 
 トップページ (`src/app/page.tsx`) に並ぶ各グラフ・パネルの意味は以下の通りです。
 
+- **直近の反復サマリー**: 最新反復の判定 (verdict) を吹き出し形式で表示したもの。merged/abandoned/needs-human/paused/dry-run/failed で見出し・色分けが切り替わり、Adversary のレビューコメント（またはゲート不通過理由）を本文に表示する。
 - **カバレッジ推移**: 各反復のユニットテストカバレッジ(%)の時系列推移。
 - **累計コスト**: 各反復にかかった Builder/Adversary/Ideation 合計費用(USD)の推移。
 - **承認率推移**: Adversary レビューが承認 (approved) した割合(%)の推移。
