@@ -27,6 +27,7 @@ import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { IdeationCostQualityPanel } from '@/components/IdeationCostQualityPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
+import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
@@ -96,6 +97,7 @@ export default function Home() {
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
         <ReviseCyclesByVerdictPanel runs={runs} />
+        <ReviseVerdictMatrixPanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />

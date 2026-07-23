@@ -28,6 +28,7 @@ import {
   costPerApprovedPrTrend,
   reviseCyclesByModel,
   reviseCyclesByVerdict,
+  reviseVerdictMatrix,
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
@@ -1718,6 +1719,103 @@ describe('reviseCyclesByVerdict', () => {
     ];
     const result = reviseCyclesByVerdict(runs);
     expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('reviseVerdictMatrix', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseVerdictMatrix([])).toEqual([]);
+  });
+
+  it('reviseCycles を 0/1/2/3+ の4区分に分類し、区分ごとにverdict別件数を集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 2 }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 2 }),
+      makeRun({ iteration: 4, verdict: 'abandoned', reviseCycles: 3 }),
+      makeRun({ iteration: 5, verdict: 'failed', reviseCycles: 99 }),
+    ];
+    const result = reviseVerdictMatrix(runs);
+    expect(result).toEqual([
+      {
+        bucket: '0',
+        total: 1,
+        byVerdict: { merged: 1, abandoned: 0, 'needs-human': 0, paused: 0, 'dry-run': 0, failed: 0 },
+        iterations: [1],
+      },
+      {
+        bucket: '2',
+        total: 2,
+        byVerdict: { merged: 1, abandoned: 1, 'needs-human': 0, paused: 0, 'dry-run': 0, failed: 0 },
+        iterations: [2, 3],
+      },
+      {
+        bucket: '3+',
+        total: 2,
+        byVerdict: { merged: 0, abandoned: 1, 'needs-human': 0, paused: 0, 'dry-run': 0, failed: 1 },
+        iterations: [4, 5],
+      },
+    ]);
+  });
+
+  it('reviseCycles=1 は独立した"1"区分に入り、reviseCycles=3 は"2"ではなく"3+"に入る（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 3 }),
+    ];
+    const result = reviseVerdictMatrix(runs);
+    expect(result.map((r) => r.bucket)).toEqual(['1', '3+']);
+  });
+
+  it('reviseCyclesByVerdict と同様、failed run を除外せず reviseCycles の値どおりに区分する（クラッシュまでのrevise回数として扱う）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 0 })];
+    const result = reviseVerdictMatrix(runs);
+    expect(result).toEqual([
+      {
+        bucket: '0',
+        total: 1,
+        byVerdict: { merged: 0, abandoned: 0, 'needs-human': 0, paused: 0, 'dry-run': 0, failed: 1 },
+        iterations: [1],
+      },
+    ]);
+  });
+
+  it('データに出現しない区分は含めない（空bucketを作らない）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5 })];
+    const result = reviseVerdictMatrix(runs);
+    expect(result.map((r) => r.bucket)).toEqual(['3+']);
+  });
+
+  it('bucketは常に 0 → 1 → 2 → 3+ の順で返す（入力順やverdictの種類に関係なく）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 3 }),
+      makeRun({ iteration: 2, verdict: 'abandoned', reviseCycles: 0 }),
+      makeRun({ iteration: 3, verdict: 'paused', reviseCycles: 2 }),
+      makeRun({ iteration: 4, verdict: 'dry-run', reviseCycles: 1 }),
+    ];
+    const result = reviseVerdictMatrix(runs);
+    expect(result.map((r) => r.bucket)).toEqual(['0', '1', '2', '3+']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 0 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0 }),
+    ];
+    const result = reviseVerdictMatrix(runs);
+    expect(result[0].iterations).toEqual([2, 5]);
+  });
+
+  it('各行の total は byVerdict の合計と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 2, verdict: 'paused', reviseCycles: 1 }),
+      makeRun({ iteration: 3, verdict: 'dry-run', reviseCycles: 1 }),
+    ];
+    const [row] = reviseVerdictMatrix(runs);
+    const sum = Object.values(row.byVerdict).reduce((a, b) => a + b, 0);
+    expect(row.total).toBe(sum);
+    expect(row.total).toBe(3);
   });
 });
 
