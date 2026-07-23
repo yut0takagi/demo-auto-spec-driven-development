@@ -261,6 +261,114 @@ export function e2eFailureRateTrend(runs: RunRecord[]): TrendPoint[] {
   });
 }
 
+/**
+ * 変更行数の推移。coverageTrend / reviseCyclesTrend と同様、`failed` run は
+ * builder がコミットに到達する前に例外終了しており changedLines が「測定されなかった」
+ * ことを意味する sentinel 0 なので、点として含めない（0への急落に見せない）。
+ */
+export function changedLinesTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs)
+    .filter(reachedVerify)
+    .map((r) => ({
+      iteration: r.iteration,
+      value: r.changedLines,
+    }));
+}
+
+export type ComparisonVerdict = 'improved' | 'regressed' | 'unchanged';
+
+export type BuilderMetricKey = 'reviseCycles' | 'changedLines' | 'coveragePct' | 'builderUsd';
+
+export interface BuilderMetricComparison {
+  key: BuilderMetricKey;
+  label: string;
+  previous: number;
+  current: number;
+  delta: number;
+  verdict: ComparisonVerdict;
+}
+
+export interface BuilderComparison {
+  previousIteration: number;
+  currentIteration: number;
+  metrics: BuilderMetricComparison[];
+}
+
+const BUILDER_METRIC_KEYS: readonly BuilderMetricKey[] = [
+  'reviseCycles',
+  'changedLines',
+  'coveragePct',
+  'builderUsd',
+];
+
+const BUILDER_METRIC_LABELS: Record<BuilderMetricKey, string> = {
+  reviseCycles: 'revise回数',
+  changedLines: '変更行数',
+  coveragePct: 'カバレッジ',
+  builderUsd: 'builderコスト',
+};
+
+/** true なら値が小さいほど改善（revise回数・変更行数・コスト）、false なら大きいほど改善（カバレッジ）。 */
+const BUILDER_METRIC_LOWER_IS_BETTER: Record<BuilderMetricKey, boolean> = {
+  reviseCycles: true,
+  changedLines: true,
+  coveragePct: false,
+  builderUsd: true,
+};
+
+function builderMetricValue(run: RunRecord, key: BuilderMetricKey): number {
+  switch (key) {
+    case 'reviseCycles':
+      return run.reviseCycles;
+    case 'changedLines':
+      return run.changedLines;
+    case 'coveragePct':
+      return run.verify.coveragePct;
+    case 'builderUsd':
+      return run.cost.builderUsd;
+  }
+}
+
+function builderMetricVerdict(delta: number, lowerIsBetter: boolean): ComparisonVerdict {
+  if (delta === 0) return 'unchanged';
+  const improved = lowerIsBetter ? delta < 0 : delta > 0;
+  return improved ? 'improved' : 'regressed';
+}
+
+/**
+ * builder の改善状況を、直前の測定済み(verify到達済み) iteration と比較する。
+ * `failed` run は changedLines/coveragePct が sentinel 0 で比較の意味を持たないため、
+ * coverageTrend と同じ reachedVerify で除外してから直近2件を取り出す。
+ * 測定済み run が2件未満（比較対象が無い）場合は null を返す。
+ */
+export function builderComparison(runs: RunRecord[]): BuilderComparison | null {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  if (completed.length < 2) return null;
+
+  const previous = completed[completed.length - 2];
+  const current = completed[completed.length - 1];
+
+  const metrics: BuilderMetricComparison[] = BUILDER_METRIC_KEYS.map((key) => {
+    const prevValue = builderMetricValue(previous, key);
+    const currValue = builderMetricValue(current, key);
+    const delta = currValue - prevValue;
+    return {
+      key,
+      label: BUILDER_METRIC_LABELS[key],
+      previous: prevValue,
+      current: currValue,
+      delta,
+      verdict: builderMetricVerdict(delta, BUILDER_METRIC_LOWER_IS_BETTER[key]),
+    };
+  });
+
+  return {
+    previousIteration: previous.iteration,
+    currentIteration: current.iteration,
+    metrics,
+  };
+}
+
 export type CostRole = 'builder' | 'adversary' | 'ideation';
 
 const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];

@@ -6,6 +6,7 @@ import {
   approvalRateTrend,
   mergeRateTrend,
   e2eFailureRateTrend,
+  changedLinesTrend,
 } from '@/lib/aggregate';
 import { StatusBadge } from '@/components/StatusBadge';
 import { LoadErrorBanner } from '@/components/LoadErrorBanner';
@@ -16,6 +17,7 @@ import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
 import { VerdictSummaryBubble } from '@/components/VerdictSummaryBubble';
 import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
+import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -51,6 +53,10 @@ export default function Home() {
           <TrendChart title="マージ率推移" points={mergeRateTrend(runs)} unit="%" />
         </div>
         <TrendChart title="E2E失敗率推移" points={e2eFailureRateTrend(runs)} unit="%" />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <TrendChart title="変更行数推移" points={changedLinesTrend(runs)} unit="行" />
+          <BuilderComparisonCard runs={runs} />
+        </div>
         <ModelCostBreakdown runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
