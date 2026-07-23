@@ -30,6 +30,10 @@ import {
   ideationFailureSummary,
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
+  cycleTimeTrend,
+  cycleTimeTrendSignal,
+  CYCLE_TIME_TREND_WINDOW,
+  CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1957,5 +1961,172 @@ describe('e2eFailureReviseCorrelation', () => {
     const result = e2eFailureReviseCorrelation(runs);
     expect(result.delta).toBeCloseTo(-4, 10);
     expect(result.correlationCoefficient!).toBeLessThan(0);
+  });
+});
+
+describe('cycleTimeTrend', () => {
+  it('iteration 昇順に durationSec(秒)をそのまま返す', () => {
+    const runs = [
+      makeRun({ iteration: 2, durationSec: 600 }),
+      makeRun({ iteration: 1, durationSec: 300 }),
+    ];
+    expect(cycleTimeTrend(runs)).toEqual([
+      { iteration: 1, value: 300 },
+      { iteration: 2, value: 600 },
+    ]);
+  });
+
+  it('failed run も除外せず含める（durationSec は verdict に関係なく必ず記録される）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 300 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 45 }),
+    ];
+    expect(cycleTimeTrend(runs)).toEqual([
+      { iteration: 1, value: 300 },
+      { iteration: 2, value: 45 },
+    ]);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(cycleTimeTrend([])).toEqual([]);
+  });
+});
+
+describe('cycleTimeTrendSignal', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(cycleTimeTrendSignal([])).toBeNull();
+  });
+
+  it('run が1件だけなら直前ウィンドウが取れず null（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, durationSec: 300 })];
+    expect(cycleTimeTrendSignal(runs)).toBeNull();
+  });
+
+  it('2件ちょうどなら window=1 で直近1件・直前1件を比較する', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 300 }),
+      makeRun({ iteration: 2, durationSec: 600 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgSec).toBeCloseTo(600, 10);
+    expect(signal!.previousAvgSec).toBeCloseTo(300, 10);
+    expect(signal!.recentIterations).toEqual([2]);
+    expect(signal!.previousIterations).toEqual([1]);
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('直近平均が直前平均より閾値(CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT)以上長いと increasing(悪化)', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100 }),
+      makeRun({ iteration: 2, durationSec: 100 }),
+      makeRun({ iteration: 3, durationSec: 100 }),
+      makeRun({ iteration: 4, durationSec: 200 }),
+      makeRun({ iteration: 5, durationSec: 200 }),
+      makeRun({ iteration: 6, durationSec: 200 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.windowSize).toBe(CYCLE_TIME_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgSec).toBeCloseTo(200, 10);
+    expect(signal!.deltaSec).toBeCloseTo(100, 10);
+    expect(signal!.deltaPct).toBeCloseTo(100, 10);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('直近平均が直前平均より短いと decreasing(改善)', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 200 }),
+      makeRun({ iteration: 2, durationSec: 200 }),
+      makeRun({ iteration: 3, durationSec: 200 }),
+      makeRun({ iteration: 4, durationSec: 100 }),
+      makeRun({ iteration: 5, durationSec: 100 }),
+      makeRun({ iteration: 6, durationSec: 100 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('decreasing');
+    expect(signal!.deltaPct).toBeCloseTo(-50, 10);
+  });
+
+  it('変化率が閾値未満なら flat（僅かなブレをトレンドと誤認しない）', () => {
+    expect(CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT).toBe(5);
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100 }),
+      makeRun({ iteration: 2, durationSec: 100 }),
+      makeRun({ iteration: 3, durationSec: 100 }),
+      // +4% は閾値(5%)未満なので flat になるはず
+      makeRun({ iteration: 4, durationSec: 104 }),
+      makeRun({ iteration: 5, durationSec: 104 }),
+      makeRun({ iteration: 6, durationSec: 104 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('変化率がちょうど閾値と一致する場合は横ばい扱いにしない（閾値は排他的境界）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100 }),
+      makeRun({ iteration: 2, durationSec: 100 }),
+      makeRun({ iteration: 3, durationSec: 100 }),
+      // ちょうど+5%: `変化率 < 閾値` が横ばいの条件なので、5%ぴったりは flat にならない
+      makeRun({ iteration: 4, durationSec: 105 }),
+      makeRun({ iteration: 5, durationSec: 105 }),
+      makeRun({ iteration: 6, durationSec: 105 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('反復数が奇数(7件)でも window は CYCLE_TIME_TREND_WINDOW を超えず、直近3件・直前3件のみを見る', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 9999 }), // window に含まれず無視されるはず
+      makeRun({ iteration: 2, durationSec: 100 }),
+      makeRun({ iteration: 3, durationSec: 100 }),
+      makeRun({ iteration: 4, durationSec: 100 }),
+      makeRun({ iteration: 5, durationSec: 200 }),
+      makeRun({ iteration: 6, durationSec: 200 }),
+      makeRun({ iteration: 7, durationSec: 200 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.windowSize).toBe(3);
+    expect(signal!.previousIterations).toEqual([2, 3, 4]);
+    expect(signal!.recentIterations).toEqual([5, 6, 7]);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+
+  it('failed run のdurationSecも比較対象に含める（verdictに関係なく必ず記録されるため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 100 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 300 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.recentAvgSec).toBeCloseTo(300, 10);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でも direction を安全に判定する（ゼロ除算を回避）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0 }),
+      makeRun({ iteration: 2, durationSec: 50 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.previousAvgSec).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('直前・直近ともにdurationSecが0(境界値)ならflat', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0 }),
+      makeRun({ iteration: 2, durationSec: 0 }),
+    ];
+    const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.deltaPct).toBeNull();
   });
 });

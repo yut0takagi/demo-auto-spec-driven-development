@@ -306,6 +306,84 @@ export function changedLinesTrend(runs: RunRecord[]): TrendPoint[] {
     }));
 }
 
+/**
+ * サイクルタイム(durationSec)の時系列推移。costTrend と同様、durationSec は verdict に
+ * 関係なく全 run で必ず記録される（failed run も例外終了までの経過時間として意味を持つ）
+ * ため reachedVerify では絞り込まない。値は秒単位（表示側で分に換算する）。
+ */
+export function cycleTimeTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs).map((r) => ({ iteration: r.iteration, value: r.durationSec }));
+}
+
+/** トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。 */
+export const CYCLE_TIME_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウの平均が直前ウィンドウよりこの割合(%)以上変化して初めて
+ * 増加/減少と判定する。これ未満のブレは「横ばい」として扱い、僅かな変動を
+ * トレンドと誤認しないようにする。
+ */
+export const CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT = 5;
+
+/** increasing: ゲート通過までの所要時間が悪化（長期化）傾向。decreasing: 改善（短縮）傾向。 */
+export type CycleTimeTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface CycleTimeTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は CYCLE_TIME_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が CYCLE_TIME_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgSec: number;
+  previousAvgSec: number;
+  /** recentAvgSec - previousAvgSec */
+  deltaSec: number;
+  /** deltaSec / previousAvgSec * 100。previousAvgSec が 0 のときは定義できないため null */
+  deltaPct: number | null;
+  direction: CycleTimeTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function cycleTimeDirection(deltaSec: number, previousAvgSec: number): CycleTimeTrendDirection {
+  if (previousAvgSec === 0) return deltaSec === 0 ? 'flat' : 'increasing';
+  const deltaPct = (deltaSec / previousAvgSec) * 100;
+  if (Math.abs(deltaPct) < CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * CI/ゲート通過までの所要時間（durationSec）のトレンド観測。直近 window 反復の平均と、
+ * その直前 window 反復の平均を比較し、増加(悪化)/減少(改善)/横ばいを判定する
+ * （EarlyWarningSignal と同様、ローリング窓による前兆検知の一種）。
+ * cycleTimeTrend と同じ理由で reachedVerify では絞り込まない。
+ * 比較対象となる「直前」ウィンドウが取れない（run が1件以下）場合は null。
+ */
+export function cycleTimeTrendSignal(runs: RunRecord[]): CycleTimeTrendSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length < 2) return null;
+
+  const windowSize = Math.min(CYCLE_TIME_TREND_WINDOW, Math.floor(sorted.length / 2));
+  const recent = sorted.slice(sorted.length - windowSize);
+  const previous = sorted.slice(sorted.length - windowSize * 2, sorted.length - windowSize);
+
+  const recentAvgSec = mean(recent.map((r) => r.durationSec));
+  const previousAvgSec = mean(previous.map((r) => r.durationSec));
+  const deltaSec = recentAvgSec - previousAvgSec;
+
+  return {
+    windowSize,
+    partial: windowSize < CYCLE_TIME_TREND_WINDOW,
+    recentAvgSec,
+    previousAvgSec,
+    deltaSec,
+    deltaPct: previousAvgSec === 0 ? null : (deltaSec / previousAvgSec) * 100,
+    direction: cycleTimeDirection(deltaSec, previousAvgSec),
+    recentIterations: recent.map((r) => r.iteration),
+    previousIterations: previous.map((r) => r.iteration),
+  };
+}
+
 export type ComparisonVerdict = 'improved' | 'regressed' | 'unchanged';
 
 export type BuilderMetricKey = 'reviseCycles' | 'changedLines' | 'coveragePct' | 'builderUsd';
