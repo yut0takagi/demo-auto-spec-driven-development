@@ -626,3 +626,60 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
 
   return { totalUsd, byRole, byModel };
 }
+
+/**
+ * 「承認PR」= adversary が approve し、かつ実際に PR が開かれた（prNumber が null でない）反復。
+ * `adversary.approved` だけでは不十分: builder が変更を生成しなかった反復（例: 0022.json）は
+ * approved=true でも prNumber が null のままゲートで見送られており、PR自体が存在しない。
+ * 逆に merged 以外でも paused/dry-run は承認済みで PR が開いた状態なので含める
+ * （gateFailureTypeBreakdown が verdict の類型を見るのとは異なり、こちらは
+ * 「コストに見合う成果物が出たか」を見るため verdict ではなく承認+PR存在で判定する）。
+ */
+function isApprovedPr(run: RunRecord): boolean {
+  return run.prNumber !== null && run.adversary.approved;
+}
+
+export interface CostEfficiency {
+  totalCostUsd: number;
+  approvedPrCount: number;
+  /** 承認PR 1件あたりの平均コスト(USD)。approvedPrCount が 0 だと分母が無いため null。 */
+  usdPerApprovedPr: number | null;
+}
+
+/**
+ * Cost効率（USD per 承認PR）。costBreakdown と同様、コストは verdict に関係なく
+ * 実際に消費されているため failed/abandoned run のコストも分子に含める。
+ * 承認に至らなかった反復の失敗コストも「1件の承認PRを得るための実コスト」に
+ * 含めることで、単純な「マージ済みPRのbuilderコスト」より実態に近い効率を示す。
+ */
+export function costEfficiency(runs: RunRecord[]): CostEfficiency {
+  const totalCostUsd = runs.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+  const approvedPrCount = runs.filter(isApprovedPr).length;
+  return {
+    totalCostUsd,
+    approvedPrCount,
+    usdPerApprovedPr: approvedPrCount === 0 ? null : totalCostUsd / approvedPrCount,
+  };
+}
+
+/**
+ * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
+ * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は
+ * 分母が0で無意味なため、最初の承認PRが出た iteration 以降だけ点を持つ
+ * （costTrend が全run区間で点を持つのとは異なる）。
+ */
+export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
+  let cumulativeCost = 0;
+  let cumulativeApproved = 0;
+  const points: TrendPoint[] = [];
+  for (const r of byIterationAsc(runs)) {
+    cumulativeCost += r.cost.totalUsd;
+    if (isApprovedPr(r)) cumulativeApproved++;
+    if (cumulativeApproved > 0) {
+      // 浮動小数点の丸め誤差 (0.1+0.2 等) が積み上がるため、表示に不要な桁を丸めて除去する。
+      const value = Math.round((cumulativeCost / cumulativeApproved) * 1e9) / 1e9;
+      points.push({ iteration: r.iteration, value });
+    }
+  }
+  return points;
+}

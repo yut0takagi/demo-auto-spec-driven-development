@@ -20,6 +20,8 @@ import {
   classifyGateReason,
   gateReasonBreakdown,
   gateFailureTypeBreakdown,
+  costEfficiency,
+  costPerApprovedPrTrend,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1164,5 +1166,164 @@ describe('gateFailureTypeBreakdown', () => {
       }),
     ];
     expect(gateFailureTypeBreakdown(runs).map((x) => x.verdict)).toEqual(['failed', 'abandoned', 'needs-human']);
+  });
+});
+
+describe('costEfficiency', () => {
+  it('run が無ければ承認PR0件・コスト0・usdPerApprovedPrはnullを返す（0除算を避ける）', () => {
+    const e = costEfficiency([]);
+    expect(e).toEqual({ totalCostUsd: 0, approvedPrCount: 0, usdPerApprovedPr: null });
+  });
+
+  it('adversary.approvedがtrueでもprNumberがnullなら承認PRとして数えない（builderが変更を生成しなかったケース）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        prNumber: null,
+        gateReasons: ['builder が変更を生成しなかった'],
+        cost: { builderUsd: 0.02, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.02 },
+      }),
+    ];
+    const e = costEfficiency(runs);
+    expect(e.approvedPrCount).toBe(0);
+    expect(e.usdPerApprovedPr).toBeNull();
+    // コスト自体は消費されているため合計には含める
+    expect(e.totalCostUsd).toBeCloseTo(0.02, 6);
+  });
+
+  it('prNumberがあってもadversaryが未承認なら承認PRとして数えない（needs-humanでPRだけ開いたケース）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        prNumber: 20,
+        gateReasons: ['adversary が approve していない'],
+      }),
+    ];
+    expect(costEfficiency(runs).approvedPrCount).toBe(0);
+  });
+
+  it('paused/dry-runも承認済みでPRが開いていれば承認PRとして数える（mergedに限定しない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', adversary: { approved: true, summary: '' }, prNumber: 14 }),
+      makeRun({ iteration: 2, verdict: 'dry-run', adversary: { approved: true, summary: '' }, prNumber: 33 }),
+    ];
+    expect(costEfficiency(runs).approvedPrCount).toBe(2);
+  });
+
+  it('failedなど非承認runのコストも分子に合算した上で承認PR数で割る', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 11,
+        cost: { builderUsd: 0.3, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.4 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        adversary: { approved: false, summary: '' },
+        prNumber: null,
+        gateReasons: ['反復が例外で異常終了した: boom'],
+        cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 },
+      }),
+    ];
+    const e = costEfficiency(runs);
+    expect(e.totalCostUsd).toBeCloseTo(0.5, 6);
+    expect(e.approvedPrCount).toBe(1);
+    expect(e.usdPerApprovedPr).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('costPerApprovedPrTrend', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(costPerApprovedPrTrend([])).toEqual([]);
+  });
+
+  it('最初の承認PRが出るまでは点を持たない（分母0を避ける）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        prNumber: null,
+        gateReasons: ['adversary が approve していない'],
+        cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 11,
+        cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 },
+      }),
+    ];
+    const trend = costPerApprovedPrTrend(runs);
+    // iteration1は承認PRが1件も出ていないため点を持たない。iteration2で初めて
+    // 累計コスト(0.1+0.2=0.3) ÷ 累計承認PR数(1) = 0.3 の点が現れる。
+    expect(trend).toEqual([{ iteration: 2, value: 0.3 }]);
+  });
+
+  it('承認PRが複数回出るたびに累計コスト÷累計承認PR数を更新する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 11,
+        cost: { builderUsd: 0.4, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.4 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        adversary: { approved: false, summary: '' },
+        prNumber: null,
+        gateReasons: ['反復が例外で異常終了した: boom'],
+        cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 12,
+        cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 },
+      }),
+    ];
+    const trend = costPerApprovedPrTrend(runs);
+    // iter1: 累計0.4 / 承認1件 = 0.4
+    // iter2: 累計0.5(failedのコストも加算) / 承認1件(変わらず) = 0.5
+    // iter3: 累計0.7 / 承認2件 = 0.35
+    expect(trend).toEqual([
+      { iteration: 1, value: 0.4 },
+      { iteration: 2, value: 0.5 },
+      { iteration: 3, value: 0.35 },
+    ]);
+  });
+
+  it('iteration昇順でない入力を渡してもiteration昇順に並べてから計算する', () => {
+    const runs = [
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 12,
+        cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 },
+      }),
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 11,
+        cost: { builderUsd: 0.4, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.4 },
+      }),
+    ];
+    expect(costPerApprovedPrTrend(runs)).toEqual([
+      { iteration: 1, value: 0.4 },
+      { iteration: 2, value: 0.3 },
+    ]);
   });
 });

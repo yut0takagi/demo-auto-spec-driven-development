@@ -21,6 +21,7 @@ import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
+import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -61,7 +62,10 @@ export default function Home() {
           <TrendChart title="変更行数推移" points={changedLinesTrend(runs)} unit="行" />
           <BuilderComparisonCard runs={runs} />
         </div>
-        <ModelCostBreakdown runs={runs} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <ModelCostBreakdown runs={runs} />
+          <CostEfficiencyPanel runs={runs} />
+        </div>
         <div className="grid gap-6 lg:grid-cols-2">
           <GateReasonsPanel runs={runs} />
           <GateFailureTypesPanel runs={runs} />

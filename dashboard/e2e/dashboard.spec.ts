@@ -9,6 +9,8 @@ import {
   earlyWarningSignal,
   gateReasonBreakdown,
   gateFailureTypeBreakdown,
+  costEfficiency,
+  costPerApprovedPrTrend,
 } from '../src/lib/aggregate';
 
 /**
@@ -430,6 +432,42 @@ test('ゲート不通過の類型別集計パネルが実データから導出�
   }
   await expect(page.getByTestId('gate-failure-type-row-paused')).toHaveCount(0);
   await expect(page.getByTestId('gate-failure-type-row-dry-run')).toHaveCount(0);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Cost効率（USD per 承認PR）パネルが実データから導出した総コスト・承認PR件数・単価を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const efficiency = costEfficiency(runs);
+  expect(
+    efficiency.approvedPrCount,
+    'data/runs に承認PR（adversary承認かつPRが開かれた反復）が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('cost-efficiency-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの総コスト・承認PR件数は costEfficiency()（別の計算経路）と一致するはず
+  const totalEl = page.getByTestId('cost-efficiency-total');
+  await expect(totalEl).toHaveText(
+    `総コスト $${efficiency.totalCostUsd.toFixed(2)} / 承認PR ${efficiency.approvedPrCount}件`,
+  );
+
+  // 見出しの単価は totalCostUsd / approvedPrCount と一致するはず
+  await expect(page.getByTestId('cost-efficiency-value')).toContainText(`$${efficiency.usdPerApprovedPr!.toFixed(2)}`);
+
+  // 推移バーは costPerApprovedPrTrend()（別の計算経路）の点数と一致し、
+  // 最後のバーの iteration が実データの最終点と揃っていること
+  const trend = costPerApprovedPrTrend(runs);
+  const bars = page.locator('[data-testid^="cost-efficiency-bar-"]');
+  await expect(bars).toHaveCount(trend.length);
+  const lastPoint = trend[trend.length - 1];
+  await expect(page.getByTestId(`cost-efficiency-bar-${lastPoint.iteration}`)).toBeVisible();
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
