@@ -22,6 +22,7 @@ import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
+import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
@@ -84,6 +85,7 @@ export default function Home() {
           <GateFailureTypesPanel runs={runs} />
         </div>
         <GateReasonBurdenChart runs={runs} />
+        <GateReasonTrendPanel runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
         <ReviseCyclesByVerdictPanel runs={runs} />

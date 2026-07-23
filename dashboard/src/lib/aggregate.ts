@@ -654,6 +654,84 @@ export function gateReasonBurdenTrend(runs: RunRecord[]): GateReasonBurdenPoint[
     });
 }
 
+/** ゲート理由トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。cycleTimeTrendSignal 等と揃えている。 */
+export const GATE_REASON_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウの平均出現数が直前ウィンドウよりこの値（件/反復）以上変化して初めて
+ * 「悪化」「改善」と判定する。カテゴリ別の出現数は0〜数件程度の小さい値を取りやすく、
+ * cycleTimeTrendSignal のような%閾値だと 0件→1件 のようなノイズでも±100%扱いになり
+ * 過敏に反応するため、絶対値（件数）の閾値にしている。
+ */
+export const GATE_REASON_TREND_FLAT_THRESHOLD = 0.5;
+
+/** worsening: 直近の方が出現数が多い（悪化）。improving: 直近の方が少ない（改善）。 */
+export type GateReasonTrendDirection = 'worsening' | 'improving' | 'flat';
+
+export interface GateReasonCategoryTrend {
+  category: GateReasonCategory;
+  recentAvgCount: number;
+  previousAvgCount: number;
+  /** recentAvgCount - previousAvgCount。正なら悪化（出現数が増えている） */
+  delta: number;
+  direction: GateReasonTrendDirection;
+}
+
+export interface GateReasonTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は GATE_REASON_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が GATE_REASON_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  /** GATE_REASON_CATEGORY_ORDER の固定順で全カテゴリを含む */
+  categories: GateReasonCategoryTrend[];
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function gateReasonDirection(delta: number): GateReasonTrendDirection {
+  if (Math.abs(delta) < GATE_REASON_TREND_FLAT_THRESHOLD) return 'flat';
+  return delta > 0 ? 'worsening' : 'improving';
+}
+
+/**
+ * ゲート不通過理由のカテゴリ別トレンド観測。gateReasonBurdenTrend が反復ごとの生の
+ * 内訳を返すのに対し、こちらは cycleTimeTrendSignal / adversaryCommentTrendSignal と
+ * 同じローリング窓比較（直近window/直前windowの平均出現数）で、カテゴリごとに
+ * 「悪化」「改善」「横ばい」を判定する。母集団は gateReasonBurdenTrend と同じ
+ * （gateReasons を持つ run のみ）。比較対象となる「直前」ウィンドウが取れない
+ * （対象点が1件以下）場合は null。
+ */
+export function gateReasonTrendSignal(runs: RunRecord[]): GateReasonTrendSignal | null {
+  const points = gateReasonBurdenTrend(runs);
+  if (points.length < 2) return null;
+
+  const windowSize = Math.min(GATE_REASON_TREND_WINDOW, Math.floor(points.length / 2));
+  const recent = points.slice(points.length - windowSize);
+  const previous = points.slice(points.length - windowSize * 2, points.length - windowSize);
+
+  const categories: GateReasonCategoryTrend[] = GATE_REASON_CATEGORY_ORDER.map((category) => {
+    const recentAvgCount = mean(recent.map((p) => p.counts[category]));
+    const previousAvgCount = mean(previous.map((p) => p.counts[category]));
+    const delta = recentAvgCount - previousAvgCount;
+    return {
+      category,
+      recentAvgCount,
+      previousAvgCount,
+      delta,
+      direction: gateReasonDirection(delta),
+    };
+  });
+
+  return {
+    windowSize,
+    partial: windowSize < GATE_REASON_TREND_WINDOW,
+    categories,
+    recentIterations: recent.map((p) => p.iteration),
+    previousIterations: previous.map((p) => p.iteration),
+  };
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 

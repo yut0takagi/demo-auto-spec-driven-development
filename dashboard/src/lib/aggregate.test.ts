@@ -20,6 +20,9 @@ import {
   classifyGateReason,
   gateReasonBreakdown,
   gateReasonBurdenTrend,
+  gateReasonTrendSignal,
+  GATE_REASON_TREND_WINDOW,
+  GATE_REASON_TREND_FLAT_THRESHOLD,
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
@@ -1257,6 +1260,92 @@ describe('gateReasonBurdenTrend', () => {
     ];
     const points = gateReasonBurdenTrend(runs);
     expect(points.map((p) => p.iteration)).toEqual([1, 2, 3]);
+  });
+});
+
+describe('gateReasonTrendSignal', () => {
+  const CL = '変更行数 500 が上限 400 を超えている';
+  const E2E = 'e2e(Playwright) が失敗している';
+  const ADV = 'adversary が approve していない';
+
+  function gateRun(iteration: number, gateReasons: string[]) {
+    return makeRun({ iteration, verdict: 'abandoned', gateReasons });
+  }
+
+  it('比較対象の点が1件以下（runなし、または1件のみ）なら null を返す', () => {
+    expect(gateReasonTrendSignal([])).toBeNull();
+    expect(gateReasonTrendSignal([gateRun(1, [ADV])])).toBeNull();
+    // gateReasons が空の run は点自体を持たないため、実質1点未満扱いで null
+    const runs = [gateRun(1, [ADV]), makeRun({ iteration: 2, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonTrendSignal(runs)).toBeNull();
+  });
+
+  it('直近windowと直前windowを比較し、カテゴリごとに悪化/改善/横ばいを判定する', () => {
+    const runs = [
+      gateRun(1, [E2E, CL, CL]),
+      gateRun(2, [E2E, CL, CL]),
+      gateRun(3, [E2E, CL, CL]),
+      gateRun(4, [E2E, CL, ADV]),
+      gateRun(5, [E2E, CL, ADV]),
+      gateRun(6, [E2E, CL, ADV]),
+    ];
+    const signal = gateReasonTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(GATE_REASON_TREND_WINDOW);
+    expect(signal.partial).toBe(false);
+    expect(signal.previousIterations).toEqual([1, 2, 3]);
+    expect(signal.recentIterations).toEqual([4, 5, 6]);
+
+    const byCategory = Object.fromEntries(signal.categories.map((c) => [c.category, c]));
+    // adversaryNotApproved: 0件/反復 → 1件/反復 に増加＝悪化
+    expect(byCategory.adversaryNotApproved.previousAvgCount).toBe(0);
+    expect(byCategory.adversaryNotApproved.recentAvgCount).toBe(1);
+    expect(byCategory.adversaryNotApproved.direction).toBe('worsening');
+    // changedLinesExceeded: 2件/反復 → 1件/反復 に減少＝改善
+    expect(byCategory.changedLinesExceeded.previousAvgCount).toBe(2);
+    expect(byCategory.changedLinesExceeded.recentAvgCount).toBe(1);
+    expect(byCategory.changedLinesExceeded.direction).toBe('improving');
+    // e2eFailed: 1件/反復のまま変化なし＝横ばい
+    expect(byCategory.e2eFailed.direction).toBe('flat');
+    expect(byCategory.e2eFailed.delta).toBe(0);
+    // 一度も出現していないカテゴリも横ばいとして含まれる（全カテゴリを列挙する契約）
+    expect(byCategory.crashed.direction).toBe('flat');
+    expect(signal.categories).toHaveLength(8);
+  });
+
+  it('閾値未満のブレは横ばい、閾値ちょうどは悪化/改善として扱う（境界値）', () => {
+    // windowSize=3: 直前平均 0/3=0、直近平均 1/3≈0.333 → 閾値0.5未満なので横ばい
+    const flatRuns = [
+      gateRun(1, [E2E]),
+      gateRun(2, [E2E]),
+      gateRun(3, [E2E]),
+      gateRun(4, [E2E, ADV]),
+      gateRun(5, [E2E]),
+      gateRun(6, [E2E]),
+    ];
+    const flatSignal = gateReasonTrendSignal(flatRuns);
+    expect(flatSignal?.categories.find((c) => c.category === 'adversaryNotApproved')?.direction).toBe('flat');
+
+    // windowSize=2: 直前平均 0/2=0、直近平均 1/2=0.5 → 閾値ちょうどなので悪化と判定
+    const boundaryRuns = [gateRun(1, [E2E]), gateRun(2, [E2E]), gateRun(3, [E2E, ADV]), gateRun(4, [E2E])];
+    const boundarySignal = gateReasonTrendSignal(boundaryRuns);
+    const adv = boundarySignal?.categories.find((c) => c.category === 'adversaryNotApproved');
+    expect(adv?.delta).toBeCloseTo(GATE_REASON_TREND_FLAT_THRESHOLD);
+    expect(adv?.direction).toBe('worsening');
+  });
+
+  it('データ点が window*2 未満のときは実際の点数に縮小したwindowで比較し、partial=trueになる', () => {
+    const runs = [gateRun(1, [ADV]), gateRun(2, [E2E]), gateRun(3, [CL])];
+    const signal = gateReasonTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(1);
+    expect(signal.partial).toBe(true);
+    expect(signal.previousIterations).toEqual([2]);
+    expect(signal.recentIterations).toEqual([3]);
   });
 });
 
