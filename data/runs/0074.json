@@ -1,0 +1,41 @@
+{
+  "id": "20260723T225013Z-128",
+  "iteration": 74,
+  "issue": {
+    "number": 128,
+    "title": "Revision効率サイズ分析：変更規模と修正サイクルの非線形カーブ",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/128-revision",
+  "startedAt": "2026-07-23T22:50:13Z",
+  "finishedAt": "2026-07-23T23:12:12Z",
+  "durationSec": 1319,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 130,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たす。サイズ×修正サイクルの非線形性判定、境界値テスト、UI検証が厳密。既存機能との矛盾なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 555,
+  "cost": {
+    "builderUsd": 6.959607,
+    "adversaryUsd": 0.205341,
+    "ideationUsd": 0.0,
+    "totalUsd": 7.164948
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
