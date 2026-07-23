@@ -34,6 +34,7 @@ import {
   abandonedSummary,
   abandonedRateTrend,
   abandonedIterationDetails,
+  adversaryApprovalByReasonAndModel,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -600,6 +601,62 @@ test('ゲート不通過理由の連鎖パネルが実データから導出し�
     rows.map(async (r) => Number((await r.getAttribute('data-testid'))!.replace('gate-reason-chain-row-', ''))),
   );
   expect(renderedIterations).toEqual(chains.map((c) => c.iteration));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由×モデル別 Adversary承認率パネルが実データから導出したカテゴリ・モデル別の承認率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = adversaryApprovalByReasonAndModel(runs);
+  expect(
+    rows.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-reason-model-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}区分`);
+
+  // 各カテゴリ行が adversaryApprovalByReasonAndModel()（別の計算経路）と一致する
+  // モデル別の承認率・件数・対象iterationを表示する
+  for (const row of rows) {
+    const rowEl = page.getByTestId(`adversary-reason-model-row-${row.category}`);
+    await expect(rowEl).toContainText(`${row.total}件`);
+
+    const allIterations = row.cells.flatMap((c) => c.iterations).sort((a, b) => a - b);
+    await expect(rowEl).toContainText(`対象iteration: ${allIterations.join(', ')}`);
+
+    for (const cell of row.cells) {
+      const rateEl = page.getByTestId(`adversary-reason-model-rate-${row.category}-${cell.model}`);
+      await expect(rateEl).toHaveText(
+        `承認${cell.approvalRatePct.toFixed(0)}% (${cell.approvedCount}/${cell.count})`,
+      );
+    }
+
+    // セルはcount降順で描画されていること
+    const cellEls = await page
+      .locator(`[data-testid^="adversary-reason-model-cell-${row.category}-"]`)
+      .all();
+    const renderedModels = await Promise.all(
+      cellEls.map(async (c) => (await c.getAttribute('data-testid'))!.replace(
+        `adversary-reason-model-cell-${row.category}-`,
+        '',
+      )),
+    );
+    expect(renderedModels).toEqual(row.cells.map((c) => c.model));
+  }
+
+  // カテゴリ行はtotal降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="adversary-reason-model-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-reason-model-row-', '')),
+  );
+  expect(renderedCategories).toEqual(rows.map((r) => r.category));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
