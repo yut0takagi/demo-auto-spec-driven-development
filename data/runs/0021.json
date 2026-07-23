@@ -1,0 +1,41 @@
+{
+  "id": "20260723T115454Z-51",
+  "iteration": 21,
+  "issue": {
+    "number": 51,
+    "title": "反復の成功/失敗を verdict 別に分岐表示する吹き出しサマリー",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/51-verdict",
+  "startedAt": "2026-07-23T11:54:54Z",
+  "finishedAt": "2026-07-23T12:05:01Z",
+  "durationSec": 607,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 54,
+  "adversary": {
+    "approved": true,
+    "summary": "反復の verdict 別分岐表示をすべて満たし、最新反復の自動選択・見出し色分け・レビューコメント表示・フォールバック処理が正確に実装されている。ユニット・E2E テストが全 verdict を網羅し、境界値・混同防止も検証済み。既存挙動への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 273,
+  "cost": {
+    "builderUsd": 2.627223,
+    "adversaryUsd": 0.063321,
+    "ideationUsd": 0.0,
+    "totalUsd": 2.690544
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
