@@ -15,6 +15,7 @@ import { ReviseCyclesChart } from '@/components/ReviseCyclesChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
 import { VerdictSummaryBubble } from '@/components/VerdictSummaryBubble';
+import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -50,6 +51,7 @@ export default function Home() {
           <TrendChart title="マージ率推移" points={mergeRateTrend(runs)} unit="%" />
         </div>
         <TrendChart title="E2E失敗率推移" points={e2eFailureRateTrend(runs)} unit="%" />
+        <ModelCostBreakdown runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />

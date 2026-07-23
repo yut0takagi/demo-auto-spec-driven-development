@@ -9,6 +9,7 @@ import {
   approvalRateTrend,
   mergeRateTrend,
   e2eFailureRateTrend,
+  costBreakdown,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
 } from './aggregate';
 import type { RunRecord } from './types';
@@ -627,5 +628,109 @@ describe('e2eFailureRateTrend', () => {
     const trend = e2eFailureRateTrend(runs);
     const summary = summarize(runs);
     expect(trend[trend.length - 1].value).toBeCloseTo(summary.e2eFailureRate * 100);
+  });
+});
+
+describe('costBreakdown', () => {
+  it('空配列では totalUsd=0、byRole は3ロール分すべて0、byModel は空配列を返す（NaN を出さない）', () => {
+    const b = costBreakdown([]);
+    expect(b.totalUsd).toBe(0);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    for (const r of b.byRole) {
+      expect(r.totalUsd).toBe(0);
+      expect(r.pct).toBe(0);
+    }
+    expect(b.byModel).toEqual([]);
+  });
+
+  it('ロールごとの合計とパーセンテージを計算し、常に builder→adversary→ideation の順で返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.6, adversaryUsd: 0.3, ideationUsd: 0.1, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    expect(b.totalUsd).toBeCloseTo(1.0);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    expect(b.byRole[0].totalUsd).toBeCloseTo(0.6);
+    expect(b.byRole[0].pct).toBeCloseTo(60);
+    expect(b.byRole[1].totalUsd).toBeCloseTo(0.3);
+    expect(b.byRole[1].pct).toBeCloseTo(30);
+    expect(b.byRole[2].totalUsd).toBeCloseTo(0.1);
+    expect(b.byRole[2].pct).toBeCloseTo(10);
+    // 内訳の合計は totalUsd の100%と一致するはず
+    expect(b.byRole.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100);
+  });
+
+  it('同じモデルが複数ロール（adversary と ideation）で使われている場合は合算する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, totalUsd: 0.8 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    // model-b は adversary(0.2) + ideation(0.1) = 0.3 に合算される。model-a は別エントリ
+    expect(b.byModel).toHaveLength(2);
+    expect(b.byModel[0].model).toBe('model-a');
+    expect(b.byModel[0].totalUsd).toBeCloseTo(0.5);
+    expect(b.byModel[0].pct).toBeCloseTo(62.5);
+    expect(b.byModel[1].model).toBe('model-b');
+    expect(b.byModel[1].totalUsd).toBeCloseTo(0.3);
+    expect(b.byModel[1].pct).toBeCloseTo(37.5);
+  });
+
+  it('複数 run にまたがるコストをモデル単位で積算し、totalUsd 降順で返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.2 },
+        models: { builder: 'model-a', adversary: 'model-c', ideation: 'model-c' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.3, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.4 },
+        models: { builder: 'model-a', adversary: 'model-c', ideation: 'model-c' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    // model-a: 0.1+0.3=0.4, model-c: (0.05+0.05)+(0.05+0.05)=0.2, totalUsd=0.6
+    expect(b.totalUsd).toBeCloseTo(0.6);
+    expect(b.byModel[0].model).toBe('model-a');
+    expect(b.byModel[0].totalUsd).toBeCloseTo(0.4);
+    expect(b.byModel[1].model).toBe('model-c');
+    expect(b.byModel[1].totalUsd).toBeCloseTo(0.2);
+  });
+
+  it('costTrend と同様、failed run のコストも含める（金は実際に消費されている）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 } }),
+      makeRun({ iteration: 2, verdict: 'failed', cost: { builderUsd: 0.02, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.02 } }),
+    ];
+    const b = costBreakdown(runs);
+    expect(b.totalUsd).toBeCloseTo(0.12);
+  });
+
+  it('byModel の合計は Summary.totalCostUsd と一致する（別々の計算経路の突き合わせ）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.4, adversaryUsd: 0.2, ideationUsd: 0.1, totalUsd: 0.7 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-a' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.15, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.25 },
+        models: { builder: 'model-b', adversary: 'model-b', ideation: 'model-a' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    const summary = summarize(runs);
+    const modelSum = b.byModel.reduce((s, m) => s + m.totalUsd, 0);
+    expect(modelSum).toBeCloseTo(summary.totalCostUsd);
+    expect(b.totalUsd).toBeCloseTo(summary.totalCostUsd);
   });
 });

@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize, e2eFailureRateTrend } from '../src/lib/aggregate';
+import { summarize, e2eFailureRateTrend, costBreakdown } from '../src/lib/aggregate';
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -219,4 +219,43 @@ test('E2E失敗率推移グラフが表示され、最新値が data/runs から
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
+});
+
+test('モデルコストの内訳が役割別合計とモデル別合計を表示し、Summaryの累計コストと一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = summarize(runs);
+  const breakdown = costBreakdown(runs);
+
+  expect(
+    breakdown.totalUsd,
+    'data/runs の合計コストが0のため「モデルコストの内訳」パネルの中身を検証できない。fixture を見直すこと。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-cost-breakdown');
+  await expect(panel).toBeVisible();
+  // パネルのヘッダに表示される合計は Summary.totalCostUsd（別の計算経路）と一致するはず
+  await expect(panel).toContainText(`$${summary.totalCostUsd.toFixed(2)}`);
+
+  // ロール別の内訳: builder/adversary/ideation の3つ全てがラベルとして表示され、
+  // それぞれの金額が costBreakdown() の計算結果と一致する
+  for (const role of breakdown.byRole) {
+    const label = page.getByTestId(`role-cost-label-${role.role}`);
+    await expect(label).toBeVisible();
+    await expect(label).toContainText(`$${role.totalUsd.toFixed(2)}`);
+    await expect(label).toContainText(`${role.pct.toFixed(1)}%`);
+  }
+
+  // モデル別の内訳: 各モデルが1行だけ存在し、合算後の金額を表示する
+  for (const entry of breakdown.byModel) {
+    const rows = page.getByTestId(`model-cost-row-${entry.model}`);
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText(`$${entry.totalUsd.toFixed(2)}`);
+  }
+
+  const body2 = await page.locator('body').innerText();
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
 });
