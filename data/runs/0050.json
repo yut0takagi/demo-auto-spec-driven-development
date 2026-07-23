@@ -1,0 +1,41 @@
+{
+  "id": "20260723T181111Z-95",
+  "iteration": 50,
+  "issue": {
+    "number": 95,
+    "title": "Ideation コスト効率と生成品質の関連性分析",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/95-ideation",
+  "startedAt": "2026-07-23T18:11:11Z",
+  "finishedAt": "2026-07-23T18:34:38Z",
+  "durationSec": 1407,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 97,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation単価と生成品質（承認率・マージ率）の相関分析をPearson相関係数で実装。複数batchでの正確な計算、境界値テスト、既存機能への破壊変更なし。要件充足。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 547,
+  "cost": {
+    "builderUsd": 6.309534,
+    "adversaryUsd": 0.157726,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.46726
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
