@@ -1,0 +1,41 @@
+{
+  "id": "20260723T212047Z-114",
+  "iteration": 66,
+  "issue": {
+    "number": 114,
+    "title": "Adversary見落とし傾向の「承認⇔実結果乖離」定量化パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/114-adversary",
+  "startedAt": "2026-07-23T21:20:47Z",
+  "finishedAt": "2026-07-23T21:32:33Z",
+  "durationSec": 706,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 118,
+  "adversary": {
+    "approved": true,
+    "summary": "実装は要件を正確に満たし、エッジケースまで考慮された単体テストが振る舞いを実質的に検証している。敵対レビュー・verify・e2e は別途チェック済みのため、ここでは論理的正当性と仕様適合のみ判定。両者とも合格。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 513,
+  "cost": {
+    "builderUsd": 3.548557,
+    "adversaryUsd": 0.20513,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.753687
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
