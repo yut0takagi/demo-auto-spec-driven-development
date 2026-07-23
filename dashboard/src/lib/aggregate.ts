@@ -774,6 +774,66 @@ export function reviseCyclesByModel(runs: RunRecord[]): ModelReviseCyclesSummary
     });
 }
 
+export interface VerdictReviseCyclesSummary {
+  verdict: Verdict;
+  /** この verdict に該当した反復数 */
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/** 平均revise回数が同値のときの表示順（GATE_FAILURE_TYPE_ORDER と同じ深刻度順に合わせる）。 */
+const VERDICT_REVISE_ORDER: readonly Verdict[] = [
+  'failed',
+  'abandoned',
+  'needs-human',
+  'paused',
+  'dry-run',
+  'merged',
+];
+
+/**
+ * verdict別のrevise回数分布。reviseCyclesByModel は failed run を reachedVerify で
+ * 除外するが（複数 verdict を1モデルのグループに混ぜて平均するため、意味の異なる
+ * sentinel を持ち込むと平均が歪む）、こちらは verdict そのものを分割キーにしている
+ * ので事情が異なる: failed グループの reviseCycles は「クラッシュするまでの値」という
+ * 一貫した意味を保ったまま、failed という1グループ内だけで平均される。つまり
+ * 「failed に至った反復は何回revise した末にクラッシュしたか」を merged 等と並べて
+ * 比較すること自体がこのパネルの目的であり、除外すると比較対象が消えてしまう。
+ */
+export function reviseCyclesByVerdict(runs: RunRecord[]): VerdictReviseCyclesSummary[] {
+  const byVerdict = new Map<Verdict, { values: number[]; iterations: number[] }>();
+
+  for (const run of byIterationAsc(runs)) {
+    let entry = byVerdict.get(run.verdict);
+    if (!entry) {
+      entry = { values: [], iterations: [] };
+      byVerdict.set(run.verdict, entry);
+    }
+    entry.values.push(run.reviseCycles);
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byVerdict.entries()]
+    .map(([verdict, entry]) => ({
+      verdict,
+      count: entry.values.length,
+      mean: mean(entry.values),
+      median: median(entry.values),
+      min: Math.min(...entry.values),
+      max: Math.max(...entry.values),
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => {
+      if (b.mean !== a.mean) return b.mean - a.mean;
+      return VERDICT_REVISE_ORDER.indexOf(a.verdict) - VERDICT_REVISE_ORDER.indexOf(b.verdict);
+    });
+}
+
 export interface ModelEffectivenessSummary {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */

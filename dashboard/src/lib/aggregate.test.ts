@@ -24,6 +24,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   reviseCyclesByModel,
+  reviseCyclesByVerdict,
   breakerRunway,
   modelEffectiveness,
   ideationFailureSummary,
@@ -1563,6 +1564,52 @@ describe('reviseCyclesByModel', () => {
       }),
     ];
     const result = reviseCyclesByModel(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('reviseCyclesByVerdict', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseCyclesByVerdict([])).toEqual([]);
+  });
+
+  it('reviseCyclesByModel とは異なり failed run を除外せず、独立した verdict グループとして集計する', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 99 })];
+    expect(reviseCyclesByVerdict(runs)).toEqual([
+      { verdict: 'failed', count: 1, mean: 99, median: 99, min: 99, max: 99, iterations: [1] },
+    ]);
+  });
+
+  it('verdict ごとに mean/median/min/max/count/iterations を正確な値で集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 3 }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 5 }),
+      makeRun({ iteration: 4, verdict: 'abandoned', reviseCycles: 0 }),
+    ];
+    const result = reviseCyclesByVerdict(runs);
+    // 平均revise回数降順: merged(mean=3) > abandoned(mean=0)
+    expect(result).toEqual([
+      { verdict: 'merged', count: 3, mean: 3, median: 3, min: 1, max: 5, iterations: [1, 2, 3] },
+      { verdict: 'abandoned', count: 1, mean: 0, median: 0, min: 0, max: 0, iterations: [4] },
+    ]);
+  });
+
+  it('平均revise回数が同値のときは深刻度順（failed > abandoned > needs-human > paused > dry-run > merged）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 2 }),
+      makeRun({ iteration: 2, verdict: 'abandoned', reviseCycles: 2 }),
+    ];
+    const result = reviseCyclesByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['abandoned', 'merged']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 1 }),
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 2 }),
+    ];
+    const result = reviseCyclesByVerdict(runs);
     expect(result[0].iterations).toEqual([1, 3]);
   });
 });
