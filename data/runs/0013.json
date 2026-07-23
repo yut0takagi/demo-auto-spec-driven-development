@@ -1,0 +1,41 @@
+{
+  "id": "20260723T013747Z-32",
+  "iteration": 13,
+  "issue": {
+    "number": 32,
+    "title": "docs: README にダッシュボードの各グラフの見方を1行ずつ追記する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/32-docs-readme-1",
+  "startedAt": "2026-07-23T01:37:47Z",
+  "finishedAt": "2026-07-23T01:44:49Z",
+  "durationSec": 422,
+  "reviseCycles": 0,
+  "verdict": "dry-run",
+  "gateReasons": [],
+  "prNumber": 33,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を満たし，README の記述は高品質です。テストは形式検証には十分ですが，説明の『正確性』と『意味』は人間が保証する前提になっています。この前提の下では変更は安全です。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 88,
+  "cost": {
+    "builderUsd": 1.717273,
+    "adversaryUsd": 0.047469,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.764742
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

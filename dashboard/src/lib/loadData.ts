@@ -5,7 +5,7 @@ import type { RunRecord, LoopStatus, LoopState, Verdict } from './types';
 /** リポジトリ直下の data/ を指す（dashboard/ から見て 1 つ上） */
 const DATA_DIR = path.join(process.cwd(), '..', 'data');
 
-const VALID_VERDICTS: readonly Verdict[] = ['merged', 'needs-human', 'paused', 'dry-run', 'failed'];
+const VALID_VERDICTS: readonly Verdict[] = ['merged', 'abandoned', 'needs-human', 'paused', 'dry-run', 'failed'];
 const VALID_STATES: readonly LoopState[] = ['RUNNING', 'PAUSED', 'HALTED'];
 
 export interface LoadError {

@@ -1,0 +1,45 @@
+{
+  "id": "20260722T161442Z-13",
+  "iteration": 9,
+  "issue": {
+    "number": 13,
+    "title": "approval / merge 率を iteration ごとの推移グラフで見える化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/13-approval-merge-iteration",
+  "startedAt": "2026-07-22T16:14:42Z",
+  "finishedAt": "2026-07-22T16:19:39Z",
+  "durationSec": 297,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 22,
+  "adversary": {
+    "approved": true,
+    "summary": "承認率・マージ率の累積推移を正確に計算し、母集団定義を summarize() と揃えて一貫性を確保。テストが充実（空配列・境界値・最終値一致・failed run の扱い）、E2E で UI 表示と値の不整合をチェック。NaN 検証もあり。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 177,
+  "cost": {
+    "builderUsd": 1.150626,
+    "adversaryUsd": 0.093523,
+    "ideationUsd": 0.08218160000000001,
+    "totalUsd": 1.326331
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    23,
+    24,
+    25
+  ]
+}

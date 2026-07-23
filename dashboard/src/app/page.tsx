@@ -1,9 +1,10 @@
 import { loadRuns, loadStatus } from '@/lib/loadData';
-import { summarize, coverageTrend, costTrend } from '@/lib/aggregate';
+import { summarize, coverageTrend, costTrend, approvalRateTrend, mergeRateTrend } from '@/lib/aggregate';
 import { StatusBadge } from '@/components/StatusBadge';
 import { LoadErrorBanner } from '@/components/LoadErrorBanner';
 import { MetricCards } from '@/components/MetricCards';
 import { TrendChart } from '@/components/TrendChart';
+import { ReviseCyclesChart } from '@/components/ReviseCyclesChart';
 import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
 
@@ -35,6 +36,11 @@ export default function Home() {
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
         </div>
+        <div className="grid gap-6 lg:grid-cols-2">
+          <TrendChart title="承認率推移" points={approvalRateTrend(runs)} unit="%" />
+          <TrendChart title="マージ率推移" points={mergeRateTrend(runs)} unit="%" />
+        </div>
+        <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>

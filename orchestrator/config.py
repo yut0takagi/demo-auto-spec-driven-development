@@ -17,12 +17,16 @@ def _flag(env: Mapping[str, str], key: str, default: bool = False) -> bool:
 
 @dataclass(frozen=True)
 class Config:
-    max_revise_cycles: int = 2
-    max_changed_lines: int = 400
+    # gate（verify/e2e/adversary）を満たすまで builder に再試行させる上限。
+    # 満たせなければ人間に振らず abandoned で見送る。
+    max_revise_cycles: int = 3
+    max_changed_lines: int = 3000
     circuit_breaker_fails: int = 3
     daily_cost_budget_usd: float = 5.0
     per_iter_cost_budget_usd: float = 0.5
     ideation_max_issues: int = 3
+    #: ready がこの件数未満なら反復先頭で ideation を先回り実行して補充する（枯れ防止）。
+    ideation_low_water: int = 2
     builder_model: str = "claude-sonnet-5"
     adversary_model: str = "claude-haiku-4-5"
     ideation_model: str = "claude-haiku-4-5"
@@ -31,18 +35,22 @@ class Config:
     dry_run: bool = False
     base_branch: str = "develop"
     ready_label: str = "loop:ready"
+    #: 旧経路の名残。現行ループは needs-human を発行しない（[[abandoned_label]] を使う）。
     needs_human_label: str = "loop:needs-human"
+    #: gate を再試行しても満たせなかった issue に付けて自動クローズするラベル。
+    abandoned_label: str = "loop:abandoned"
     paused_label: str = "loop:paused"
 
     @classmethod
     def from_env(cls, env: Mapping[str, str]) -> "Config":
         return cls(
-            max_revise_cycles=int(env.get("MAX_REVISE_CYCLES", 2)),
-            max_changed_lines=int(env.get("MAX_CHANGED_LINES", 400)),
+            max_revise_cycles=int(env.get("MAX_REVISE_CYCLES", 3)),
+            max_changed_lines=int(env.get("MAX_CHANGED_LINES", 3000)),
             circuit_breaker_fails=int(env.get("CIRCUIT_BREAKER_FAILS", 3)),
             daily_cost_budget_usd=float(env.get("DAILY_COST_BUDGET_USD", 5.0)),
             per_iter_cost_budget_usd=float(env.get("PER_ITER_COST_BUDGET_USD", 0.5)),
             ideation_max_issues=int(env.get("IDEATION_MAX_ISSUES", 3)),
+            ideation_low_water=int(env.get("IDEATION_LOW_WATER", 2)),
             builder_model=env.get("BUILDER_MODEL", "claude-sonnet-5"),
             adversary_model=env.get("ADVERSARY_MODEL", "claude-haiku-4-5"),
             ideation_model=env.get("IDEATION_MODEL", "claude-haiku-4-5"),

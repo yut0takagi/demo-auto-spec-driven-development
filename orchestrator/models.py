@@ -6,7 +6,9 @@ import json
 from dataclasses import dataclass, field
 from typing import Literal
 
-Verdict = Literal["merged", "needs-human", "paused", "dry-run", "failed"]
+# "needs-human" は旧 record（gate 不通過で人間に委ねていた時代）が持つため型としては残すが、
+# 現行ループは発行しない。gate 不通過は "abandoned"（自動見送り）になる。
+Verdict = Literal["merged", "abandoned", "needs-human", "paused", "dry-run", "failed"]
 LoopState = Literal["RUNNING", "PAUSED", "HALTED"]
 
 

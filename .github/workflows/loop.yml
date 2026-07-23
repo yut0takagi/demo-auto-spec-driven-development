@@ -24,7 +24,9 @@ jobs:
     # キルスイッチ L2: 変数が false ならジョブ自体を実行しない
     if: vars.LOOP_ENABLED != 'false'
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    # 1 起動で back-to-back に複数周まわす（連続化）。実周回数は下の LOOP_BATCH_* 予算で決まる。
+    # ここはジョブの安全上限（GitHub ホストランナーの上限 360 分未満）。
+    timeout-minutes: 350
 
     steps:
       - uses: actions/checkout@v4
@@ -69,7 +71,7 @@ jobs:
           git config user.name "loop-bot"
           git config user.email "loop-bot@users.noreply.github.com"
 
-      - name: Run one iteration
+      - name: Run iteration batch (連続実行)
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -80,17 +82,49 @@ jobs:
           ADVERSARY_MODEL: ${{ vars.ADVERSARY_MODEL || 'claude-haiku-4-5' }}
           IDEATION_MODEL: ${{ vars.IDEATION_MODEL || 'claude-haiku-4-5' }}
           REPO_ROOT: ${{ github.workspace }}
-        run: python -m orchestrator
-
-      - name: Commit run record to develop
+          # 予算 teeth: 本日のコストがこれを超えたら pre-flight で高価な処理を始めず halt する。
+          # 連続運転の暴走を防ぐ実効キャップ（既定 $100/日・repo variable で調整可）。
+          DAILY_COST_BUDGET_USD: ${{ vars.DAILY_COST_BUDGET_USD || '100' }}
+          # 連続化の予算（repo variables で調整可・下記は既定値）。
+          #   LOOP_BATCH_SECONDS: この秒数を超えたら新しい周を始めない（既定 50 分）
+          #   LOOP_BATCH_MAX:     1 起動あたりの最大周回数（時間予算が先に効くことが多い）
+          #   LOOP_ITER_TIMEOUT:  1 周のハング保護（この秒数で強制終了）
+          # ⚠ 連続で回すほど課金は増える（1 周 ≒ builder $6.5）。ガンガン回すなら
+          #   `gh variable set LOOP_BATCH_SECONDS 18000` のように上げる（timeout-minutes 350 が上限）。
+          LOOP_BATCH_SECONDS: ${{ vars.LOOP_BATCH_SECONDS || '3000' }}
+          LOOP_BATCH_MAX: ${{ vars.LOOP_BATCH_MAX || '20' }}
+          LOOP_ITER_TIMEOUT: ${{ vars.LOOP_ITER_TIMEOUT || '3600' }}
         run: |
-          git checkout develop
-          # orchestrator が書いた data/ を先に commit してから rebase する。
-          # 未コミットのまま `git pull --rebase` すると unstaged changes で exit 128 になる
-          # （dry-run 検証で判明したバグ）。
-          if [[ -n "$(git status --porcelain data/)" ]]; then
-            git add data/
-            git commit -m "chore(loop): record iteration [skip ci]"
-            git pull --rebase origin develop
-            git push origin develop
-          fi
+          set -uo pipefail
+          deadline=$(( $(date +%s) + LOOP_BATCH_SECONDS ))
+          for n in $(seq 1 "$LOOP_BATCH_MAX"); do
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "== batch 時間予算 (${LOOP_BATCH_SECONDS}s) 到達。$((n-1)) 周で終了 =="
+              break
+            fi
+            # 各周は最新 develop の綺麗な状態から始める（前周の record commit / 他 PR のマージを
+            # 取り込み、前周のビルダー作業ツリーを完全に捨てる）。
+            git fetch origin develop --quiet
+            git checkout -f develop
+            git reset --hard origin/develop
+            git clean -fd
+            echo "::group::iteration ${n}/${LOOP_BATCH_MAX}"
+            timeout "$LOOP_ITER_TIMEOUT" python -m orchestrator 2>&1 | tee /tmp/iter_out.txt \
+              || echo "== iteration ${n} が非ゼロ終了（バッチは継続）=="
+            echo "::endgroup::"
+            # orchestrator が書いた data/ を develop に記録 push（[skip ci] で CI を起こさない）。
+            # 未コミットのまま `git pull --rebase` すると exit 128 になるので先に commit する。
+            git checkout develop
+            if [[ -n "$(git status --porcelain data/)" ]]; then
+              git add data/
+              git commit -m "chore(loop): record iteration [skip ci]"
+              git pull --rebase origin develop
+              git push origin develop
+            fi
+            # 予算/連続失敗ブレーカが halt を返したら連続バッチを止める（予算 teeth の効き目）。
+            # 次の起動でも本日分が予算超過なら pre-flight で即 halt するので回り続けない。
+            if tail -n 3 /tmp/iter_out.txt 2>/dev/null | grep -q '"status": "halted"'; then
+              echo "== breaker halted 検知。連続バッチを終了 =="
+              break
+            fi
+          done

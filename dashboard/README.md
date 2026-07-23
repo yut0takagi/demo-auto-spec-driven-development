@@ -20,6 +20,18 @@ You can start editing the page by modifying `app/page.tsx`. The page auto-update
 
 This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
 
+## ダッシュボードの見方
+
+トップページ (`src/app/page.tsx`) に並ぶ各グラフ・パネルの意味は以下の通りです。
+
+- **カバレッジ推移**: 各反復のユニットテストカバレッジ(%)の時系列推移。
+- **累計コスト**: 各反復にかかった Builder/Adversary/Ideation 合計費用(USD)の推移。
+- **承認率推移**: Adversary レビューが承認 (approved) した割合(%)の推移。
+- **マージ率推移**: 反復した PR が実際にマージされた割合(%)の推移。
+- **revise 回数の分布**: 各反復の revise 回数を棒グラフで示し、中央値（実線）と外れ値の閾値（破線）を重ねたもの。閾値を超えるバーは赤色で強調される。
+- **直近の反復**: 直近 20 件の反復を新しい順に並べ、判定 (verdict)・revise 回数・コストを一覧表示したもの。
+- **ループが生成した改善バックログ**: 各反復の完了時にループが自動生成した次の issue 候補の一覧。
+
 ## Learn More
 
 To learn more about Next.js, take a look at the following resources:

@@ -1,0 +1,47 @@
+{
+  "id": "20260723T061759Z-36",
+  "iteration": 14,
+  "issue": {
+    "number": 36,
+    "title": "Model cost breakdown パネル追加",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/36-model-cost-breakdown",
+  "startedAt": "2026-07-23T06:17:59Z",
+  "finishedAt": "2026-07-23T06:54:52Z",
+  "durationSec": 2213,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "テストが実装の算術的正確性を検証しておらず、外部JSON構造崩れへの耐性テストで実装との矛盾がある。複数役兼務時のコスト合算ロジック、浮動小数点数丸め、README との仕様確認が不充分。 / 指摘: テスト198-206行: models/cost が undefined の場合、実装が複数の'unknown'を生成する可能性があるがテストは1件のみ検証。コンポーネント層で意図通り機能するか再確認が必要; テスト152-182行: 複数反復集計の算術的正確性をテストしておらず、DOM表示値でしか検証していない。aggregate.test.ts と ModelCostBreakdown.test.tsx の共有フィクスチャ化で不変量を強要すべき; 実装38-49行: aggregate.ts で計算した share を使わず、コンポーネント層で幅比率を再計算。役別コスト合計がモデルの totalUsd と一致しない丸め誤差の場合、矛盾が発生する可能性がある"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 572,
+  "cost": {
+    "builderUsd": 9.380133,
+    "adversaryUsd": 0.358746,
+    "ideationUsd": 0.10522949999999999,
+    "totalUsd": 9.844109
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    36,
+    37,
+    38
+  ]
+}

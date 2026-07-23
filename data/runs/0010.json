@@ -1,0 +1,44 @@
+{
+  "id": "20260722T165551Z-25",
+  "iteration": 10,
+  "issue": {
+    "number": 25,
+    "title": "verdict 別の cumulative success curve（成功の累積確率推移）を描画する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/25-verdict-cumulative-success-curve",
+  "startedAt": "2026-07-22T16:55:51Z",
+  "finishedAt": "2026-07-22T17:38:48Z",
+  "durationSec": 2577,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない",
+    "変更行数 501 が上限 400 を超えている"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "実装は「verdict ごとの累積発生率」を示しており、issue #25 で要求された「成功の累積確率」（merge 率）と意味が異なる。また、コンポーネント名 VerdictSuccessChart は全 verdict を描くのに misnamed である。テスト自体は十分だが、要件充足していない。 / 指摘: 要件不適合: 'success curve' はマージ成功率を指すはずだが、実装は全 verdict の発生率を描画している。コンポーネント名・グラフタイトルが実装内容と意味が合致していない。issue #25 の要件定義を再確認し、全 verdict 追跡が本当に求められたものか検証すべき。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 501,
+  "cost": {
+    "builderUsd": 12.088866,
+    "adversaryUsd": 0.361682,
+    "ideationUsd": 0.0,
+    "totalUsd": 12.450548
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

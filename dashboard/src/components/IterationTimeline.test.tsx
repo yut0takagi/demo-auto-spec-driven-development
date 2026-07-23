@@ -41,10 +41,10 @@ describe('IterationTimeline', () => {
     expect(items.map((el) => el.textContent)).toEqual(['#3', '#2', '#1']);
   });
 
-  // Verdict の全メンバー (merged/needs-human/paused/dry-run/failed) を描画できることを
-  // 保証する。dry-run はダッシュボードの後付け追加なので、ここが欠けると
-  // Record<Verdict, string> の typecheck が落ちる（別の落とし穴として仕様に明記あり）。
-  it.each<Verdict>(['merged', 'needs-human', 'paused', 'dry-run', 'failed'])(
+  // Verdict の全メンバー (merged/abandoned/needs-human/paused/dry-run/failed) を描画できる
+  // ことを保証する。verdict が増えたのにここへ足さないと Record<Verdict, string> の
+  // typecheck が落ちる（別の落とし穴として仕様に明記あり）。
+  it.each<Verdict>(['merged', 'abandoned', 'needs-human', 'paused', 'dry-run', 'failed'])(
     'verdict "%s" を持つ反復を表示できる',
     (verdict) => {
       const runs = [makeRun({ iteration: 1, verdict })];

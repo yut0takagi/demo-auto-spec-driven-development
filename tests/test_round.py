@@ -9,21 +9,27 @@ def agent_out(text: str, cost: float = 0.01) -> CommandResult:
     return CommandResult(0, json.dumps({"result": text, "total_cost_usd": cost}), "")
 
 
+OK = CommandResult(0, "", "")
 APPROVE = '```json\n{"approved": true, "summary": "ok"}\n```'
 REJECT = '```json\n{"approved": false, "summary": "テストが薄い"}\n```'
 
 
-def test_approved_on_first_review_runs_no_revise():
+def _round(runner, env=None):
+    return run_native_round(
+        task="add x", diff_provider=lambda: "diff", cwd="/repo",
+        cfg=Config.from_env(env or {}), runner=runner,
+    )
+
+
+def test_all_green_on_first_pass_runs_no_revise():
+    # builder → verify → e2e → adversary(approve) の順で、一発緑なら revise しない。
     runner = FakeRunner([
         agent_out("implemented", 0.10),   # builder.work
+        OK,                               # npm run verify
+        OK,                               # npm run test:e2e
         agent_out(APPROVE, 0.01),         # adversary.review
-        CommandResult(0, "", ""),         # npm run verify
-        CommandResult(0, "", ""),         # npm run test:e2e
     ])
-    outcome = run_native_round(
-        task="add x", diff_provider=lambda: "diff", cwd="/repo",
-        cfg=Config.from_env({}), runner=runner,
-    )
+    outcome = _round(runner)
     assert isinstance(outcome, RoundOutcome)
     assert outcome.adversary.approved is True
     assert outcome.revise_cycles == 0
@@ -33,58 +39,85 @@ def test_approved_on_first_review_runs_no_revise():
     assert outcome.adversary_cost_usd == 0.01
 
 
-def test_rejection_triggers_revise_then_re_review():
+def test_adversary_rejection_triggers_revise_then_approve():
     runner = FakeRunner([
-        agent_out("v1", 0.10),      # work
+        agent_out("v1", 0.10),      # builder
+        OK, OK,                     # verify, e2e
         agent_out(REJECT, 0.01),    # review 1 -> reject
         agent_out("v2", 0.08),      # revise
+        OK, OK,                     # verify, e2e
         agent_out(APPROVE, 0.01),   # review 2 -> approve
-        CommandResult(0, "", ""),   # verify
-        CommandResult(0, "", ""),   # e2e
     ])
-    outcome = run_native_round(
-        task="add x", diff_provider=lambda: "diff", cwd="/repo",
-        cfg=Config.from_env({}), runner=runner,
-    )
+    outcome = _round(runner)
     assert outcome.revise_cycles == 1
     assert outcome.adversary.approved is True
     assert outcome.builder_cost_usd == 0.18
 
 
-def test_stops_after_max_revise_cycles_still_rejected():
+def test_failing_verify_feeds_back_and_revises_until_green():
+    # 新挙動: verify の失敗も builder に戻して再試行する（旧実装は末尾で測るだけだった）。
+    # verify が赤のサイクルでは e2e も adversary も回さない。
     runner = FakeRunner([
-        agent_out("v1"), agent_out(REJECT),
-        agent_out("v2"), agent_out(REJECT),
-        agent_out("v3"), agent_out(REJECT),
-        CommandResult(0, "", ""),  # verify
-        CommandResult(0, "", ""),  # e2e
+        agent_out("v1"),                        # builder
+        CommandResult(1, "", "tsc: error"),     # verify 失敗（e2e はスキップ）
+        agent_out("v2"),                        # revise
+        OK, OK,                                 # verify, e2e 緑
+        agent_out(APPROVE),                     # adversary approve
     ])
-    outcome = run_native_round(
-        task="t", diff_provider=lambda: "d", cwd="/repo",
-        cfg=Config.from_env({"MAX_REVISE_CYCLES": "2"}), runner=runner,
-    )
+    outcome = _round(runner)
+    assert outcome.revise_cycles == 1
+    assert outcome.verify_passed is True
+    assert outcome.e2e_passed is True
+    assert outcome.adversary.approved is True
+
+
+def test_failing_e2e_feeds_back_and_revises_until_green():
+    # 新挙動: e2e の失敗も builder に戻す。verify 緑 → e2e 失敗 → adversary はスキップ。
+    runner = FakeRunner([
+        agent_out("v1"),                        # builder
+        OK,                                     # verify 緑
+        CommandResult(1, "", "e2e failed"),     # e2e 失敗（adversary はスキップ）
+        agent_out("v2"),                        # revise
+        OK, OK,                                 # verify, e2e 緑
+        agent_out(APPROVE),                     # adversary approve
+    ])
+    outcome = _round(runner)
+    assert outcome.revise_cycles == 1
+    assert outcome.e2e_passed is True
+    assert outcome.adversary.approved is True
+
+
+def test_stops_after_max_cycles_when_verify_never_passes():
+    # verify が緑にならないまま上限に達したら、諦めて verify_passed=False で返す。
+    runner = FakeRunner([
+        agent_out("v1"),                    # builder
+        CommandResult(1, "", "err"),        # cycle0 verify 失敗
+        agent_out("r1"),                    # revise
+        CommandResult(1, "", "err"),        # cycle1 verify 失敗
+        agent_out("r2"),                    # revise
+        CommandResult(1, "", "err"),        # cycle2 verify 失敗 -> 上限で break
+    ])
+    outcome = _round(runner, env={"MAX_REVISE_CYCLES": "2"})
     assert outcome.revise_cycles == 2
+    assert outcome.verify_passed is False
     assert outcome.adversary.approved is False
 
 
-def test_failing_verify_is_reported():
+def test_stops_after_max_cycles_when_adversary_never_approves():
     runner = FakeRunner([
-        agent_out("v1"), agent_out(APPROVE),
-        CommandResult(1, "", "tsc error"),  # verify fails
-        CommandResult(0, "", ""),           # e2e
+        agent_out("v1"), OK, OK, agent_out(REJECT),   # cycle0
+        agent_out("r1"), OK, OK, agent_out(REJECT),   # cycle1
+        agent_out("r2"), OK, OK, agent_out(REJECT),   # cycle2 -> 上限で break
     ])
-    outcome = run_native_round(
-        task="t", diff_provider=lambda: "d", cwd="/repo",
-        cfg=Config.from_env({}), runner=runner,
-    )
-    assert outcome.verify_passed is False
+    outcome = _round(runner, env={"MAX_REVISE_CYCLES": "2"})
+    assert outcome.revise_cycles == 2
+    assert outcome.adversary.approved is False
+    assert outcome.verify_passed is True
+    assert outcome.e2e_passed is True
 
 
 def test_builder_prompt_contains_the_task():
-    runner = FakeRunner([
-        agent_out("v1"), agent_out(APPROVE),
-        CommandResult(0, "", ""), CommandResult(0, "", ""),
-    ])
+    runner = FakeRunner([agent_out("v1"), OK, OK, agent_out(APPROVE)])
     run_native_round(
         task="カバレッジを上げる", diff_provider=lambda: "d", cwd="/repo",
         cfg=Config.from_env({}), runner=runner,
@@ -94,14 +127,12 @@ def test_builder_prompt_contains_the_task():
 
 
 def test_uses_configured_models_for_each_role():
-    runner = FakeRunner([
-        agent_out("v1"), agent_out(APPROVE),
-        CommandResult(0, "", ""), CommandResult(0, "", ""),
-    ])
+    # builder=calls[0], adversary=calls[3]（間に verify/e2e の shell 呼び出しが入る）。
+    runner = FakeRunner([agent_out("v1"), OK, OK, agent_out(APPROVE)])
     run_native_round(
         task="t", diff_provider=lambda: "d", cwd="/repo",
         cfg=Config.from_env({}), runner=runner,
     )
-    builder_cmd, adversary_cmd = runner.calls[0][0], runner.calls[1][0]
+    builder_cmd, adversary_cmd = runner.calls[0][0], runner.calls[3][0]
     assert builder_cmd[builder_cmd.index("--model") + 1] == "claude-sonnet-5"
     assert adversary_cmd[adversary_cmd.index("--model") + 1] == "claude-haiku-4-5"

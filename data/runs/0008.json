@@ -1,0 +1,44 @@
+{
+  "id": "20260722T123512Z-14",
+  "iteration": 8,
+  "issue": {
+    "number": 14,
+    "title": "reviseCycles の中央値と外れ値（>3 cycles）を可視化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/14-revisecycles-3-cycles",
+  "startedAt": "2026-07-22T12:35:12Z",
+  "finishedAt": "2026-07-22T12:58:20Z",
+  "durationSec": 1388,
+  "reviseCycles": 2,
+  "verdict": "needs-human",
+  "gateReasons": [
+    "e2e(Playwright) が失敗している",
+    "adversary が approve していない"
+  ],
+  "prNumber": 18,
+  "adversary": {
+    "approved": false,
+    "summary": "Y軸スケーリング (maxValue) が複数の値セットで動的に計算される場合、グラフの高さが値に比例することをテストしていない。reviseCycles=[0,3,10] のような異なる maxValue 下での描画を検証するテストが必須。現在のテストは [0,3] 固定値でしか検証していない。 / 指摘: Y軸のスケーリング検証不足: [0,3] だけでなく、任意の maxValue でバーの相対的な高さが値の比率と一致することを確認するテストケースを追加。例: reviseCycles=[1, 10] で maxValue=10 のケース、reviseCycles=[2, 5] で maxValue=5 のケースなど。; 外れ値のみのケース (すべてが >3) をテストしていない。グラフ描画・カラー分配が正しく機能することを確認。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 394,
+  "cost": {
+    "builderUsd": 6.492982,
+    "adversaryUsd": 0.210485,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.703467
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

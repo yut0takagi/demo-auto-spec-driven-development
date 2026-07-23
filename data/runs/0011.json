@@ -1,0 +1,43 @@
+{
+  "id": "20260722T173942Z-24",
+  "iteration": 11,
+  "issue": {
+    "number": 24,
+    "title": "モデル別の平均所要時間・コストを comparison 表示する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/24-comparison",
+  "startedAt": "2026-07-22T17:39:42Z",
+  "finishedAt": "2026-07-22T18:03:42Z",
+  "durationSec": 1440,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "浮動小数丸め処理が E2E テスト側で未適用のため、実装との不一致が発生する可能性がある。複数モデルの並び順検証も不足しており、単一モデルでも誤った順序でもテストが通る。異常系（null・NaN・負値）のテストが欠落している。 / 指摘: E2E テストの independentlyComputeModelAverages() で roundUsd() 相当の丸めを実施する必要がある。現状では浮動小数誤差で検証ズレが起きる可能性がある; 複数モデルの並び順が正しく「反復数降順→モデル名昇順」になっていることを明示的に検証する E2E テストケースを追加すべき; コンポーネント・集計関数で null/undefined/NaN/負値などのエッジケースを処理する検証が欠落している"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 368,
+  "cost": {
+    "builderUsd": 6.869095,
+    "adversaryUsd": 0.143782,
+    "ideationUsd": 0.0,
+    "totalUsd": 7.012877
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
