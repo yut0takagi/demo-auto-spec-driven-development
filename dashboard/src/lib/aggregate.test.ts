@@ -64,6 +64,8 @@ import {
   issueResolutionTimeTrendSignal,
   ISSUE_RESOLUTION_TIME_TREND_WINDOW,
   ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT,
+  pausedDryRunDetails,
+  pausedDryRunSummary,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -4030,5 +4032,146 @@ describe('abandonedIterationDetails', () => {
       durationSec: 240,
       builderModel: 'claude-sonnet-5',
     });
+  });
+});
+
+describe('pausedDryRunDetails', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(pausedDryRunDetails([])).toEqual([]);
+  });
+
+  it('paused/dry-run以外のrunを除外し、新しい反復から順に並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'dry-run' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+    ];
+    const details = pausedDryRunDetails(runs);
+    expect(details.map((d) => d.iteration)).toEqual([3, 1]);
+  });
+
+  it('survivalIterationsはpaused/dry-run以外を含む全反復の最新iterationを基準に計算する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+      makeRun({ iteration: 3, verdict: 'dry-run' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const details = pausedDryRunDetails(runs);
+    // 最新反復は iteration 4（merged）。paused/dry-run のみに絞った母集団の最新（3）を
+    // 基準にすると誤った値になるため、全反復基準であることを検証する。
+    const paused = details.find((d) => d.iteration === 1);
+    const dryRun = details.find((d) => d.iteration === 3);
+    expect(paused?.survivalIterations).toBe(3);
+    expect(dryRun?.survivalIterations).toBe(1);
+  });
+
+  it('最新反復自体がpaused/dry-runならsurvivalIterationsは0（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'paused' })];
+    const [detail] = pausedDryRunDetails(runs);
+    expect(detail.survivalIterations).toBe(0);
+  });
+
+  it('各反復の詳細フィールドを元のrunと一致する値で返す（prNumberがnullの境界値含む）', () => {
+    const runs = [
+      makeRun({
+        iteration: 5,
+        issue: { number: 42, title: '止まったissue', labels: [] },
+        verdict: 'paused',
+        prNumber: null,
+        durationSec: 240,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.02, ideationUsd: 0, totalUsd: 0.12 },
+      }),
+    ];
+    const [detail] = pausedDryRunDetails(runs);
+    expect(detail).toEqual({
+      iteration: 5,
+      issueNumber: 42,
+      issueTitle: '止まったissue',
+      stopReason: 'paused',
+      prNumber: null,
+      durationSec: 240,
+      costUsd: 0.12,
+      survivalIterations: 0,
+    });
+  });
+});
+
+describe('pausedDryRunSummary', () => {
+  it('空配列は count 0・reasons 空配列・longestSurviving null を返す（境界値）', () => {
+    const s = pausedDryRunSummary([]);
+    expect(s).toEqual({ count: 0, reasons: [], longestSurviving: null });
+  });
+
+  it('paused/dry-runが1件も無ければ merged/failed/abandoned だけでも count 0 になる', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'failed' })];
+    const s = pausedDryRunSummary(runs);
+    expect(s.count).toBe(0);
+    expect(s.reasons).toEqual([]);
+    expect(s.longestSurviving).toBeNull();
+  });
+
+  it('停止理由別に件数・平均/最大生存反復数・合計コスト・PR開設件数を分けて集計する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'paused',
+        prNumber: 10,
+        cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'paused',
+        prNumber: null,
+        cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 },
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'dry-run',
+        prNumber: 20,
+        cost: { builderUsd: 1.0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1.0 },
+      }),
+      makeRun({ iteration: 6, verdict: 'merged' }),
+    ];
+    const s = pausedDryRunSummary(runs);
+    // 最新反復は iteration 6。paused(1,3)のsurvivalIterationsは5,3 → 平均4・最大5
+    expect(s.count).toBe(3);
+    const paused = s.reasons.find((r) => r.stopReason === 'paused');
+    const dryRun = s.reasons.find((r) => r.stopReason === 'dry-run');
+    expect(paused).toEqual({
+      stopReason: 'paused',
+      count: 2,
+      avgSurvivalIterations: 4,
+      maxSurvivalIterations: 5,
+      totalCostUsd: 0.30000000000000004,
+      openPrCount: 1,
+    });
+    expect(dryRun).toEqual({
+      stopReason: 'dry-run',
+      count: 1,
+      avgSurvivalIterations: 1,
+      maxSurvivalIterations: 1,
+      totalCostUsd: 1.0,
+      openPrCount: 1,
+    });
+  });
+
+  it('reasonsは該当件数0の停止理由を含めない', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'paused' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    const s = pausedDryRunSummary(runs);
+    expect(s.reasons.map((r) => r.stopReason)).toEqual(['paused']);
+  });
+
+  it('longestSurvivingは最も生存反復数の多いエントリを返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: '古い', labels: [] } }),
+      makeRun({ iteration: 4, verdict: 'dry-run', issue: { number: 2, title: '新しい', labels: [] } }),
+      makeRun({ iteration: 10, verdict: 'merged' }),
+    ];
+    const s = pausedDryRunSummary(runs);
+    expect(s.longestSurviving?.iteration).toBe(1);
+    expect(s.longestSurviving?.issueTitle).toBe('古い');
+    expect(s.longestSurviving?.survivalIterations).toBe(9);
   });
 });
