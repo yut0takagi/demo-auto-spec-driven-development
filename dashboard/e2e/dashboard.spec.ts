@@ -1767,22 +1767,16 @@ test('Verdict遷移の自動分類・離脱パターン検知パネルが実デ�
   expect(body2).not.toContain('undefined');
 });
 
-test('変更規模と修正サイクルの非線形カーブパネルが実データから導出したサイズ区分別revise回数・カーブ形状を表示する', async ({
-  page,
-}) => {
+test('変更規模と修正サイクルの非線形カーブパネルが実データから導出したサイズ区分別revise回数・カーブ形状を表示する', async ({ page }) => {
   await page.goto('/');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
 
   const signal = reviseCyclesSizeCurve(runs);
-  expect(
-    signal.buckets.length,
-    'changedLines>0でverifyに到達した反復が1件も無く、パネルの「データあり」経路を検証できない。',
-  ).toBeGreaterThan(0);
+  expect(signal.buckets.length, 'changedLines>0でverifyに到達した反復が0件で「データあり」経路を検証できない').toBeGreaterThan(0);
 
-  const panel = page.getByTestId('revision-size-curve-panel');
-  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('revision-size-curve-panel')).toBeVisible();
 
   const shapeLabels = {
     convex: '加速（非線形に悪化）',
@@ -1792,23 +1786,19 @@ test('変更規模と修正サイクルの非線形カーブパネルが実デ�
   } as const;
   await expect(page.getByTestId('revision-size-curve-shape')).toHaveText(shapeLabels[signal.shape]);
 
-  // 区分ごとの行が reviseCyclesSizeCurve()（別の計算経路と同一の集計）の平均・中央値・件数と一致するはず
-  for (const b of signal.buckets) {
-    const row = page.getByTestId(`revision-size-curve-row-${b.sizeBucket}`);
-    await expect(row).toBeVisible();
-    const stats = page.getByTestId(`revision-size-curve-stats-${b.sizeBucket}`);
-    await expect(stats).toContainText(`平均revise ${b.avgReviseCycles.toFixed(2)}回`);
-    await expect(stats).toContainText(`中央値 ${b.medianReviseCycles.toFixed(2)}回`);
-    await expect(stats).toContainText(`${b.total}件`);
-  }
-
-  // 出現しないサイズ区分（例: large が1件も無い）は行が描画されてはいけない
+  // 区分ごとの行が reviseCyclesSizeCurve()（別経路の同一集計）の平均・中央値・件数と一致し、未出現区分の行は無いはず
   const allSizeBuckets = ['small', 'medium', 'large'] as const;
   const presentBuckets = new Set(signal.buckets.map((b) => b.sizeBucket));
   for (const sizeBucket of allSizeBuckets) {
     if (!presentBuckets.has(sizeBucket)) {
       await expect(page.getByTestId(`revision-size-curve-row-${sizeBucket}`)).toHaveCount(0);
+      continue;
     }
+    const b = signal.buckets.find((x) => x.sizeBucket === sizeBucket)!;
+    const stats = page.getByTestId(`revision-size-curve-stats-${sizeBucket}`);
+    await expect(stats).toContainText(`平均revise ${b.avgReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`中央値 ${b.medianReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`${b.total}件`);
   }
 
   if (signal.shape === 'insufficient-data') {

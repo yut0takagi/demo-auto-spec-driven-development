@@ -5006,71 +5006,42 @@ describe('reviseCyclesBySizeBucket', () => {
     expect(reviseCyclesBySizeBucket([])).toEqual([]);
   });
 
-  it('failed run を母集団から除外する（changedLinesが測定されなかったsentinel 0のため）', () => {
-    const runs = [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 5, changedLines: 0 })];
-    expect(reviseCyclesBySizeBucket(runs)).toEqual([]);
-  });
-
-  it('区分ごとに平均・中央値・平均変更行数を計算し、出現した区分だけをsmall→medium→large順で返す', () => {
+  it('failed run（changedLines sentinel 0）を除外し、出現した区分だけをsmall→medium→large順で平均・中央値・平均行数付きで返す', () => {
     const runs = [
-      // 平均(2)と中央値(0)が一致しない分布にして、median実装が誤ってmeanと同じ値を
-      // 返す実装ミスを検出できるようにする。
-      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 50 }),
-      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 6, changedLines: 30 }),
-      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, changedLines: 150 }),
+      makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 5, changedLines: 0 }),
+      // 平均(2)と中央値(0)が一致しない分布で median !== mean を検出できるようにする
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, changedLines: 50 }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 6, changedLines: 30 }),
+      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 1, changedLines: 150 }),
     ];
     const result = reviseCyclesBySizeBucket(runs);
     expect(result.map((b) => b.sizeBucket)).toEqual(['small', 'medium']);
-
-    const small = result[0];
-    expect(small.total).toBe(3);
-    expect(small.avgChangedLines).toBeCloseTo(30, 5);
-    expect(small.avgReviseCycles).toBeCloseTo(2, 5);
-    expect(small.medianReviseCycles).toBeCloseTo(0, 5);
-    expect(small.iterations).toEqual([1, 2, 3]);
-
-    const medium = result[1];
-    expect(medium.total).toBe(1);
-    expect(medium.avgChangedLines).toBeCloseTo(150, 5);
-    expect(medium.avgReviseCycles).toBeCloseTo(1, 5);
-    expect(medium.iterations).toEqual([4]);
+    expect(result[0]).toMatchObject({ total: 3, avgChangedLines: 30, avgReviseCycles: 2, medianReviseCycles: 0, iterations: [2, 3, 4] });
+    expect(result[1]).toMatchObject({ total: 1, avgChangedLines: 150, avgReviseCycles: 1, iterations: [5] });
   });
 });
 
+const sizeCurveRuns = (small: number, medium: number, large: number) => [
+  ...[1, 2, 3].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: small, changedLines: 10 })),
+  ...[4, 5, 6].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: medium, changedLines: 200 })),
+  ...[7, 8, 9].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: large, changedLines: 400 })),
+];
+
 describe('reviseCyclesSizeCurve', () => {
   it('run が無ければ insufficient-data で傾きは null', () => {
-    const signal = reviseCyclesSizeCurve([]);
-    expect(signal.buckets).toEqual([]);
-    expect(signal.shape).toBe('insufficient-data');
-    expect(signal.smallToMediumDelta).toBeNull();
-    expect(signal.mediumToLargeDelta).toBeNull();
-    expect(signal.accelerationDelta).toBeNull();
+    expect(reviseCyclesSizeCurve([])).toMatchObject({
+      buckets: [],
+      shape: 'insufficient-data',
+      smallToMediumDelta: null,
+      mediumToLargeDelta: null,
+      accelerationDelta: null,
+    });
   });
 
-  it('large区分が1件も無い場合は insufficient-data', () => {
+  it(`いずれかの区分のサンプル数がMIN_SAMPLES(${REVISE_SIZE_CURVE_MIN_SAMPLES})未満なら insufficient-data（3区分は揃っていても）`, () => {
     const runs = [
-      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      makeRun({ iteration: 6, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-    ];
-    const signal = reviseCyclesSizeCurve(runs);
-    expect(signal.shape).toBe('insufficient-data');
-    expect(signal.accelerationDelta).toBeNull();
-  });
-
-  it(`いずれかの区分のサンプル数が${REVISE_SIZE_CURVE_MIN_SAMPLES}未満なら insufficient-data（3区分は揃っていても）`, () => {
-    const runs = [
-      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
-      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      makeRun({ iteration: 6, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      // large区分は2件のみ（MIN_SAMPLES=3未満）
+      ...sizeCurveRuns(0, 1, 0).slice(0, 6),
       makeRun({ iteration: 7, verdict: 'merged', reviseCycles: 4, changedLines: 400 }),
       makeRun({ iteration: 8, verdict: 'merged', reviseCycles: 4, changedLines: 400 }),
     ];
@@ -5080,57 +5051,30 @@ describe('reviseCyclesSizeCurve', () => {
     expect(signal.smallToMediumDelta).toBeNull();
   });
 
-  it('増分が拡大していれば convex（サイズが大きいほど不釣り合いにrevise回数が伸びる）と判定する', () => {
-    const runs = [
-      ...[1, 2, 3].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 0, changedLines: 10 })),
-      ...[4, 5, 6].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 200 })),
-      ...[7, 8, 9].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 4, changedLines: 400 })),
-    ];
-    const signal = reviseCyclesSizeCurve(runs);
-    expect(signal.smallToMediumDelta).toBeCloseTo(1, 5);
-    expect(signal.mediumToLargeDelta).toBeCloseTo(3, 5);
-    expect(signal.accelerationDelta).toBeCloseTo(2, 5);
-    expect(signal.shape).toBe('convex');
-  });
-
-  it('増分が縮小していれば concave（大きい変更でも伸びが頭打ちになる）と判定する', () => {
-    const runs = [
-      ...[1, 2, 3].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 0, changedLines: 10 })),
-      ...[4, 5, 6].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 3, changedLines: 200 })),
-      ...[7, 8, 9].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 4, changedLines: 400 })),
-    ];
-    const signal = reviseCyclesSizeCurve(runs);
-    expect(signal.smallToMediumDelta).toBeCloseTo(3, 5);
-    expect(signal.mediumToLargeDelta).toBeCloseTo(1, 5);
-    expect(signal.accelerationDelta).toBeCloseTo(-2, 5);
-    expect(signal.shape).toBe('concave');
-  });
-
-  it('増分がほぼ一定なら linear と判定する', () => {
-    const runs = [
-      ...[1, 2, 3].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 0, changedLines: 10 })),
-      ...[4, 5, 6].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 200 })),
-      ...[7, 8, 9].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 2, changedLines: 400 })),
-    ];
-    const signal = reviseCyclesSizeCurve(runs);
-    expect(signal.accelerationDelta).toBeCloseTo(0, 5);
-    expect(signal.shape).toBe('linear');
-  });
+  it.each([
+    ['convex', 0, 1, 4, 1, 3, 2],
+    ['concave', 0, 3, 4, 3, 1, -2],
+    ['linear', 0, 1, 2, 1, 1, 0],
+  ] as const)(
+    '増分の変化パターンから傾き(delta)を算出し %s と判定する',
+    (shape, small, medium, large, smallToMedium, mediumToLarge, acceleration) => {
+      const signal = reviseCyclesSizeCurve(sizeCurveRuns(small, medium, large));
+      expect(signal.smallToMediumDelta).toBeCloseTo(smallToMedium, 5);
+      expect(signal.mediumToLargeDelta).toBeCloseTo(mediumToLarge, 5);
+      expect(signal.accelerationDelta).toBeCloseTo(acceleration, 5);
+      expect(signal.shape).toBe(shape);
+    },
+  );
 
   it(`accelerationDeltaがちょうど${REVISE_SIZE_CURVE_FLAT_THRESHOLD}(閾値と同値)なら境界としてlinearではなくconvex側に倒す`, () => {
     const runs = [
-      ...[1, 2, 3, 10, 11, 12].map((i) =>
-        makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 10 }),
-      ),
-      ...[4, 5, 6, 13, 14, 15].map((i) =>
-        makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
-      ),
+      ...[1, 2, 3, 10, 11, 12].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 10 })),
+      ...[4, 5, 6, 13, 14, 15].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 200 })),
       // 6件中3件が2、3件が1 => avg = 1.5 (medium比 +0.5)
       ...[7, 8, 9].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 2, changedLines: 400 })),
       ...[16, 17, 18].map((i) => makeRun({ iteration: i, verdict: 'merged', reviseCycles: 1, changedLines: 400 })),
     ];
     const signal = reviseCyclesSizeCurve(runs);
-    expect(signal.smallToMediumDelta).toBeCloseTo(0, 5);
     expect(signal.mediumToLargeDelta).toBeCloseTo(0.5, 5);
     expect(signal.accelerationDelta).toBeCloseTo(REVISE_SIZE_CURVE_FLAT_THRESHOLD, 5);
     expect(signal.shape).toBe('convex');
