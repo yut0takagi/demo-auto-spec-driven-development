@@ -1258,6 +1258,99 @@ export function gateReasonChains(runs: RunRecord[]): GateReasonChain[] {
     .reverse();
 }
 
+/** これ未満のstreak（gateReasonsを持つ反復の連続）は「連続」とみなさない（DROPOUT_STREAK_MIN_LENGTHと同じ2）。 */
+export const GATE_REASON_CHAOS_STREAK_MIN_LENGTH = 2;
+
+/** switchCount/(length-1) の判定: 0=毎回同じ原因(stable)、1=毎回変わる(chaotic)、間はmixed。 */
+export type GateReasonConsecutiveFailureChaosLevel = 'stable' | 'mixed' | 'chaotic';
+
+export interface GateReasonConsecutiveFailureStreak {
+  startIteration: number;
+  endIteration: number;
+  /** streakに含まれる反復数（GATE_REASON_CHAOS_STREAK_MIN_LENGTH以上のみstreakとして扱う） */
+  length: number;
+  /** streakに含まれる反復番号（古い→新しい順、length件） */
+  iterations: number[];
+  /** 各反復の根本原因カテゴリ（古い→新しい順）。gateReasons[0]（最初にブロックした条件）だけを採用する */
+  rootCauses: GateReasonCategory[];
+  switchCount: number;
+  chaosScore: number;
+  chaosLevel: GateReasonConsecutiveFailureChaosLevel;
+  /** streak内で最多の根本原因カテゴリ（同数はGATE_REASON_CATEGORY_ORDER順） */
+  dominantRootCause: GateReasonCategory;
+  dominantRootCauseCount: number;
+}
+
+function rootCauseCategory(run: RunRecord): GateReasonCategory {
+  return classifyGateReason(run.gateReasons[0], run.adversary.summary);
+}
+
+function buildChaosStreak(streakRuns: readonly RunRecord[]): GateReasonConsecutiveFailureStreak {
+  const rootCauses = streakRuns.map(rootCauseCategory);
+  let switchCount = 0;
+  for (let i = 1; i < rootCauses.length; i++) {
+    if (rootCauses[i] !== rootCauses[i - 1]) switchCount++;
+  }
+  const chaosScore = switchCount / (rootCauses.length - 1);
+  const chaosLevel: GateReasonConsecutiveFailureChaosLevel =
+    chaosScore === 0 ? 'stable' : chaosScore === 1 ? 'chaotic' : 'mixed';
+
+  const counts = new Map<GateReasonCategory, number>();
+  for (const category of rootCauses) counts.set(category, (counts.get(category) ?? 0) + 1);
+  let dominantRootCause = rootCauses[0];
+  let dominantRootCauseCount = 0;
+  for (const category of GATE_REASON_CATEGORY_ORDER) {
+    const count = counts.get(category) ?? 0;
+    if (count > dominantRootCauseCount) {
+      dominantRootCauseCount = count;
+      dominantRootCause = category;
+    }
+  }
+
+  return {
+    startIteration: streakRuns[0].iteration,
+    endIteration: streakRuns[streakRuns.length - 1].iteration,
+    length: streakRuns.length,
+    iterations: streakRuns.map((r) => r.iteration),
+    rootCauses,
+    switchCount,
+    chaosScore,
+    chaosLevel,
+    dominantRootCause,
+    dominantRootCauseCount,
+  };
+}
+
+/**
+ * gateReasonsを持つ反復がiteration番号で途切れずに連続した区間（streak、2反復以上）ごとに、
+ * 根本原因カテゴリの入れ替わり（chaosScore/chaosLevel）を集計する。gateReasonsが空の反復や
+ * iteration番号の欠落はstreakを区切る。新しいstreakから返す。
+ */
+export function gateReasonConsecutiveFailureChaos(runs: RunRecord[]): GateReasonConsecutiveFailureStreak[] {
+  const sorted = byIterationAsc(runs);
+  const streaks: GateReasonConsecutiveFailureStreak[] = [];
+  let current: RunRecord[] = [];
+
+  const flush = () => {
+    if (current.length >= GATE_REASON_CHAOS_STREAK_MIN_LENGTH) streaks.push(buildChaosStreak(current));
+    current = [];
+  };
+
+  for (const run of sorted) {
+    if (run.gateReasons.length === 0) {
+      flush();
+      continue;
+    }
+    if (current.length > 0 && run.iteration !== current[current.length - 1].iteration + 1) {
+      flush();
+    }
+    current.push(run);
+  }
+  flush();
+
+  return streaks.reverse();
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
