@@ -23,6 +23,7 @@ import {
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
+  reviseCyclesByModel,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1380,5 +1381,104 @@ describe('costPerApprovedPrTrend', () => {
       { iteration: 1, value: 0.4 },
       { iteration: 2, value: 0.3 },
     ]);
+  });
+});
+
+describe('reviseCyclesByModel', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseCyclesByModel([])).toEqual([]);
+  });
+
+  it('failed run（verifyに未到達）は revise 回数が sentinel のため母集団から除外する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 99,
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    expect(reviseCyclesByModel(runs)).toEqual([]);
+  });
+
+  it('builder モデルごとに mean/median/min/max/count/iterations を正確な値で集計する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 1,
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 3,
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        reviseCycles: 5,
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 4,
+        reviseCycles: 0,
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseCyclesByModel(runs);
+    // 平均revise回数降順: sonnet(mean=3) > opus(mean=0)
+    expect(result).toEqual([
+      {
+        model: 'claude-sonnet-5',
+        count: 3,
+        mean: 3,
+        median: 3,
+        min: 1,
+        max: 5,
+        iterations: [1, 2, 3],
+      },
+      {
+        model: 'claude-opus-4-8',
+        count: 1,
+        mean: 0,
+        median: 0,
+        min: 0,
+        max: 0,
+        iterations: [4],
+      },
+    ]);
+  });
+
+  it('平均revise回数が同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 2,
+        models: { builder: 'zeta-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 2,
+        models: { builder: 'alpha-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseCyclesByModel(runs);
+    expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({
+        iteration: 3,
+        reviseCycles: 1,
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 1,
+        reviseCycles: 2,
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseCyclesByModel(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
   });
 });

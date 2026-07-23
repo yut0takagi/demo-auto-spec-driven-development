@@ -691,6 +691,58 @@ export function costEfficiency(runs: RunRecord[]): CostEfficiency {
   };
 }
 
+export interface ModelReviseCyclesSummary {
+  model: string;
+  /** この model が builder として使われ、かつ verify に到達した反復数 */
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * Builder に使われたモデル別の revise 回数分布。reviseCyclesTrend と同じ理由
+ * （failed run は verify に到達しておらず revise 回数が「途中でクラッシュするまでの値」
+ * で意味が異なる）で reachedVerify を通してから集計する。
+ * revise 回数は adversary の棄却により builder が繰り返した回数であり、実際に
+ * revise 作業を行うのは builder なので、costBreakdown.byModel（builder/adversary/
+ * ideation の全役割を合算）とは異なり、ここでは run.models.builder のみで集計する。
+ * 平均 revise 回数の降順（同値はモデル名の昇順）で、負担の大きいモデルから並べる。
+ */
+export function reviseCyclesByModel(runs: RunRecord[]): ModelReviseCyclesSummary[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const byModel = new Map<string, { values: number[]; iterations: number[] }>();
+
+  for (const run of completed) {
+    const model = run.models.builder;
+    let entry = byModel.get(model);
+    if (!entry) {
+      entry = { values: [], iterations: [] };
+      byModel.set(model, entry);
+    }
+    entry.values.push(run.reviseCycles);
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byModel.entries()]
+    .map(([model, entry]) => ({
+      model,
+      count: entry.values.length,
+      mean: mean(entry.values),
+      median: median(entry.values),
+      min: Math.min(...entry.values),
+      max: Math.max(...entry.values),
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => {
+      if (b.mean !== a.mean) return b.mean - a.mean;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 /**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は
