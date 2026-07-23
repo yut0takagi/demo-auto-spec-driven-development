@@ -25,6 +25,7 @@ import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
+import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -77,6 +78,7 @@ export default function Home() {
         <GateReasonBurdenChart runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
+        <ModelEffectivenessPanel runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>

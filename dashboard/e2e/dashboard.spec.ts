@@ -13,6 +13,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   breakerRunway,
+  modelEffectiveness,
 } from '../src/lib/aggregate';
 
 /**
@@ -510,6 +511,50 @@ test('ゲート不通過の類型別集計パネルが実データから導出�
   }
   await expect(page.getByTestId('gate-failure-type-row-paused')).toHaveCount(0);
   await expect(page.getByTestId('gate-failure-type-row-dry-run')).toHaveCount(0);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('モデル選択の効果測定パネルが実データから導出したmodel別マージ率・承認率・平均コストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = modelEffectiveness(runs);
+  expect(
+    summaries.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-effectiveness-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が modelEffectiveness()（別の計算経路）と一致するマージ率・件数・
+  // 承認率・e2e失敗率・平均revise・平均カバレッジ・平均コストを表示していること
+  for (const s of summaries) {
+    const mergeEl = page.getByTestId(`model-effectiveness-merge-${s.model}`);
+    await expect(mergeEl).toHaveText(`マージ率${(s.mergeRate * 100).toFixed(1)}% (${s.count}件)`);
+
+    const statsEl = page.getByTestId(`model-effectiveness-stats-${s.model}`);
+    await expect(statsEl).toHaveText(
+      `承認率${(s.approvalRate * 100).toFixed(1)}% / e2e失敗率${(s.e2eFailureRate * 100).toFixed(1)}% / ` +
+        `平均revise${s.avgReviseCycles.toFixed(1)}回 / 平均カバレッジ${s.avgCoveragePct.toFixed(1)}% / ` +
+        `平均コスト$${s.avgCostUsd.toFixed(2)}`,
+    );
+
+    const row = page.getByTestId(`model-effectiveness-row-${s.model}`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+  }
+
+  // マージ率降順で描画されていること
+  const rows = await page.locator('[data-testid^="model-effectiveness-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-effectiveness-row-', '')),
+  );
+  expect(renderedModels).toEqual(summaries.map((s) => s.model));
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
