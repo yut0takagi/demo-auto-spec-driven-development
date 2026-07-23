@@ -1510,6 +1510,58 @@ export function e2eFailureReviseCorrelation(runs: RunRecord[]): E2eReviseCorrela
   };
 }
 
+export interface E2eDiffSizeCorrelation {
+  /** verify に到達した run 数（passedCount + failedCount と一致） */
+  sampleSize: number;
+  /** e2e が成功した反復数 */
+  passedCount: number;
+  /** e2e が失敗した反復数 */
+  failedCount: number;
+  /** e2e成功群の平均変更行数。passedCountが0ならmean([])の定義通り0 */
+  passedMeanChangedLines: number;
+  /** e2e失敗群の平均変更行数。failedCountが0ならmean([])の定義通り0 */
+  failedMeanChangedLines: number;
+  /** failedMeanChangedLines - passedMeanChangedLines。正なら失敗群の方が変更行数が多い */
+  delta: number;
+  /**
+   * e2e失敗(1)/成功(0)とchangedLinesのPearson相関係数(-1..1)。
+   * どちらかの分散が0（全run同じe2e結果、または全run同じ変更行数）だと
+   * 定義できないためnull。
+   */
+  correlationCoefficient: number | null;
+  /** e2eが失敗した反復番号（昇順） */
+  failedIterations: number[];
+}
+
+/**
+ * E2Eテスト失敗とコード変更範囲(diff size = changedLines)の相関。
+ * e2eFailureReviseCorrelationと同じreachedVerifyの母集団で、e2e成功/失敗の
+ * 2群のchangedLines平均を比較し、e2e失敗を1・成功を0としたPearson相関係数も
+ * 算出する。「変更範囲が大きいほどE2Eが失敗しやすいか」の目安。
+ */
+export function e2eFailureDiffSizeCorrelation(runs: RunRecord[]): E2eDiffSizeCorrelation {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const passed = completed.filter((r) => r.verify.e2ePassed);
+  const failed = completed.filter((r) => !r.verify.e2ePassed);
+
+  const xs = completed.map((r) => (r.verify.e2ePassed ? 0 : 1));
+  const ys = completed.map((r) => r.changedLines);
+
+  const passedMeanChangedLines = mean(passed.map((r) => r.changedLines));
+  const failedMeanChangedLines = mean(failed.map((r) => r.changedLines));
+
+  return {
+    sampleSize: completed.length,
+    passedCount: passed.length,
+    failedCount: failed.length,
+    passedMeanChangedLines,
+    failedMeanChangedLines,
+    delta: failedMeanChangedLines - passedMeanChangedLines,
+    correlationCoefficient: pearsonCorrelation(xs, ys),
+    failedIterations: failed.map((r) => r.iteration),
+  };
+}
+
 /**
  * Adversary承認コメント(adversary.summary)の実効文字数。表示上意味を持たない前後の
  * 空白は VerdictSummaryBubble の bubbleText と同じく trim してから数える。
