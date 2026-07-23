@@ -1,0 +1,45 @@
+{
+  "id": "20260723T213801Z-113",
+  "iteration": 68,
+  "issue": {
+    "number": 113,
+    "title": "Ideation→実装着手までのリードタイム・着手成功率観測パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/113-ideation",
+  "startedAt": "2026-07-23T21:38:01Z",
+  "finishedAt": "2026-07-23T21:54:26Z",
+  "durationSec": 985,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 122,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation→着手リードタイムと着手成功率観測パネルの実装が完全。要件通り提案と着手の判定ロジック、トレンド判定、UIレンダリング、テストが全て正確に実装され、既存機能への破壊的変更はなし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 868,
+  "cost": {
+    "builderUsd": 5.66852,
+    "adversaryUsd": 0.098854,
+    "ideationUsd": 0.0786809,
+    "totalUsd": 5.846055
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    119,
+    120,
+    121
+  ]
+}
