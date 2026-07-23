@@ -33,6 +33,7 @@ import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMer
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
+import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 
 const REPO_URL =
@@ -64,6 +65,7 @@ export default function Home() {
         <BreakerRunwayPanel runs={runs} />
         <MetricCards summary={summary} />
         <CycleTimeTrendPanel runs={runs} />
+        <TimeToFirstPrTrendPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />

@@ -20,6 +20,8 @@ import {
   e2eFailureReviseCorrelation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
+  timeToFirstPrTrend,
+  timeToFirstPrTrendSignal,
   adversarySummaryLengthTrend,
   adversaryCommentTrendSignal,
   adversaryApprovalCommentStats,
@@ -851,6 +853,61 @@ test('CI/ゲート通過時間のトレンド観測パネルが実データか�
   );
   await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
   await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue開始から初PR作成までの時間トレンド観測パネルが、PRが作られた反復だけを対象に傾向・直近直前平均を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = timeToFirstPrTrend(runs);
+  const signal = timeToFirstPrTrendSignal(runs);
+
+  // このリポジトリの data/runs は PR が実際に作られた(prNumber !== null)反復を
+  // 複数含む前提で運用されている。0/1件しか無いと「データあり」経路自体を
+  // 検証できないため、前提を明示した上で失敗させる。
+  expect(
+    signal,
+    'data/runs に prNumber が設定された(PRが作られた)反復が2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('time-to-first-pr-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が timeToFirstPrTrend()（別の計算経路）の最終点と一致するはず
+  const latestMinutes = points[points.length - 1].value / 60;
+  await expect(panel).toContainText(`${latestMinutes.toFixed(1)}分`);
+
+  const signalBlock = page.getByTestId('time-to-first-pr-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('time-to-first-pr-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('time-to-first-pr-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('time-to-first-pr-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: PRが一度も作られなかった(prNumber: null)反復は、この
+  // パネルが比較に使う直近/直前ウィンドウの対象iterationに含まれてはいけない。
+  const noPrIterations = runs.filter((r) => r.prNumber === null).map((r) => r.iteration);
+  for (const it of [...signal!.recentIterations, ...signal!.previousIterations]) {
+    expect(noPrIterations).not.toContain(it);
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

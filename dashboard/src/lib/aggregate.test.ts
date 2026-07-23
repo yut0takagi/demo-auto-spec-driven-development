@@ -38,6 +38,10 @@ import {
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
   CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT,
+  timeToFirstPrTrend,
+  timeToFirstPrTrendSignal,
+  TIME_TO_FIRST_PR_TREND_WINDOW,
+  TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT,
   adversarySummaryLengthTrend,
   adversaryCommentTrendSignal,
   ADVERSARY_COMMENT_TREND_WINDOW,
@@ -2269,6 +2273,162 @@ describe('cycleTimeTrendSignal', () => {
       makeRun({ iteration: 2, durationSec: 0 }),
     ];
     const signal = cycleTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+describe('timeToFirstPrTrend', () => {
+  it('iteration 昇順に durationSec(秒)をそのまま返す', () => {
+    const runs = [
+      makeRun({ iteration: 2, durationSec: 600, prNumber: 22 }),
+      makeRun({ iteration: 1, durationSec: 300, prNumber: 11 }),
+    ];
+    expect(timeToFirstPrTrend(runs)).toEqual([
+      { iteration: 1, value: 300 },
+      { iteration: 2, value: 600 },
+    ]);
+  });
+
+  it('PRが一度も開かれなかった反復(prNumber: null)は除外する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', durationSec: 300, prNumber: 11 }),
+      makeRun({ iteration: 2, verdict: 'failed', durationSec: 45, prNumber: null }),
+      makeRun({ iteration: 3, verdict: 'abandoned', durationSec: 90, prNumber: null }),
+    ];
+    expect(timeToFirstPrTrend(runs)).toEqual([{ iteration: 1, value: 300 }]);
+  });
+
+  it('全反復がprNumber: nullなら空配列を返す（cycleTimeTrendとの違い）', () => {
+    const runs = [makeRun({ iteration: 1, durationSec: 300, prNumber: null })];
+    expect(timeToFirstPrTrend(runs)).toEqual([]);
+    // 同じ入力でも cycleTimeTrend は verdict/prNumber に関係なく全件を含める
+    expect(cycleTimeTrend(runs)).toEqual([{ iteration: 1, value: 300 }]);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(timeToFirstPrTrend([])).toEqual([]);
+  });
+});
+
+describe('timeToFirstPrTrendSignal', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(timeToFirstPrTrendSignal([])).toBeNull();
+  });
+
+  it('PRが作られた反復が1件だけなら直前ウィンドウが取れず null（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, durationSec: 300, prNumber: 11 })];
+    expect(timeToFirstPrTrendSignal(runs)).toBeNull();
+  });
+
+  it('PRが作られた反復が1件しか無い場合、他にPR未作成の反復が何件あっても null のまま', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 300, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 45, prNumber: null, verdict: 'failed' }),
+      makeRun({ iteration: 3, durationSec: 45, prNumber: null, verdict: 'failed' }),
+    ];
+    expect(timeToFirstPrTrendSignal(runs)).toBeNull();
+  });
+
+  it('2件ちょうどなら window=1 で直近1件・直前1件を比較する', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 300, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 600, prNumber: 22 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgSec).toBeCloseTo(600, 10);
+    expect(signal!.previousAvgSec).toBeCloseTo(300, 10);
+    expect(signal!.recentIterations).toEqual([2]);
+    expect(signal!.previousIterations).toEqual([1]);
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('直近平均が直前平均より閾値(TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT)以上長いと increasing(悪化)', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 100, prNumber: 12 }),
+      makeRun({ iteration: 3, durationSec: 100, prNumber: 13 }),
+      makeRun({ iteration: 4, durationSec: 200, prNumber: 14 }),
+      makeRun({ iteration: 5, durationSec: 200, prNumber: 15 }),
+      makeRun({ iteration: 6, durationSec: 200, prNumber: 16 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal!.windowSize).toBe(TIME_TO_FIRST_PR_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgSec).toBeCloseTo(200, 10);
+    expect(signal!.deltaSec).toBeCloseTo(100, 10);
+    expect(signal!.deltaPct).toBeCloseTo(100, 10);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('直近平均が直前平均より短いと decreasing(改善)', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 200, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 200, prNumber: 12 }),
+      makeRun({ iteration: 3, durationSec: 200, prNumber: 13 }),
+      makeRun({ iteration: 4, durationSec: 100, prNumber: 14 }),
+      makeRun({ iteration: 5, durationSec: 100, prNumber: 15 }),
+      makeRun({ iteration: 6, durationSec: 100, prNumber: 16 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal!.direction).toBe('decreasing');
+    expect(signal!.deltaPct).toBeCloseTo(-50, 10);
+  });
+
+  it('変化率が閾値未満なら flat（僅かなブレをトレンドと誤認しない）', () => {
+    expect(TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT).toBe(5);
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 100, prNumber: 12 }),
+      makeRun({ iteration: 3, durationSec: 100, prNumber: 13 }),
+      // +4% は閾値(5%)未満なので flat になるはず
+      makeRun({ iteration: 4, durationSec: 104, prNumber: 14 }),
+      makeRun({ iteration: 5, durationSec: 104, prNumber: 15 }),
+      makeRun({ iteration: 6, durationSec: 104, prNumber: 16 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('PR未作成の反復(prNumber: null)は比較windowの母集団から除外される', () => {
+    // iteration 2 は prNumber: null なので timeToFirstPrTrend の点として現れず、
+    // window=1 の比較は実質 iteration(1) vs iteration(3) になる。
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 99999, prNumber: null, verdict: 'failed' }),
+      makeRun({ iteration: 3, durationSec: 500, prNumber: 13 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.previousIterations).toEqual([1]);
+    expect(signal!.recentIterations).toEqual([3]);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgSec).toBeCloseTo(500, 10);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でも direction を安全に判定する（ゼロ除算を回避）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 50, prNumber: 12 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
+    expect(signal!.previousAvgSec).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('increasing');
+  });
+
+  it('直前・直近ともにdurationSecが0(境界値)ならflat', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0, prNumber: 11 }),
+      makeRun({ iteration: 2, durationSec: 0, prNumber: 12 }),
+    ];
+    const signal = timeToFirstPrTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
   });
