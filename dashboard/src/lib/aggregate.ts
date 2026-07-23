@@ -260,3 +260,67 @@ export function e2eFailureRateTrend(runs: RunRecord[]): TrendPoint[] {
     return { iteration: r.iteration, value: (failedCount / (i + 1)) * 100 };
   });
 }
+
+export type CostRole = 'builder' | 'adversary' | 'ideation';
+
+const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
+
+export interface RoleCostBreakdown {
+  role: CostRole;
+  totalUsd: number;
+  /** 0..100。totalUsd が 0 なら NaN を避けて 0 にする。 */
+  pct: number;
+}
+
+export interface ModelCostEntry {
+  model: string;
+  totalUsd: number;
+  /** 0..100。totalUsd が 0 なら NaN を避けて 0 にする。 */
+  pct: number;
+}
+
+export interface CostBreakdown {
+  totalUsd: number;
+  /** builder → adversary → ideation の固定順。Summary.totalCostUsd と一致する合計の内訳。 */
+  byRole: RoleCostBreakdown[];
+  /** モデル名でまとめた内訳。同じモデルが複数の役割（例: adversary と ideation）で
+   *  使われている場合は合算する。totalUsd 降順。 */
+  byModel: ModelCostEntry[];
+}
+
+/**
+ * モデルコストの内訳。costTrend と同様、コストは verdict に関係なく実際に消費
+ * されているため failed run も含める（除外すると Summary.totalCostUsd と食い違う）。
+ */
+export function costBreakdown(runs: RunRecord[]): CostBreakdown {
+  const totalUsd = runs.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+  const pctOf = (value: number) => (totalUsd === 0 ? 0 : (value / totalUsd) * 100);
+
+  const roleTotals: Record<CostRole, number> = { builder: 0, adversary: 0, ideation: 0 };
+  const modelTotals = new Map<string, number>();
+
+  for (const r of runs) {
+    const roleCost: Record<CostRole, number> = {
+      builder: r.cost.builderUsd,
+      adversary: r.cost.adversaryUsd,
+      ideation: r.cost.ideationUsd,
+    };
+    for (const role of COST_ROLES) {
+      roleTotals[role] += roleCost[role];
+      const model = r.models[role];
+      modelTotals.set(model, (modelTotals.get(model) ?? 0) + roleCost[role]);
+    }
+  }
+
+  const byRole: RoleCostBreakdown[] = COST_ROLES.map((role) => ({
+    role,
+    totalUsd: roleTotals[role],
+    pct: pctOf(roleTotals[role]),
+  }));
+
+  const byModel: ModelCostEntry[] = [...modelTotals.entries()]
+    .map(([model, cost]) => ({ model, totalUsd: cost, pct: pctOf(cost) }))
+    .sort((a, b) => b.totalUsd - a.totalUsd);
+
+  return { totalUsd, byRole, byModel };
+}
