@@ -59,6 +59,7 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
+  gateReasonConsecutiveFailureChaos,
   adversaryApprovalByReasonAndModel,
   issueResolutionTimeTrend,
   issueResolutionTimeTrendSignal,
@@ -1743,6 +1744,104 @@ describe('gateReasonChains', () => {
     // iteration降順で返るので[0]がiteration2、[1]がiteration1
     expect(chains[0].categories).toEqual(['adversaryNotApproved']);
     expect(chains[1].categories).toEqual(['adversaryUnparseable']);
+  });
+});
+
+describe('gateReasonConsecutiveFailureChaos', () => {
+  it('runが無い/全runがmerged、またはgateReasonsを持つ反復が1件だけ（前後がmerged）なら空配列を返す（連続には2件以上必要）', () => {
+    expect(gateReasonConsecutiveFailureChaos([])).toEqual([]);
+    expect(gateReasonConsecutiveFailureChaos([makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })])).toEqual(
+      [],
+    );
+    const isolated = [
+      makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'merged', gateReasons: [] }),
+    ];
+    expect(gateReasonConsecutiveFailureChaos(isolated)).toEqual([]);
+  });
+
+  it('同じ根本原因が連続するstreakはstable判定になり、入力の順序に関わらずiteration昇順で結果を返す', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    const streaks = gateReasonConsecutiveFailureChaos(runs);
+    expect(streaks).toHaveLength(1);
+    const s = streaks[0];
+    expect(s.startIteration).toBe(1);
+    expect(s.endIteration).toBe(3);
+    expect(s.length).toBe(3);
+    expect(s.iterations).toEqual([1, 2, 3]);
+    expect(s.rootCauses).toEqual(['e2eFailed', 'e2eFailed', 'e2eFailed']);
+    expect(s.switchCount).toBe(0);
+    expect(s.chaosScore).toBe(0);
+    expect(s.chaosLevel).toBe('stable');
+    expect(s.dominantRootCause).toBe('e2eFailed');
+    expect(s.dominantRootCauseCount).toBe(3);
+  });
+
+  it('毎回根本原因が入れ替わるstreakはchaotic判定になる（根本原因はgateReasons[0]だけを見て2番目以降は無視する）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const streaks = gateReasonConsecutiveFailureChaos(runs);
+    expect(streaks).toHaveLength(1);
+    expect(streaks[0].rootCauses).toEqual(['e2eFailed', 'verifyFailed']);
+    expect(streaks[0].switchCount).toBe(1);
+    expect(streaks[0].chaosScore).toBe(1);
+    expect(streaks[0].chaosLevel).toBe('chaotic');
+  });
+
+  it('一部だけ根本原因が入れ替わるstreakはmixed判定になり、最多カテゴリの同数タイはGATE_REASON_CATEGORY_ORDER順（verifyFailedが先）で決める', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const streaks = gateReasonConsecutiveFailureChaos(runs);
+    expect(streaks).toHaveLength(1);
+    const s = streaks[0];
+    expect(s.switchCount).toBe(1);
+    expect(s.chaosScore).toBeCloseTo(1 / 3);
+    expect(s.chaosLevel).toBe('mixed');
+    expect(s.dominantRootCause).toBe('verifyFailed');
+    expect(s.dominantRootCauseCount).toBe(2);
+  });
+
+  it('gateReasonsが空の反復（merged/paused等）を挟む、またはruns配列内でiteration番号が飛ぶと、そこでstreakが分断される（新しいstreakから返す）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'paused', gateReasons: [] }),
+      // iteration 5が渡されていない（呼び出し元が事前にフィルタした等）ため、4だけでは長さ1でstreak対象外
+      makeRun({ iteration: 4, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 6, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 7, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    const streaks = gateReasonConsecutiveFailureChaos(runs);
+    expect(streaks).toHaveLength(2);
+    expect(streaks[0].iterations).toEqual([6, 7]);
+    expect(streaks[1].iterations).toEqual([1, 2]);
   });
 });
 
