@@ -26,6 +26,11 @@ import {
   recentAdversaryComments,
 } from '../src/lib/aggregate';
 
+/** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
+function byModelNameAsc<T extends { model: string }>(summaries: T[]): T[] {
+  return [...summaries].sort((a, b) => a.model.localeCompare(b.model));
+}
+
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
  * 追記するたびにテストが実データと乖離して壊れる（または気づかれずに無意味化する）。
@@ -78,8 +83,12 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
 
   // exact 指定: フィクスチャの issue タイトルにも「承認率…」等が含まれ、
   // 部分一致だと strict mode 違反になる。ラベルは完全一致で狙う。
-  await expect(page.getByText('反復数', { exact: true })).toBeVisible();
-  await expect(page.getByText('承認率', { exact: true })).toBeVisible();
+  // 「承認率」はモデル別比較パネル（model-approval-merge-row-*）の行ラベルとしても
+  // 表示されるため、getByText 単体だと2要素にヒットして strict mode 違反になる。
+  // トップの統計カード群（metric-cards）に限定して探す。
+  const metricCards = page.getByTestId('metric-cards');
+  await expect(metricCards.getByText('反復数', { exact: true })).toBeVisible();
+  await expect(metricCards.getByText('承認率', { exact: true })).toBeVisible();
   await expect(page.getByText('直近の反復', { exact: true })).toBeVisible();
 
   // 直近 iteration の所要時間が分表記で表示されること。値は data/runs を実際に読んで
@@ -637,6 +646,54 @@ test('モデル選択の効果測定パネルが実データから導出したmo
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-effectiveness-row-', '')),
   );
   expect(renderedModels).toEqual(summaries.map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('モデル別 承認率・マージ率比較パネルが実データから導出したモデル名昇順・承認率・マージ率・ギャップを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = modelEffectiveness(runs);
+  expect(
+    summaries.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-approval-merge-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が modelEffectiveness()（別の計算経路）と一致する承認率・マージ率・
+  // ギャップ（承認率-マージ率）・件数・対象iterationを表示していること
+  for (const s of summaries) {
+    const approvalPct = s.approvalRate * 100;
+    const mergePct = s.mergeRate * 100;
+    const gapPct = approvalPct - mergePct;
+
+    const approvalEl = page.getByTestId(`model-approval-merge-approval-value-${s.model}`);
+    await expect(approvalEl).toHaveText(`${approvalPct.toFixed(1)}%`);
+
+    const mergeEl = page.getByTestId(`model-approval-merge-merge-value-${s.model}`);
+    await expect(mergeEl).toHaveText(`${mergePct.toFixed(1)}%`);
+
+    const gapEl = page.getByTestId(`model-approval-merge-gap-${s.model}`);
+    await expect(gapEl).toHaveText(`承認→マージのギャップ: ${gapPct >= 0 ? '+' : ''}${gapPct.toFixed(1)}pt`);
+
+    const row = page.getByTestId(`model-approval-merge-row-${s.model}`);
+    await expect(row).toContainText(`${s.count}件`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+  }
+
+  // ModelEffectivenessPanel はマージ率降順だが、こちらはモデル名昇順で固定されているはず
+  const rows = await page.locator('[data-testid^="model-approval-merge-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-approval-merge-row-', '')),
+  );
+  expect(renderedModels).toEqual(byModelNameAsc(summaries).map((s) => s.model));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
