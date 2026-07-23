@@ -76,6 +76,10 @@ import {
   verdictTransitionSummary,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
+  reviseSizeSuccessPatterns,
+  CHANGE_SIZE_SMALL_MAX,
+  CHANGE_SIZE_MEDIUM_MAX,
+  SUCCESS_PATTERN_MIN_SAMPLES,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -4735,5 +4739,92 @@ describe('dropoutStreaks', () => {
     expect(streaks).toHaveLength(1);
     expect(streaks[0].verdicts).toEqual(['paused', 'dry-run']);
     expect(streaks[0].outcome).toBe('recovered');
+  });
+});
+
+describe('reviseSizeSuccessPatterns', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseSizeSuccessPatterns([])).toEqual([]);
+  });
+
+  it('failed run を母集団から除外する（changedLinesが測定されなかったsentinel 0のため）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 0, changedLines: 0 })];
+    expect(reviseSizeSuccessPatterns(runs)).toEqual([]);
+  });
+
+  it(`changedLines境界値: ${CHANGE_SIZE_SMALL_MAX}以下はsmall、${CHANGE_SIZE_SMALL_MAX + 1}はmediumに入る`, () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: CHANGE_SIZE_SMALL_MAX }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: CHANGE_SIZE_SMALL_MAX + 1 }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, changedLines: CHANGE_SIZE_MEDIUM_MAX }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 0, changedLines: CHANGE_SIZE_MEDIUM_MAX + 1 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result.map((c) => c.sizeBucket)).toEqual(['small', 'medium', 'large']);
+    expect(result.find((c) => c.sizeBucket === 'small')?.iterations).toEqual([1]);
+    expect(result.find((c) => c.sizeBucket === 'medium')?.iterations).toEqual([2, 3]);
+    expect(result.find((c) => c.sizeBucket === 'large')?.iterations).toEqual([4]);
+  });
+
+  it('reviseBucket昇順→sizeBucket昇順でソートし、出現しない組み合わせは含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 2, changedLines: 500 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 0, changedLines: 200 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result.map((c) => [c.reviseBucket, c.sizeBucket])).toEqual([
+      ['0', 'small'],
+      ['0', 'medium'],
+      ['2', 'large'],
+    ]);
+  });
+
+  it(`サンプル数が${SUCCESS_PATTERN_MIN_SAMPLES}未満の組み合わせは insufficient-data と判定する`, () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].total).toBe(2);
+    expect(result[0].pattern).toBe('insufficient-data');
+  });
+
+  it('サンプル数が十分でmergeRateが高い組み合わせはhigh-successと判定する(境界値: ちょうど閾値)', () => {
+    // 3件中2件merged => mergeRate = 2/3 ≈ 0.6667 >= 0.66(HIGH_THRESHOLD)
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, changedLines: 10 }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 0, changedLines: 10 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result[0].mergeRate).toBeCloseTo(2 / 3, 5);
+    expect(result[0].pattern).toBe('high-success');
+  });
+
+  it('サンプル数が十分でmergeRateが低い組み合わせはlow-successと判定する', () => {
+    // 3件中1件merged => mergeRate = 1/3 ≈ 0.333 <= 0.34(LOW_THRESHOLD)
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 3, changedLines: 500 }),
+      makeRun({ iteration: 2, verdict: 'abandoned', reviseCycles: 3, changedLines: 500 }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 3, changedLines: 500 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result[0].mergeRate).toBeCloseTo(1 / 3, 5);
+    expect(result[0].pattern).toBe('low-success');
+  });
+
+  it('mergeRateが閾値の間(0.34超〜0.66未満)ならmixedと判定する', () => {
+    // 2件merged/2件abandoned => mergeRate = 0.5
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, changedLines: 200 }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 1, changedLines: 200 }),
+      makeRun({ iteration: 4, verdict: 'abandoned', reviseCycles: 1, changedLines: 200 }),
+    ];
+    const result = reviseSizeSuccessPatterns(runs);
+    expect(result[0].mergeRate).toBeCloseTo(0.5, 5);
+    expect(result[0].pattern).toBe('mixed');
   });
 });
