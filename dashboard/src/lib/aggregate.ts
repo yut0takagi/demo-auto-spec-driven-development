@@ -1577,6 +1577,121 @@ export function reviseVerdictMatrix(runs: RunRecord[]): ReviseVerdictMatrixRow[]
     .sort((a, b) => REVISE_VERDICT_BUCKET_ORDER.indexOf(a.bucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.bucket));
 }
 
+/**
+ * changedLines(変更行数)を3段階に分類する。閾値は data/runs に実際に出現する分布
+ * （0〜900行程度）を3等分の目安にした表示用の区分であり、orchestrator側の
+ * changedLinesExceeded 判定閾値（gates.py）とは無関係。
+ */
+export type ChangeSizeBucketLabel = 'small' | 'medium' | 'large';
+
+const CHANGE_SIZE_BUCKET_ORDER: readonly ChangeSizeBucketLabel[] = ['small', 'medium', 'large'];
+
+/** この行数以下を 'small' とする。 */
+export const CHANGE_SIZE_SMALL_MAX = 100;
+/** この行数以下を 'medium'、超えたら 'large' とする。 */
+export const CHANGE_SIZE_MEDIUM_MAX = 300;
+
+function changeSizeBucket(changedLines: number): ChangeSizeBucketLabel {
+  if (changedLines <= CHANGE_SIZE_SMALL_MAX) return 'small';
+  if (changedLines <= CHANGE_SIZE_MEDIUM_MAX) return 'medium';
+  return 'large';
+}
+
+/**
+ * revise回数(bucket) × 変更サイズ(bucket) の組み合わせを「成功パターン」に分類する
+ * しきい値。件数が少ない組み合わせは1件のverdictでmergeRateが0%/100%に振れ切れる
+ * ため、SUCCESS_PATTERN_MIN_SAMPLES未満は判定を保留("insufficient-data")する。
+ */
+export const SUCCESS_PATTERN_MIN_SAMPLES = 3;
+/** merge到達率がこれ以上なら 'high-success' と判定する。 */
+export const SUCCESS_PATTERN_HIGH_THRESHOLD = 0.66;
+/**
+ * merge到達率がこれ以下なら 'low-success' と判定する（この間は 'mixed'）。
+ * SUCCESS_PATTERN_HIGH_THRESHOLD(0.66) と対称になる 0.34 にしている（1 - 0.66 = 0.34）。
+ * 例えば3件中1件mergeのケース(1/3 ≈ 0.333)を確実に 'low-success' 側へ倒すため。
+ */
+export const SUCCESS_PATTERN_LOW_THRESHOLD = 0.34;
+
+export type SuccessPatternLabel = 'high-success' | 'mixed' | 'low-success' | 'insufficient-data';
+
+function classifySuccessPattern(mergedCount: number, total: number): SuccessPatternLabel {
+  if (total < SUCCESS_PATTERN_MIN_SAMPLES) return 'insufficient-data';
+  const rate = mergedCount / total;
+  if (rate >= SUCCESS_PATTERN_HIGH_THRESHOLD) return 'high-success';
+  if (rate <= SUCCESS_PATTERN_LOW_THRESHOLD) return 'low-success';
+  return 'mixed';
+}
+
+export interface ReviseSizeSuccessCell {
+  reviseBucket: ReviseVerdictBucketLabel;
+  sizeBucket: ChangeSizeBucketLabel;
+  /** このセル(revise bucket × size bucket)に属した反復数 */
+  total: number;
+  mergedCount: number;
+  /** 0..1 */
+  mergeRate: number;
+  pattern: SuccessPatternLabel;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * revise回数(0/1/2/3+) × 変更サイズ(small/medium/large) の2軸クロス集計で、
+ * どの組み合わせがmergeに至りやすい「成功パターン」かを分類する。
+ * reviseVerdictMatrix がrevise回数単独でverdict分布を見るのに対し、こちらは
+ * 変更サイズを掛け合わせることで「小さい変更ならrevise回数が多くてもmergeしやすいが、
+ * 大きい変更はrevise回数が増えるほどmergeしにくい」といった、revise回数単体では
+ * 見えないサイズ依存の傾向を切り分ける。
+ * changedLinesTrend と同じ理由で failed run（verifyに到達せずchangedLinesが
+ * 測定されなかったsentinel 0）は母集団から除外する。
+ * 出現した組み合わせだけを、reviseBucket昇順→sizeBucket昇順で返す（空セルは含めない）。
+ */
+export function reviseSizeSuccessPatterns(runs: RunRecord[]): ReviseSizeSuccessCell[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const byKey = new Map<
+    string,
+    {
+      reviseBucket: ReviseVerdictBucketLabel;
+      sizeBucket: ChangeSizeBucketLabel;
+      mergedCount: number;
+      iterations: number[];
+    }
+  >();
+
+  for (const run of completed) {
+    const reviseBucket = reviseVerdictBucket(run.reviseCycles);
+    const sizeBucket = changeSizeBucket(run.changedLines);
+    const key = `${reviseBucket}|${sizeBucket}`;
+    let entry = byKey.get(key);
+    if (!entry) {
+      entry = { reviseBucket, sizeBucket, mergedCount: 0, iterations: [] };
+      byKey.set(key, entry);
+    }
+    if (run.verdict === 'merged') entry.mergedCount++;
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byKey.values()]
+    .map((entry) => {
+      const total = entry.iterations.length;
+      return {
+        reviseBucket: entry.reviseBucket,
+        sizeBucket: entry.sizeBucket,
+        total,
+        mergedCount: entry.mergedCount,
+        mergeRate: entry.mergedCount / total,
+        pattern: classifySuccessPattern(entry.mergedCount, total),
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => {
+      const reviseDiff =
+        REVISE_VERDICT_BUCKET_ORDER.indexOf(a.reviseBucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.reviseBucket);
+      if (reviseDiff !== 0) return reviseDiff;
+      return CHANGE_SIZE_BUCKET_ORDER.indexOf(a.sizeBucket) - CHANGE_SIZE_BUCKET_ORDER.indexOf(b.sizeBucket);
+    });
+}
+
 export interface VerdictDurationSummary {
   verdict: Verdict;
   /** この verdict に該当した反復数 */
