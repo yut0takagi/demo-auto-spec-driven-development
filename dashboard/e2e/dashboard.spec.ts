@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize, e2eFailureRateTrend, costBreakdown } from '../src/lib/aggregate';
+import { summarize, e2eFailureRateTrend, costBreakdown, changedLinesTrend, builderComparison } from '../src/lib/aggregate';
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -247,4 +247,59 @@ test('モデルコストの内訳が役割別合計とモデル別合計を表�
   const body2 = await page.locator('body').innerText();
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('変更行数推移グラフが表示され、最新値が data/runs から導出した changedLinesTrend の最終点と一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = changedLinesTrend(runs);
+
+  const chart = page.getByRole('img', { name: '変更行数推移' });
+  await expect(chart).toBeVisible();
+
+  // e2eFailureRateTrend のテストと同様の理由で、「データあり」経路のみを検証する
+  // 前提を明示する（このリポジトリの data/runs は verify 到達済み run を常に含む）。
+  expect(
+    trend.length,
+    'data/runs に verify 到達済みの run が1件も無い。fixture が全件 failed になっている。',
+  ).toBeGreaterThan(0);
+
+  const card = page.locator('div.rounded-xl').filter({ hasText: '変更行数推移' });
+  const latestValue = trend[trend.length - 1].value;
+  await expect(card).toContainText(`${latestValue.toFixed(1)}行`);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+});
+
+test('Builder改善の前反復比較カードが直近2件の測定済み反復の指標と改善/悪化ラベルを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const comparison = builderComparison(runs);
+  expect(
+    comparison,
+    'data/runs に verify 到達済みの反復が2件以上無く、比較カードの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('builder-comparison');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`iteration ${comparison!.previousIteration} → ${comparison!.currentIteration}`);
+
+  // 各指標行が実データから導出した previous/current 値と、verdict に対応する
+  // 日本語ラベル（改善/悪化/変化なし）を実際に表示していることを検証する。
+  for (const m of comparison!.metrics) {
+    const row = page.getByTestId(`builder-metric-${m.key}`);
+    await expect(row).toBeVisible();
+    const verdictEl = page.getByTestId(`builder-metric-verdict-${m.key}`);
+    const expectedLabel = m.verdict === 'improved' ? '改善' : m.verdict === 'regressed' ? '悪化' : '変化なし';
+    await expect(verdictEl).toContainText(expectedLabel);
+  }
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
 });

@@ -14,6 +14,7 @@ const REVISE_CHART_PATH = path.join(process.cwd(), 'src/components/ReviseCyclesC
 const TIMELINE_PATH = path.join(process.cwd(), 'src/components/IterationTimeline.tsx');
 const BACKLOG_PATH = path.join(process.cwd(), 'src/components/BacklogPanel.tsx');
 const MODEL_COST_PATH = path.join(process.cwd(), 'src/components/ModelCostBreakdown.tsx');
+const BUILDER_COMPARISON_PATH = path.join(process.cwd(), 'src/components/BuilderComparisonCard.tsx');
 
 function readSource(file: string): string {
   return fs.readFileSync(file, 'utf8');
@@ -34,11 +35,18 @@ describe('README のダッシュボード解説と実際の画面表示の整合
   const readme = readSource(README_PATH);
   const pageSource = readSource(PAGE_PATH);
 
-  it('page.tsx には TrendChart が 5 つ（カバレッジ/コスト/承認率/マージ率/E2E失敗率）ある前提が崩れていない', () => {
+  it('page.tsx には TrendChart が 6 つ（カバレッジ/コスト/承認率/マージ率/E2E失敗率/変更行数）ある前提が崩れていない', () => {
     // このテスト自体が前提を検証しつつ、以降のアサーションが空リストで
     // 無意味に成功してしまう（=何もチェックしない）事態を防ぐ。
     const titles = extractTrendChartTitles(pageSource);
-    expect(titles).toEqual(['カバレッジ推移', '累計コスト', '承認率推移', 'マージ率推移', 'E2E失敗率推移']);
+    expect(titles).toEqual([
+      'カバレッジ推移',
+      '累計コスト',
+      '承認率推移',
+      'マージ率推移',
+      'E2E失敗率推移',
+      '変更行数推移',
+    ]);
   });
 
   it.each([
@@ -47,6 +55,7 @@ describe('README のダッシュボード解説と実際の画面表示の整合
     'revise 回数の分布',
     '直近の反復',
     'ループが生成した改善バックログ',
+    'Builder改善の前反復比較',
   ])('「%s」が README のダッシュボード解説セクションに説明付きで載っている', (title) => {
     const section = readme.slice(readme.indexOf('## ダッシュボードの見方'), readme.indexOf('## Learn More'));
     const lineRe = new RegExp(`^-.*${title}.*$`, 'm');
@@ -66,6 +75,7 @@ describe('README のダッシュボード解説と実際の画面表示の整合
     expect(readSource(TIMELINE_PATH)).toContain('直近の反復');
     expect(readSource(BACKLOG_PATH)).toContain('ループが生成した改善バックログ');
     expect(readSource(MODEL_COST_PATH)).toContain('モデルコストの内訳');
+    expect(readSource(BUILDER_COMPARISON_PATH)).toContain('Builder改善の前反復比較');
   });
 
   it('ダッシュボードの見方セクションが Getting Started より後、Learn More より前に存在する', () => {

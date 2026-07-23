@@ -10,6 +10,8 @@ import {
   mergeRateTrend,
   e2eFailureRateTrend,
   costBreakdown,
+  changedLinesTrend,
+  builderComparison,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
 } from './aggregate';
 import type { RunRecord } from './types';
@@ -732,5 +734,124 @@ describe('costBreakdown', () => {
     const modelSum = b.byModel.reduce((s, m) => s + m.totalUsd, 0);
     expect(modelSum).toBeCloseTo(summary.totalCostUsd);
     expect(b.totalUsd).toBeCloseTo(summary.totalCostUsd);
+  });
+});
+
+describe('changedLinesTrend', () => {
+  it('空配列では空配列を返す', () => {
+    expect(changedLinesTrend([])).toEqual([]);
+  });
+
+  it('iteration 昇順に変更行数を並べる', () => {
+    const runs = [
+      makeRun({ iteration: 3, changedLines: 88 }),
+      makeRun({ iteration: 1, changedLines: 20 }),
+    ];
+    expect(changedLinesTrend(runs)).toEqual([
+      { iteration: 1, value: 20 },
+      { iteration: 3, value: 88 },
+    ]);
+  });
+
+  it('failed run は coverageTrend と同様に点として含めない（sentinel 0 への急落に見せない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', changedLines: 120 }),
+      makeRun({ iteration: 2, verdict: 'failed', changedLines: 0 }),
+    ];
+    expect(changedLinesTrend(runs)).toEqual([{ iteration: 1, value: 120 }]);
+  });
+});
+
+describe('builderComparison', () => {
+  it('空配列では null を返す', () => {
+    expect(builderComparison([])).toBeNull();
+  });
+
+  it('測定済み(verify到達済み) run が1件だけなら比較対象が無いため null を返す', () => {
+    const runs = [makeRun({ iteration: 1 })];
+    expect(builderComparison(runs)).toBeNull();
+  });
+
+  it('failed run を除外した結果、測定済みが1件しか残らない場合も null を返す（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+    ];
+    expect(builderComparison(runs)).toBeNull();
+  });
+
+  it('直近2件の測定済み iteration を比較し、各指標の delta と改善方向を正しく判定する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 2,
+        changedLines: 429,
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 70 },
+        cost: { builderUsd: 6.9, adversaryUsd: 0, ideationUsd: 0, totalUsd: 6.9 },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        changedLines: 59,
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 },
+        cost: { builderUsd: 3.4, adversaryUsd: 0, ideationUsd: 0, totalUsd: 3.4 },
+      }),
+    ];
+    const c = builderComparison(runs);
+    expect(c).not.toBeNull();
+    expect(c!.previousIteration).toBe(1);
+    expect(c!.currentIteration).toBe(2);
+
+    const byKey = Object.fromEntries(c!.metrics.map((m) => [m.key, m]));
+    // revise回数・変更行数・builderコストは減少 = 改善（lower-is-better）
+    expect(byKey.reviseCycles).toMatchObject({ previous: 2, current: 1, delta: -1, verdict: 'improved' });
+    expect(byKey.changedLines).toMatchObject({ previous: 429, current: 59, delta: -370, verdict: 'improved' });
+    expect(byKey.builderUsd.verdict).toBe('improved');
+    expect(byKey.builderUsd.delta).toBeCloseTo(-3.5);
+    // カバレッジは上昇 = 改善（higher-is-better）
+    expect(byKey.coveragePct).toMatchObject({ previous: 70, current: 80, delta: 10, verdict: 'improved' });
+  });
+
+  it('値が悪化した場合は regressed、変化が無い場合は unchanged を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 0,
+        changedLines: 50,
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 90 },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 3,
+        changedLines: 50,
+        verify: { unitPassed: true, e2ePassed: true, coveragePct: 60 },
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+      }),
+    ];
+    const c = builderComparison(runs);
+    const byKey = Object.fromEntries(c!.metrics.map((m) => [m.key, m]));
+    // revise回数増加・カバレッジ低下・コスト増加は悪化
+    expect(byKey.reviseCycles.verdict).toBe('regressed');
+    expect(byKey.coveragePct.verdict).toBe('regressed');
+    expect(byKey.builderUsd.verdict).toBe('regressed');
+    // 変更行数は同一値 → 変化なし
+    expect(byKey.changedLines).toMatchObject({ delta: 0, verdict: 'unchanged' });
+  });
+
+  it('failed run を除外したうえで直近2件（時系列順）を比較する。配列順や中間の failed に依存しない', () => {
+    const runs = [
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, changedLines: 10 }),
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, changedLines: 200 }),
+      makeRun({ iteration: 3, verdict: 'failed', reviseCycles: 9, changedLines: 0 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 2, changedLines: 100 }),
+    ];
+    const c = builderComparison(runs);
+    // 時系列(iteration昇順)の測定済みは [1,2,4]。failed(3)を除外した直近2件は iteration 2 → 4
+    expect(c!.previousIteration).toBe(2);
+    expect(c!.currentIteration).toBe(4);
+    const byKey = Object.fromEntries(c!.metrics.map((m) => [m.key, m]));
+    expect(byKey.reviseCycles).toMatchObject({ previous: 2, current: 1 });
+    expect(byKey.changedLines).toMatchObject({ previous: 100, current: 10 });
   });
 });
