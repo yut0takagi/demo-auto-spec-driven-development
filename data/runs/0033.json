@@ -1,0 +1,41 @@
+{
+  "id": "20260723T142711Z-71",
+  "iteration": 33,
+  "issue": {
+    "number": 71,
+    "title": "ブレーカ発火までのランウェイ表示（残反復数の可視化）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/71-task",
+  "startedAt": "2026-07-23T14:27:11Z",
+  "finishedAt": "2026-07-23T14:40:42Z",
+  "durationSec": 811,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 73,
+  "adversary": {
+    "approved": true,
+    "summary": "ブレーカランウェイ表示の完全実装。要件を満たし、テストが振る舞いを実質的に検証し、既存挙動を壊さない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 378,
+  "cost": {
+    "builderUsd": 4.668024,
+    "adversaryUsd": 0.099592,
+    "ideationUsd": 0.0,
+    "totalUsd": 4.767616
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
