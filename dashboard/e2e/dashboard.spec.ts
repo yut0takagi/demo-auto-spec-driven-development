@@ -7,6 +7,7 @@ import {
   changedLinesTrend,
   builderComparison,
   earlyWarningSignal,
+  gateReasonBreakdown,
 } from '../src/lib/aggregate';
 
 /**
@@ -338,6 +339,45 @@ test('高revise + 低承認率の前兆検知カードが実データから導�
   );
 
   await expect(card).toContainText(`対象iteration: ${signal!.iterations.join(', ')}`);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由の分類パネルが実データから導出した分類・件数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateReasonBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reasons-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
+  await expect(panel).toContainText(`${totalCount}件`);
+
+  // 各分類行が gateReasonBreakdown()（別の計算経路）と一致する件数・割合・対象iterationを表示する
+  for (const b of breakdown) {
+    const countEl = page.getByTestId(`gate-reason-count-${b.category}`);
+    const pct = (b.count / totalCount) * 100;
+    await expect(countEl).toHaveText(`${b.count}件 (${pct.toFixed(1)}%)`);
+
+    const row = page.getByTestId(`gate-reason-row-${b.category}`);
+    await expect(row).toContainText(`対象iteration: ${b.iterations.join(', ')}`);
+  }
+
+  // 件数降順で描画されていること（パネルの主張である「分類」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="gate-reason-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-row-', '')),
+  );
+  expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');

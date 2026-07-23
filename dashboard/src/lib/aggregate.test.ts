@@ -17,6 +17,8 @@ import {
   EARLY_WARNING_REVISE_THRESHOLD,
   EARLY_WARNING_APPROVAL_THRESHOLD,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
+  classifyGateReason,
+  gateReasonBreakdown,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1006,5 +1008,99 @@ describe('earlyWarningSignal', () => {
   it('EARLY_WARNING_APPROVAL_THRESHOLD は 0..1 の範囲の定数である', () => {
     expect(EARLY_WARNING_APPROVAL_THRESHOLD).toBeGreaterThan(0);
     expect(EARLY_WARNING_APPROVAL_THRESHOLD).toBeLessThan(1);
+  });
+});
+
+describe('classifyGateReason', () => {
+  it('orchestrator/gates.py の固定文字列テンプレートを厳密一致で分類する', () => {
+    expect(classifyGateReason('verify(lint/typecheck/unit/build) が失敗している')).toBe('verifyFailed');
+    expect(classifyGateReason('e2e(Playwright) が失敗している')).toBe('e2eFailed');
+    expect(classifyGateReason('adversary が approve していない')).toBe('adversaryNotApproved');
+    expect(classifyGateReason('builder が変更を生成しなかった')).toBe('noChanges');
+  });
+
+  it('変更行数・保護パス・例外クラッシュは埋め込み値（数値/パス/メッセージ）が変わっても分類できる', () => {
+    expect(classifyGateReason('変更行数 501 が上限 400 を超えている')).toBe('changedLinesExceeded');
+    expect(classifyGateReason('変更行数 9999 が上限 400 を超えている')).toBe('changedLinesExceeded');
+    expect(classifyGateReason('保護パスを変更している: orchestrator/gates.py')).toBe('protectedPathViolation');
+    expect(classifyGateReason('保護パスを変更している: .github/workflows/loop.yml')).toBe('protectedPathViolation');
+    expect(classifyGateReason('反復が例外で異常終了した: AgentError: claude exited 1')).toBe('crashed');
+    expect(classifyGateReason('反復が例外で異常終了した: GitHubError("checkout failed")')).toBe('crashed');
+  });
+
+  it('接頭辞だけ似ていて条件を満たさない/未知/空文字列は誤分類せず other に落とす', () => {
+    // 「変更行数」で始まるが「を超えている」で終わらない → changedLinesExceeded ではない
+    expect(classifyGateReason('変更行数 100 は許容範囲内')).toBe('other');
+    expect(classifyGateReason('未知の理由')).toBe('other');
+    expect(classifyGateReason('')).toBe('other');
+  });
+});
+
+describe('gateReasonBreakdown', () => {
+  it('run が無い/全runのgateReasonsが空（全merged）なら空配列を返す', () => {
+    expect(gateReasonBreakdown([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonBreakdown(runs)).toEqual([]);
+  });
+
+  it('1件のrunに複数カテゴリのgateReasonsがある場合、それぞれ1件ずつカウントする', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', '変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const b = gateReasonBreakdown(runs);
+    expect(b).toHaveLength(2);
+    expect(b.find((x) => x.category === 'adversaryNotApproved')?.iterations).toEqual([1]);
+    expect(b.find((x) => x.category === 'changedLinesExceeded')?.count).toBe(1);
+  });
+
+  it('複数runにまたがる同一カテゴリを合算し、count降順で返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['変更行数 450 が上限 400 を超えている'] }),
+    ];
+    const b = gateReasonBreakdown(runs);
+    expect(b[0].category).toBe('adversaryNotApproved');
+    expect(b[0].count).toBe(2);
+    expect(b[0].iterations).toEqual([1, 2]);
+    expect(b[1].category).toBe('changedLinesExceeded');
+    expect(b[1].count).toBe(1);
+  });
+
+  it('count が同数のときは gates.py の評価順（e2eFailed→noChanges）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['builder が変更を生成しなかった'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(gateReasonBreakdown(runs).map((x) => x.category)).toEqual(['e2eFailed', 'noChanges']);
+  });
+
+  it('同一run内の重複理由はcountに反映しつつiterations/examplesは重複排除する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', 'adversary が approve していない'],
+      }),
+    ];
+    const b = gateReasonBreakdown(runs);
+    expect(b[0].count).toBe(2);
+    expect(b[0].iterations).toEqual([1]);
+    expect(b[0].examples).toEqual(['adversary が approve していない']);
+  });
+
+  it('examplesは埋め込み値ごとに別文字列として昇順で重複排除される', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['変更行数 500 が上限 400 を超えている'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['変更行数 450 が上限 400 を超えている'] }),
+    ];
+    expect(gateReasonBreakdown(runs)[0].examples).toEqual([
+      '変更行数 450 が上限 400 を超えている',
+      '変更行数 500 が上限 400 を超えている',
+    ]);
   });
 });

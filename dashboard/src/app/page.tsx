@@ -19,6 +19,7 @@ import { VerdictSummaryBubble } from '@/components/VerdictSummaryBubble';
 import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
 import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
+import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -60,6 +61,7 @@ export default function Home() {
           <BuilderComparisonCard runs={runs} />
         </div>
         <ModelCostBreakdown runs={runs} />
+        <GateReasonsPanel runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
