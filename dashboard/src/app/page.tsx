@@ -40,6 +40,7 @@ import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMergeComparisonPanel';
 import { AdversaryOutcomeDivergencePanel } from '@/components/AdversaryOutcomeDivergencePanel';
+import { AdversaryModelVerdictMissMatrixPanel } from '@/components/AdversaryModelVerdictMissMatrixPanel';
 import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPanel';
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
@@ -125,6 +126,7 @@ export default function Home() {
         <ModelEffectivenessPanel runs={runs} />
         <ModelApprovalMergeComparisonPanel runs={runs} />
         <AdversaryOutcomeDivergencePanel runs={runs} />
+        <AdversaryModelVerdictMissMatrixPanel runs={runs} />
         <BuilderModelSwitchAbPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
         <IterationTimeline runs={runs} />

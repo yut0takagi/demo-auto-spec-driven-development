@@ -67,6 +67,7 @@ import {
   pausedDryRunDetails,
   pausedDryRunSummary,
   adversaryOutcomeDivergence,
+  adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
   ideationToStartLeadTimeTrendSignal,
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
@@ -4572,6 +4573,173 @@ describe('adversaryOutcomeDivergence', () => {
     ];
     // 両モデルとも乖離率0%で同率 → モデル名昇順
     expect(adversaryOutcomeDivergence(runs).map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
+  });
+});
+
+describe('adversaryModelVerdictMissMatrix', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(adversaryModelVerdictMissMatrix([])).toEqual([]);
+  });
+
+  it('failedのみの場合はレビュー未到達のため対象0件（空配列）になる', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', adversary: { approved: false, summary: '' } })];
+    expect(adversaryModelVerdictMissMatrix(runs)).toEqual([]);
+  });
+
+  it('mergedのみの場合はnonMergedCount=0で見落としようが無く、cellsは空になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryModelVerdictMissMatrix(runs);
+    expect(row.model).toBe('model-a');
+    expect(row.decidedCount).toBe(1);
+    expect(row.nonMergedCount).toBe(0);
+    expect(row.totalMissCount).toBe(0);
+    expect(row.overallMissRatePct).toBe(0);
+    expect(row.cells).toEqual([]);
+  });
+
+  it('非マージverdictで承認していれば見落としとしてセルに件数・率・反復番号を計上する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryModelVerdictMissMatrix(runs);
+    expect(row.nonMergedCount).toBe(2);
+    expect(row.totalMissCount).toBe(1);
+    expect(row.overallMissRatePct).toBeCloseTo(50, 5);
+
+    const [cell] = row.cells;
+    expect(cell.verdict).toBe('abandoned');
+    expect(cell.count).toBe(2);
+    expect(cell.missCount).toBe(1);
+    expect(cell.missRatePct).toBeCloseTo(50, 5);
+    expect(cell.iterations).toEqual([1]);
+  });
+
+  it('同一モデルで複数の非マージverdictにまたがる見落としを列ごとに分解する（合算に潰さない）', () => {
+    const runs = [
+      // abandoned: 2件中2件見落とし（100%）
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      // needs-human: 1件中0件見落とし（0%）
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryModelVerdictMissMatrix(runs);
+    expect(row.cells.map((c) => c.verdict)).toEqual(['needs-human', 'abandoned']);
+
+    const abandonedCell = row.cells.find((c) => c.verdict === 'abandoned')!;
+    expect(abandonedCell.count).toBe(2);
+    expect(abandonedCell.missCount).toBe(2);
+    expect(abandonedCell.missRatePct).toBe(100);
+    expect(abandonedCell.iterations).toEqual([1, 2]);
+
+    const needsHumanCell = row.cells.find((c) => c.verdict === 'needs-human')!;
+    expect(needsHumanCell.count).toBe(1);
+    expect(needsHumanCell.missCount).toBe(0);
+    expect(needsHumanCell.missRatePct).toBe(0);
+
+    // 分母はnon-merged全体(3件)、見落としは合計2件 → 2/3
+    expect(row.totalMissCount).toBe(2);
+    expect(row.overallMissRatePct).toBeCloseTo((2 / 3) * 100, 5);
+  });
+
+  it('cellsは MISS_MATRIX_VERDICT_ORDER (dry-run, paused, needs-human, abandoned) の順で、出現したverdictだけを含む', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'dry-run',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'paused',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+    ];
+    const [row] = adversaryModelVerdictMissMatrix(runs);
+    // needs-humanは出現していないので含まれない。出現順ではなく固定順(dry-run→paused→...→abandoned)。
+    expect(row.cells.map((c) => c.verdict)).toEqual(['dry-run', 'paused', 'abandoned']);
+  });
+
+  it('adversaryモデルごとに独立して集計し、母集団を混同しない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'b', adversary: 'model-a', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-b', ideation: 'i' },
+      }),
+    ];
+    const rows = adversaryModelVerdictMissMatrix(runs);
+    expect(rows).toHaveLength(2);
+    const a = rows.find((r) => r.model === 'model-a')!;
+    const b = rows.find((r) => r.model === 'model-b')!;
+    expect(a.overallMissRatePct).toBe(100);
+    expect(b.overallMissRatePct).toBe(0);
+  });
+
+  it('overallMissRatePctの降順で並び、同率のときはモデル名昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-zeta', ideation: 'i' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'b', adversary: 'model-alpha', ideation: 'i' },
+      }),
+    ];
+    // 両モデルとも見落とし率0%で同率 → モデル名昇順
+    expect(adversaryModelVerdictMissMatrix(runs).map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
   });
 });
 
