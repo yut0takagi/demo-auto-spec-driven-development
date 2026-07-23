@@ -41,6 +41,7 @@ import {
   pausedDryRunSummary,
   pausedDryRunDetails,
   adversaryOutcomeDivergence,
+  adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
   ideationToStartLeadTimeTrendSignal,
   ideationStartSuccessSummary,
@@ -907,6 +908,70 @@ test('Adversary 承認⇔実結果 乖離パネルが実データから導出し
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-outcome-divergence-row-', '')),
   );
   expect(renderedModels).toEqual(summaries.map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversaryモデル別×Verdict別 見落とし率マトリクスパネルが実データから導出したモデル・verdict別の見落とし率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = adversaryModelVerdictMissMatrix(runs);
+  expect(
+    rows.length,
+    'data/runs に verify 到達済み run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-model-verdict-miss-matrix-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}モデル`);
+
+  // 各モデル行が adversaryModelVerdictMissMatrix()（別の計算経路）と一致する
+  // 非マージ件数・見落とし件数・全体見落とし率・verdict別セルを表示していること
+  for (const row of rows) {
+    const overallEl = page.getByTestId(`adversary-model-verdict-miss-overall-${row.model}`);
+    await expect(overallEl).toContainText(
+      `非マージ${row.nonMergedCount}件中 見落とし${row.totalMissCount}件（${row.overallMissRatePct.toFixed(1)}%）`,
+    );
+
+    const rowEl = page.getByTestId(`adversary-model-verdict-miss-row-${row.model}`);
+    if (row.cells.length === 0) {
+      await expect(rowEl).toContainText('非マージ反復なし');
+    }
+
+    for (const cell of row.cells) {
+      const rateEl = page.getByTestId(`adversary-model-verdict-miss-rate-${row.model}-${cell.verdict}`);
+      await expect(rateEl).toHaveText(`見落とし${cell.missRatePct.toFixed(0)}% (${cell.missCount}/${cell.count})`);
+
+      if (cell.iterations.length > 0) {
+        await expect(rowEl).toContainText(
+          `見落とし発生反復: ${cell.iterations.map((n) => `#${n}`).join(', ')}`,
+        );
+      }
+    }
+
+    // セルは MISS_MATRIX_VERDICT_ORDER (dry-run→paused→needs-human→abandoned) の順で描画されること
+    const cellEls = await page
+      .locator(`[data-testid^="adversary-model-verdict-miss-cell-${row.model}-"]`)
+      .all();
+    const renderedVerdicts = await Promise.all(
+      cellEls.map(async (c) => (await c.getAttribute('data-testid'))!.replace(
+        `adversary-model-verdict-miss-cell-${row.model}-`,
+        '',
+      )),
+    );
+    expect(renderedVerdicts).toEqual(row.cells.map((c) => c.verdict));
+  }
+
+  // overallMissRatePct の降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="adversary-model-verdict-miss-row-"]').all();
+  const renderedModels = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-model-verdict-miss-row-', '')),
+  );
+  expect(renderedModels).toEqual(rows.map((r) => r.model));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

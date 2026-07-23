@@ -2801,6 +2801,101 @@ export function adversaryOutcomeDivergence(runs: RunRecord[]): AdversaryOutcomeD
 }
 
 /**
+ * adversaryModelVerdictMissMatrix の列として扱う verdict。'merged' は見落としの定義上
+ * （承認したのに merged にならなかった、というのが見落としなので）ここには現れない
+ * （merged行が0件なら見落としようがないため、常に列として出す意味が無い）。
+ * 'failed' は adversaryOutcomeDivergence と同じ理由（レビュー未到達）で reachedVerify により
+ * 事前に除外される。表示順は非マージの深刻度が上がる順（ReviseVerdictMatrixPanel の
+ * VERDICT_ORDER と揃える）。
+ */
+const MISS_MATRIX_VERDICT_ORDER: readonly Verdict[] = ['dry-run', 'paused', 'needs-human', 'abandoned'];
+
+export interface AdversaryModelVerdictMissCell {
+  verdict: Verdict;
+  /** この adversary モデルがこの verdict を出した反復数 */
+  count: number;
+  /** そのうち adversary.approved === true だった件数（＝見落とし） */
+  missCount: number;
+  /** missCount / count の百分率。count=0 のときは0（このverdictは列に現れないため実際には未使用） */
+  missRatePct: number;
+  /** 見落とし（missCount側）が発生した反復番号。昇順 */
+  iterations: number[];
+}
+
+export interface AdversaryModelVerdictMissMatrixRow {
+  model: string;
+  /** verify に到達したこのモデルの全反復数（merged含む） */
+  decidedCount: number;
+  /** merged を除いた反復数（このマトリクスの分母合計） */
+  nonMergedCount: number;
+  totalMissCount: number;
+  /** totalMissCount / nonMergedCount の百分率。nonMergedCount=0 のときは0 */
+  overallMissRatePct: number;
+  /** 実際に出現した verdict だけを MISS_MATRIX_VERDICT_ORDER の順で持つ（0件のverdictは含めない） */
+  cells: AdversaryModelVerdictMissCell[];
+}
+
+/**
+ * adversaryOutcomeDivergence は adversary モデル別に「承認したのにmergedにならなかった」
+ * 件数(falseApprove)を verdict の種類を問わず1本の集計値に潰す。しかし abandoned・
+ * needs-human・paused・dry-run のどこで見落としが起きやすいかはモデルによって傾向が
+ * 異なりうる（例: あるモデルは needs-human で見落としが集中し、別のモデルは abandoned に
+ * 集中する、等）。本関数はモデル×verdictのクロス集計として見落とし率を分解し、
+ * 「どのモデルの、どの verdict 種別で見落としが集中しているか」を可視化するための
+ * データを提供する。adversaryApprovalByReasonAndModel（ゲート理由×モデル）と対になる
+ * 構造だが、対象がゲート理由ではなく verdict である点が異なる。
+ * failed（レビュー未到達）は adversaryOutcomeDivergence と同じ基準で母集団から除く。
+ */
+export function adversaryModelVerdictMissMatrix(runs: RunRecord[]): AdversaryModelVerdictMissMatrixRow[] {
+  const byModel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (!reachedVerify(run)) continue;
+    const model = run.models.adversary;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const nonMerged = modelRuns.filter((r) => r.verdict !== 'merged');
+      const cells: AdversaryModelVerdictMissCell[] = [];
+      let totalMissCount = 0;
+
+      for (const verdict of MISS_MATRIX_VERDICT_ORDER) {
+        const verdictRuns = nonMerged.filter((r) => r.verdict === verdict);
+        if (verdictRuns.length === 0) continue;
+        const missed = verdictRuns.filter((r) => r.adversary.approved);
+        totalMissCount += missed.length;
+        cells.push({
+          verdict,
+          count: verdictRuns.length,
+          missCount: missed.length,
+          missRatePct: (missed.length / verdictRuns.length) * 100,
+          iterations: missed.map((r) => r.iteration).sort((a, b) => a - b),
+        });
+      }
+
+      return {
+        model,
+        decidedCount: modelRuns.length,
+        nonMergedCount: nonMerged.length,
+        totalMissCount,
+        overallMissRatePct: nonMerged.length === 0 ? 0 : (totalMissCount / nonMerged.length) * 100,
+        cells,
+      };
+    })
+    .sort((a, b) => {
+      if (b.overallMissRatePct !== a.overallMissRatePct) return b.overallMissRatePct - a.overallMissRatePct;
+      return a.model.localeCompare(b.model);
+    });
+}
+
+/**
  * 隣接する2反復（iteration昇順で連続する2件）間の verdict 遷移を分類したラベル。
  * - recovered: 非merged → merged（ゲート不通過から回復した）
  * - regressed: merged → 非merged（直前は通過していたのに今回は不通過になった）
