@@ -24,6 +24,7 @@ import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { GateReasonChainPanel } from '@/components/GateReasonChainPanel';
+import { AdversaryReasonModelPanel } from '@/components/AdversaryReasonModelPanel';
 import { AbandonedIterationsPanel } from '@/components/AbandonedIterationsPanel';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { IdeationCostQualityPanel } from '@/components/IdeationCostQualityPanel';
@@ -99,6 +100,7 @@ export default function Home() {
         <GateReasonBurdenChart runs={runs} />
         <GateReasonTrendPanel runs={runs} />
         <GateReasonChainPanel runs={runs} />
+        <AdversaryReasonModelPanel runs={runs} />
         <AbandonedIterationsPanel runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />

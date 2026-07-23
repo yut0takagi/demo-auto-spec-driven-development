@@ -58,6 +58,7 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
+  adversaryApprovalByReasonAndModel,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1261,6 +1262,132 @@ describe('gateReasonBreakdown', () => {
     const b = gateReasonBreakdown(runs);
     expect(b.find((x) => x.category === 'adversaryUnparseable')?.iterations).toEqual([1]);
     expect(b.find((x) => x.category === 'adversaryNotApproved')?.iterations).toEqual([2]);
+  });
+});
+
+describe('adversaryApprovalByReasonAndModel', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(adversaryApprovalByReasonAndModel([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(adversaryApprovalByReasonAndModel(runs)).toEqual([]);
+  });
+
+  it('同一カテゴリ内で adversaryモデルが異なれば別セルとして分離し、承認率をモデルごとに算出する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-sonnet-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const rows = adversaryApprovalByReasonAndModel(runs);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.category).toBe('e2eFailed');
+    expect(row.total).toBe(3);
+
+    const sonnet = row.cells.find((c) => c.model === 'claude-sonnet-5')!;
+    expect(sonnet.count).toBe(1);
+    expect(sonnet.approvedCount).toBe(1);
+    expect(sonnet.approvalRatePct).toBeCloseTo(100, 5);
+    expect(sonnet.iterations).toEqual([1]);
+
+    const haiku = row.cells.find((c) => c.model === 'claude-haiku-4-5')!;
+    expect(haiku.count).toBe(2);
+    expect(haiku.approvedCount).toBe(1);
+    expect(haiku.approvalRatePct).toBeCloseTo(50, 5);
+    expect(haiku.iterations).toEqual([2, 3]);
+  });
+
+  it('adversaryNotApproved / adversaryUnparseable は定義上、承認率が常に0%になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '既存の挙動を壊している' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-sonnet-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-sonnet-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const rows = adversaryApprovalByReasonAndModel(runs);
+    const notApproved = rows.find((r) => r.category === 'adversaryNotApproved')!;
+    expect(notApproved.cells[0].approvalRatePct).toBe(0);
+    const unparseable = rows.find((r) => r.category === 'adversaryUnparseable')!;
+    expect(unparseable.cells[0].approvalRatePct).toBe(0);
+  });
+
+  it('1件のrunに複数カテゴリのgateReasonsがあれば、そのrunのadversaryモデルがそれぞれのカテゴリへ計上される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', '変更行数 500 が上限 400 を超えている'],
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-opus-4-8', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const rows = adversaryApprovalByReasonAndModel(runs);
+    expect(rows).toHaveLength(2);
+    const changedLines = rows.find((r) => r.category === 'changedLinesExceeded')!;
+    expect(changedLines.cells).toEqual([
+      { model: 'claude-opus-4-8', count: 1, approvedCount: 0, approvalRatePct: 0, iterations: [1] },
+    ]);
+  });
+
+  it('total降順で行を並べ、同数はgateReasonBreakdownと同じカテゴリ評価順で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['builder が変更を生成しなかった'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(adversaryApprovalByReasonAndModel(runs).map((r) => r.category)).toEqual(['e2eFailed', 'noChanges']);
+  });
+
+  it('セル内はcount降順・同数はモデル名昇順で並ぶ', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-sonnet-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const row = adversaryApprovalByReasonAndModel(runs).find((r) => r.category === 'verifyFailed')!;
+    expect(row.cells.map((c) => c.model)).toEqual(['claude-haiku-4-5', 'claude-sonnet-5']);
   });
 });
 

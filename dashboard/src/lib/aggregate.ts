@@ -793,6 +793,88 @@ export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummar
     });
 }
 
+export interface AdversaryReasonModelCell {
+  model: string;
+  /** この理由カテゴリ×モデルの組み合わせで gateReasons に出現した件数 */
+  count: number;
+  /** そのうち adversary.approved が true だった件数 */
+  approvedCount: number;
+  /** 0..100。count は必ず1以上（出現した組み合わせのみエントリを持つ）なので0除算は起きない。 */
+  approvalRatePct: number;
+  /** 該当した反復番号（重複なし・昇順） */
+  iterations: number[];
+}
+
+export interface AdversaryReasonModelRow {
+  category: GateReasonCategory;
+  /** この理由カテゴリの全モデル合計出現数 */
+  total: number;
+  /** モデル別内訳。count 降順、同数はモデル名昇順 */
+  cells: AdversaryReasonModelCell[];
+}
+
+/**
+ * gateReasons のカテゴリ(理由)と、そのとき実際にレビューした adversary モデルという
+ * 2軸で adversary 承認率を集計する。gateReasonBreakdown がカテゴリの出現件数のみを見るのに
+ * 対し、こちらは「その理由でゲートが止まった反復のうち adversary が approve していた割合」を
+ * モデル別に見せる。
+ *
+ * adversaryNotApproved / adversaryUnparseable は classifyGateReason の定義上その反復の
+ * adversary.approved が常に false（そもそも却下されたから該当カテゴリになった）ため、
+ * この2カテゴリの承認率は常に0%になる — バグではなく分類の定義そのものの反映。一方
+ * verifyFailed / e2eFailed 等は adversary の判断と独立した失敗要因なので「adversary は
+ * approve したのに verify/e2e で落ちた」というモデルごとの見落とし傾向が見える。
+ * gateReasonBreakdown と同様、1 run が複数の reason を持てば複数カテゴリへ重複カウントする。
+ */
+export function adversaryApprovalByReasonAndModel(runs: RunRecord[]): AdversaryReasonModelRow[] {
+  const byCategory = new Map<
+    GateReasonCategory,
+    Map<string, { count: number; approvedCount: number; iterations: Set<number> }>
+  >();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const reason of run.gateReasons) {
+      const category = classifyGateReason(reason, run.adversary.summary);
+      let models = byCategory.get(category);
+      if (!models) {
+        models = new Map();
+        byCategory.set(category, models);
+      }
+      const model = run.models.adversary;
+      let cell = models.get(model);
+      if (!cell) {
+        cell = { count: 0, approvedCount: 0, iterations: new Set() };
+        models.set(model, cell);
+      }
+      cell.count++;
+      if (run.adversary.approved) cell.approvedCount++;
+      cell.iterations.add(run.iteration);
+    }
+  }
+
+  return [...byCategory.entries()]
+    .map(([category, models]) => {
+      const cells: AdversaryReasonModelCell[] = [...models.entries()]
+        .map(([model, entry]) => ({
+          model,
+          count: entry.count,
+          approvedCount: entry.approvedCount,
+          approvalRatePct: (entry.approvedCount / entry.count) * 100,
+          iterations: [...entry.iterations].sort((a, b) => a - b),
+        }))
+        .sort((a, b) => {
+          if (b.count !== a.count) return b.count - a.count;
+          return a.model.localeCompare(b.model);
+        });
+      const total = cells.reduce((sum, c) => sum + c.count, 0);
+      return { category, total, cells };
+    })
+    .sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total;
+      return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+    });
+}
+
 export interface GateReasonBurdenPoint {
   iteration: number;
   /** カテゴリ別のこの反復での出現数（GATE_REASON_CATEGORY_ORDER の固定順）。合計は total と一致 */
