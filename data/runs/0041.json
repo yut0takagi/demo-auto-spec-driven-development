@@ -1,0 +1,43 @@
+{
+  "id": "20260723T160859Z-76",
+  "iteration": 41,
+  "issue": {
+    "number": 76,
+    "title": "Verdict 別の平均 revise 回数を分離表示",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/76-verdict-revise",
+  "startedAt": "2026-07-23T16:08:59Z",
+  "finishedAt": "2026-07-23T16:25:21Z",
+  "durationSec": 982,
+  "reviseCycles": 1,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "実装は要件を完全に満たしており、verdict別の独立したグループ表示と failed run の包含が正確に実装されている。テストは統計値の正確性・並び順・境界値を網羅的に検証し、コンポーネント・集計ロジック両方が実装を実質的に検証している。既存パネル/ロジックへの影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 3.763146,
+    "adversaryUsd": 0.076994,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.84014
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
