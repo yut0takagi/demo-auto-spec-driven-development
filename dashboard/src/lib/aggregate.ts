@@ -1694,40 +1694,21 @@ export function reviseSizeSuccessPatterns(runs: RunRecord[]): ReviseSizeSuccessC
 
 export interface SizeBucketReviseStat {
   sizeBucket: ChangeSizeBucketLabel;
-  /** このサイズ区分に属した反復数 */
   total: number;
-  /** 区分内の平均変更行数（表示用の代表値。changeSizeBucket の閾値とは別に実際の分布を見せる） */
+  /** 区分内の平均変更行数（表示用の代表値） */
   avgChangedLines: number;
   avgReviseCycles: number;
-  /** 区分内revise回数の中央値。外れ値に引きずられない参考値（Summary.medianReviseCycles と同じ考え方） */
   medianReviseCycles: number;
   /** 該当した反復番号（昇順） */
   iterations: number[];
 }
 
-/**
- * 変更サイズ区分(small/medium/large)ごとに revise 回数の平均・中央値を集計する。
- * reviseSizeSuccessPatterns がサイズ×revise回数(bucket)の2軸クロス集計でmerge到達率を見るのに
- * 対し、こちらはサイズ区分を主軸にして revise 回数そのもの（連続値の平均・中央値）を見る。
- * changedLinesTrend と同じ理由で failed run（verify未到達で changedLines が測定されなかった
- * sentinel 0）は母集団から除外する。出現した区分だけを CHANGE_SIZE_BUCKET_ORDER 順で返す。
- */
+/** サイズ区分ごとの revise 回数の平均・中央値。failed run（changedLines sentinel 0）は除外し、出現した区分だけを順に返す。 */
 export function reviseCyclesBySizeBucket(runs: RunRecord[]): SizeBucketReviseStat[] {
   const completed = byIterationAsc(runs).filter(reachedVerify);
-  const byBucket = new Map<ChangeSizeBucketLabel, RunRecord[]>();
 
-  for (const run of completed) {
-    const bucket = changeSizeBucket(run.changedLines);
-    const list = byBucket.get(bucket);
-    if (list) {
-      list.push(run);
-    } else {
-      byBucket.set(bucket, [run]);
-    }
-  }
-
-  return CHANGE_SIZE_BUCKET_ORDER.filter((bucket) => byBucket.has(bucket)).map((bucket) => {
-    const bucketRuns = byBucket.get(bucket) as RunRecord[];
+  return CHANGE_SIZE_BUCKET_ORDER.map((bucket) => {
+    const bucketRuns = completed.filter((r) => changeSizeBucket(r.changedLines) === bucket);
     return {
       sizeBucket: bucket,
       total: bucketRuns.length,
@@ -1736,42 +1717,29 @@ export function reviseCyclesBySizeBucket(runs: RunRecord[]): SizeBucketReviseSta
       medianReviseCycles: median(bucketRuns.map((r) => r.reviseCycles)),
       iterations: bucketRuns.map((r) => r.iteration).sort((a, b) => a - b),
     };
-  });
+  }).filter((stat) => stat.total > 0);
 }
 
-/**
- * small→medium→large の各区分がすべて揃っていて、かつ各区分の反復数がこの値以上でないと
- * カーブ形状の判定を行わない。区分の反復数が少ないと平均revise回数が1件の外れ値で
- * 大きく振れ、"convex"/"concave" が偶然のノイズに過ぎなくなるため。
- */
+/** 区分ごとの反復数がこの値未満ならカーブ形状は判定しない（外れ値ノイズを避ける） */
 export const REVISE_SIZE_CURVE_MIN_SAMPLES = 3;
 
-/**
- * 2区間の傾き差（accelerationDelta）がこの値未満なら「ほぼ比例（線形）」とみなす。
- * revise回数は小さい整数値が中心のため、cycleTimeTrendSignal 等の％しきい値ではなく
- * revise回数の絶対値（0.5回分の傾き差）をしきい値にしている。
- */
+/** 2区間の傾き差の絶対値がこの値未満なら「ほぼ比例（線形）」とみなす */
 export const REVISE_SIZE_CURVE_FLAT_THRESHOLD = 0.5;
 
 /**
- * convex:   区分が大きくなるほど revise回数の増分が拡大している（size:large の負担が
- *           不釣り合いに重い＝非線形に悪化）。
- * concave:  逆に増分が縮小している（大きい変更でも revise回数の伸びは頭打ち）。
- * linear:   増分がほぼ一定（サイズに比例して revise回数が増える）。
- * insufficient-data: small/medium/large のいずれかが欠けている、または
- *           REVISE_SIZE_CURVE_MIN_SAMPLES未満の区分がある。
+ * convex: 増分が拡大（非線形に悪化） / concave: 増分が縮小（伸びが頭打ち） / linear: 増分がほぼ一定
+ * insufficient-data: 区分が欠けている、または REVISE_SIZE_CURVE_MIN_SAMPLES 未満の区分がある
  */
 export type ReviseSizeCurveShape = 'convex' | 'concave' | 'linear' | 'insufficient-data';
 
 export interface ReviseSizeCurveSignal {
-  /** reviseCyclesBySizeBucket と同じ内容（Panel がテーブル表示に再利用する） */
   buckets: SizeBucketReviseStat[];
   shape: ReviseSizeCurveShape;
   /** medium.avgReviseCycles - small.avgReviseCycles。判定不能なら null */
   smallToMediumDelta: number | null;
   /** large.avgReviseCycles - medium.avgReviseCycles。判定不能なら null */
   mediumToLargeDelta: number | null;
-  /** mediumToLargeDelta - smallToMediumDelta。正なら加速(convex)、負なら減速(concave) */
+  /** mediumToLargeDelta - smallToMediumDelta。正なら convex、負なら concave */
   accelerationDelta: number | null;
 }
 
@@ -1781,12 +1749,8 @@ function reviseSizeCurveShape(accelerationDelta: number): ReviseSizeCurveShape {
 }
 
 /**
- * 変更サイズ(small→medium→large)が大きくなるにつれ、revise回数の平均がどう伸びるかの
- * 「カーブ形状」を判定する。reviseCyclesBySizeBucket が区分ごとの単純な平均・中央値を
- * 返すのに対し、こちらは small→medium と medium→large の2区間の増分（傾き）を比較し、
- * サイズと修正サイクルの関係が比例(linear)から外れて加速(convex)/減速(concave)して
- * いないかを検出する。3区分すべてが揃い REVISE_SIZE_CURVE_MIN_SAMPLES 以上のサンプルを
- * 持つ場合のみ判定し、それ以外は insufficient-data（傾きは null）を返す。
+ * small→medium→large の増分（傾き）を比較し、revise回数の伸びが加速/減速/比例のどれかを判定する。
+ * 3区分すべてが REVISE_SIZE_CURVE_MIN_SAMPLES 以上のサンプルを持つ場合のみ判定する。
  */
 export function reviseCyclesSizeCurve(runs: RunRecord[]): ReviseSizeCurveSignal {
   const buckets = reviseCyclesBySizeBucket(runs);
@@ -1794,23 +1758,10 @@ export function reviseCyclesSizeCurve(runs: RunRecord[]): ReviseSizeCurveSignal 
   const small = byLabel.get('small');
   const medium = byLabel.get('medium');
   const large = byLabel.get('large');
+  const insufficient = { buckets, shape: 'insufficient-data' as const, smallToMediumDelta: null, mediumToLargeDelta: null, accelerationDelta: null };
 
-  if (
-    small === undefined ||
-    medium === undefined ||
-    large === undefined ||
-    small.total < REVISE_SIZE_CURVE_MIN_SAMPLES ||
-    medium.total < REVISE_SIZE_CURVE_MIN_SAMPLES ||
-    large.total < REVISE_SIZE_CURVE_MIN_SAMPLES
-  ) {
-    return {
-      buckets,
-      shape: 'insufficient-data',
-      smallToMediumDelta: null,
-      mediumToLargeDelta: null,
-      accelerationDelta: null,
-    };
-  }
+  if (!small || !medium || !large) return insufficient;
+  if ([small, medium, large].some((b) => b.total < REVISE_SIZE_CURVE_MIN_SAMPLES)) return insufficient;
 
   const smallToMediumDelta = medium.avgReviseCycles - small.avgReviseCycles;
   const mediumToLargeDelta = large.avgReviseCycles - medium.avgReviseCycles;

@@ -32,15 +32,15 @@ function sizeRuns(startIter: number, count: number, reviseCycles: number, change
   );
 }
 
-describe('RevisionSizeCurvePanel', () => {
-  it('run が0件なら「データなし」を表示し、パネル本体を描画しない', () => {
-    const { container } = render(<RevisionSizeCurvePanel runs={[]} />);
-    expect(screen.getByText('データなし')).toBeInTheDocument();
-    expect(container.querySelector('[data-testid="revision-size-curve-panel"]')).toBeNull();
-  });
+function curveRuns(small: number, medium: number, large: number): RunRecord[] {
+  return [...sizeRuns(1, 3, small, 10), ...sizeRuns(4, 3, medium, 200), ...sizeRuns(7, 3, large, 400)];
+}
 
-  it('failed run しか無ければ「データなし」を表示する（changedLinesが測定されなかったsentinel 0のため）', () => {
-    const runs = [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 5, changedLines: 0 })];
+describe('RevisionSizeCurvePanel', () => {
+  it.each([
+    ['run が0件', [] as RunRecord[]],
+    ['failed run のみ（changedLines sentinel 0）', [makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 5, changedLines: 0 })]],
+  ])('%sなら「データなし」を表示し、パネル本体を描画しない', (_label, runs) => {
     const { container } = render(<RevisionSizeCurvePanel runs={runs} />);
     expect(screen.getByText('データなし')).toBeInTheDocument();
     expect(container.querySelector('[data-testid="revision-size-curve-panel"]')).toBeNull();
@@ -59,16 +59,18 @@ describe('RevisionSizeCurvePanel', () => {
     expect(container.querySelector('[data-testid="revision-size-curve-row-large"]')).toBeNull();
   });
 
-  it('加速カーブ(convex)のとき「加速（非線形に悪化）」と傾きの数値を表示する', () => {
-    const runs = [
-      ...sizeRuns(1, 3, 0, 10),
-      ...sizeRuns(4, 3, 1, 200),
-      ...sizeRuns(7, 3, 4, 400),
-    ];
-    const { container } = render(<RevisionSizeCurvePanel runs={runs} />);
-    expect(container.querySelector('[data-testid="revision-size-curve-shape"]')?.textContent).toBe(
-      '加速（非線形に悪化）',
-    );
+  it.each([
+    ['convex', 0, 1, 4, '加速（非線形に悪化）'],
+    ['concave', 0, 3, 4, '減速（伸びは頭打ち）'],
+    ['linear', 0, 1, 2, 'ほぼ比例'],
+  ] as const)('%sカーブのとき正しいラベル「%s」を表示する', (_shape, small, medium, large, label) => {
+    const { container } = render(<RevisionSizeCurvePanel runs={curveRuns(small, medium, large)} />);
+    expect(container.querySelector('[data-testid="revision-size-curve-shape"]')?.textContent).toBe(label);
+  });
+
+  it('convexカーブで傾きの数値・区分統計・バー幅（最大区分=100%, 最小区分=0%）を表示する', () => {
+    const { container } = render(<RevisionSizeCurvePanel runs={curveRuns(0, 1, 4)} />);
+
     const deltas = container.querySelector('[data-testid="revision-size-curve-deltas"]')?.textContent ?? '';
     expect(deltas).toContain('小→中 +1.00回');
     expect(deltas).toContain('中→大 +3.00回');
@@ -78,39 +80,7 @@ describe('RevisionSizeCurvePanel', () => {
     expect(smallStats).toContain('平均revise 0.00回');
     expect(smallStats).toContain('3件');
     expect(smallStats).toContain('平均10行');
-  });
 
-  it('減速カーブ(concave)のとき「減速（伸びは頭打ち）」を表示する', () => {
-    const runs = [
-      ...sizeRuns(1, 3, 0, 10),
-      ...sizeRuns(4, 3, 3, 200),
-      ...sizeRuns(7, 3, 4, 400),
-    ];
-    const { container } = render(<RevisionSizeCurvePanel runs={runs} />);
-    expect(container.querySelector('[data-testid="revision-size-curve-shape"]')?.textContent).toBe(
-      '減速（伸びは頭打ち）',
-    );
-    const deltas = container.querySelector('[data-testid="revision-size-curve-deltas"]')?.textContent ?? '';
-    expect(deltas).toContain('傾き差 -2.00回');
-  });
-
-  it('比例カーブ(linear)のとき「ほぼ比例」を表示する', () => {
-    const runs = [
-      ...sizeRuns(1, 3, 0, 10),
-      ...sizeRuns(4, 3, 1, 200),
-      ...sizeRuns(7, 3, 2, 400),
-    ];
-    const { container } = render(<RevisionSizeCurvePanel runs={runs} />);
-    expect(container.querySelector('[data-testid="revision-size-curve-shape"]')?.textContent).toBe('ほぼ比例');
-  });
-
-  it('最も平均revise回数が大きい区分のバーが100%幅になる', () => {
-    const runs = [
-      ...sizeRuns(1, 3, 0, 10),
-      ...sizeRuns(4, 3, 1, 200),
-      ...sizeRuns(7, 3, 4, 400),
-    ];
-    const { container } = render(<RevisionSizeCurvePanel runs={runs} />);
     const largeBar = container.querySelector('[data-testid="revision-size-curve-bar-large"]') as HTMLElement;
     const smallBar = container.querySelector('[data-testid="revision-size-curve-bar-small"]') as HTMLElement;
     expect(parseFloat(largeBar.style.width)).toBeCloseTo(100, 2);
