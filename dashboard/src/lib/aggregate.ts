@@ -627,6 +627,62 @@ export function earlyWarningSignal(runs: RunRecord[]): EarlyWarningSignal | null
   };
 }
 
+export interface ModelApprovalRateTrendSeries {
+  model: string;
+  /**
+   * この model が builder として使われ、かつ verify に到達した反復での累積承認率推移(0..100)。
+   * approvalRateTrend と同じ定義（reachedVerify母集団・累積計算）だが、母集団をこの model の
+   * builder使用時に限定する。
+   */
+  points: TrendPoint[];
+  /** points の最終点。points が空なら0（この model は verify に到達した反復を持たない） */
+  latestRate: number;
+  /** points.length と同じ（この推移の対象反復数） */
+  count: number;
+}
+
+/**
+ * builder に使われたモデル別の承認率トレンド観測。approvalRateTrend が全モデルを合算した
+ * 1本の推移しか見せないのに対し、こちらはモデルごとに独立した累積承認率推移を返す。
+ * 「モデルを切り替えた後、承認率が実際に改善/悪化しているか」を時系列で比較するのが
+ * このパネル固有の役割（modelEffectiveness は期間全体の1点サマリーで、切替の前後関係が
+ * 見えない）。reachedVerify で failed run を除外するのは approvalRateTrend と同じ理由
+ * （failed run の adversary.approved は測定されなかった sentinel）。
+ * 対象反復数（count）降順・同数はモデル名昇順で、データが豊富なモデルから並べる。
+ */
+export function approvalRateTrendByModel(runs: RunRecord[]): ModelApprovalRateTrendSeries[] {
+  const byModel = new Map<string, RunRecord[]>();
+  for (const run of byIterationAsc(runs)) {
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const completed = modelRuns.filter(reachedVerify);
+      let approvedCount = 0;
+      const points = completed.map((r, i) => {
+        if (r.adversary.approved) approvedCount++;
+        return { iteration: r.iteration, value: (approvedCount / (i + 1)) * 100 };
+      });
+      return {
+        model,
+        points,
+        latestRate: points.length === 0 ? 0 : points[points.length - 1].value,
+        count: points.length,
+      };
+    })
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 /**
  * gateReasons の分類。orchestrator/gates.py の evaluate_gate 等が生成する文字列
  * テンプレートに合わせている。変更行数・保護パス・例外メッセージは値が動的に埋め込まれる

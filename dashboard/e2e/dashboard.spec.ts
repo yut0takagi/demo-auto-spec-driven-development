@@ -26,6 +26,7 @@ import {
   adversaryCommentTrendSignal,
   adversaryApprovalCommentStats,
   recentAdversaryComments,
+  approvalRateTrendByModel,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -976,4 +977,49 @@ test('Adversary承認コメントの要約・トレンドパネルが実デー�
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
+});
+
+test('Model別承認率トレンド観測パネルが実データから導出したモデル別の累積承認率推移・最新値を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const series = approvalRateTrendByModel(runs);
+  expect(
+    series.some((s) => s.points.length > 0),
+    'data/runs に verify 到達済みの反復を持つ builder モデルが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBe(true);
+
+  const panel = page.getByTestId('model-approval-rate-trend-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${series.length}モデル`);
+
+  // 各モデルの凡例行が approvalRateTrendByModel()（別の計算経路）と一致する最新値・件数を表示する
+  for (const s of series) {
+    const legend = page.getByTestId(`model-approval-rate-trend-latest-${s.model}`);
+    if (s.count === 0) {
+      await expect(legend).toHaveText('データなし (0件)');
+      await expect(page.getByTestId(`model-approval-rate-trend-line-${s.model}`)).toHaveCount(0);
+      await expect(page.getByTestId(`model-approval-rate-trend-point-${s.model}`)).toHaveCount(0);
+    } else {
+      await expect(legend).toHaveText(`最新${s.latestRate.toFixed(1)}% (${s.count}件)`);
+      // 2点以上なら折れ線(path)、1点だけなら単一点(circle)として描画される
+      const lineCount = await page.getByTestId(`model-approval-rate-trend-line-${s.model}`).count();
+      const pointCount = await page.getByTestId(`model-approval-rate-trend-point-${s.model}`).count();
+      expect(lineCount + pointCount).toBe(1);
+    }
+  }
+
+  // 凡例の描画順は count 降順・同数はモデル名昇順（approvalRateTrendByModel の並びそのもの）
+  const legendRows = await page.locator('[data-testid^="model-approval-rate-trend-legend-"]').all();
+  const renderedModels = await Promise.all(
+    legendRows.map(async (r) =>
+      (await r.getAttribute('data-testid'))!.replace('model-approval-rate-trend-legend-', ''),
+    ),
+  );
+  expect(renderedModels).toEqual(series.map((s) => s.model));
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
 });
