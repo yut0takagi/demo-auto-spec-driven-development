@@ -74,6 +74,40 @@ def _retire_from_queue(gh: GhLike, issue_number: int, terminal_label: str, cfg: 
     gh.add_label(issue_number, terminal_label)
 
 
+def _refuel_context(ready_count: int) -> str:
+    return (
+        f"現在 loop:ready の残数は {ready_count} 件で低水位。"
+        "バックログが枯れないよう、次に着手すべき改善作業を提案してください。"
+    )
+
+
+def _refuel_backlog(
+    *, gh: GhLike, cfg: Config, repo_root: str, ready: list[Issue],
+    ideation_runner: Callable[..., tuple[list[dict], float]],
+) -> tuple[float, list[int]]:
+    """ready が低水位なら ideation で loop:ready issue を補充する（枯れ防止の心臓部）。
+
+    返り値は (ideation_cost, 作成した issue 番号のリスト)。ready が閾値以上なら (0.0, [])。
+    既存オープンと同名の提案は重複作成を避けてスキップする。ideation が例外/0 件でも
+    クラッシュさせず「補充なし」として扱う（呼び出し側は ready がまだ空なら no-work にする）。
+    """
+    if len(ready) >= cfg.ideation_low_water:
+        return 0.0, []
+    open_titles = {issue.title for issue in ready}
+    try:
+        proposals, cost = ideation_runner(
+            context=_refuel_context(len(ready)), cfg=cfg, cwd=repo_root
+        )
+    except Exception:  # noqa: BLE001 — 給油の失敗でループ全体を殺さない
+        return 0.0, []
+    created = [
+        gh.create_issue(title=p["title"], body=p["body"], labels=[cfg.ready_label])
+        for p in proposals
+        if p["title"] not in open_titles
+    ]
+    return cost, created
+
+
 def _abandon_comment(reasons: tuple[str, ...] | list[str], cycles: int) -> str:
     lines = [
         "🤖 gate を満たせなかったため自動で見送りました（needs-human は出さない方針）。",
@@ -90,11 +124,14 @@ def _abandon_comment(reasons: tuple[str, ...] | list[str], cycles: int) -> str:
 def _abandon(
     gh: GhLike, *, data_dir, iteration, issue, branch, outcome, changed_lines,
     reasons: tuple[str, ...], cfg: Config, started_at: str, clock: Callable[[], str],
+    ideation_cost: float = 0.0, next_issues: list[int] | None = None,
 ) -> "IterationResult":
     """gate を再試行しても満たせなかった issue を、人間に振らず自動で見送る。
 
     ready を剥がし、loop:abandoned を付けて issue をクローズする（PR は作らない=push もしない
     ので、needs-human 時代のような宙ぶらりんの PR は残らない）。次反復は次の ready を拾う。
+
+    `ideation_cost`/`next_issues` は反復先頭の給油分。abandon で終わっても記録から消さない。
     """
     gh.remove_label(issue.number, cfg.ready_label)
     gh.add_label(issue.number, cfg.abandoned_label)
@@ -102,7 +139,7 @@ def _abandon(
     _record(
         data_dir, iteration, issue, branch, outcome, changed_lines,
         verdict="abandoned", started_at=started_at, finished_at=clock(),
-        cfg=cfg, ideation_cost=0.0, next_issues=[],
+        cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues or [],
         gate_reasons=list(reasons), pr_number=None,
     )
     return IterationResult(
@@ -134,6 +171,14 @@ def run_iteration(
         return IterationResult(status="skipped-disabled", iteration=iteration)
 
     ready = gh.list_ready_issues(cfg.ready_label)
+    # 枯れ防止の自己給油: ready が低水位なら着手前に ideation で補充する。旧構造は ideation を
+    # merge 後にしか呼ばず、ready が 0 になると即 no-work を返して二度と復活しなかった。給油を
+    # 反復先頭に一本化し、構造的に枯れないようにする（コストは全 exit の記録へ引き回す）。
+    ideation_cost, next_issues = _refuel_backlog(
+        gh=gh, cfg=cfg, repo_root=repo_root, ready=ready, ideation_runner=ideation_runner
+    )
+    if next_issues:
+        ready = gh.list_ready_issues(cfg.ready_label)  # 補充分を拾えるよう再取得
     if not ready:
         return IterationResult(status="no-work", iteration=iteration)
 
@@ -164,6 +209,7 @@ def run_iteration(
             outcome=outcome, changed_lines=0,
             reasons=("builder が変更を生成しなかった",),
             cfg=cfg, started_at=started_at, clock=clock,
+            ideation_cost=ideation_cost, next_issues=next_issues,
         )
 
     changed_files = gh.changed_files(cfg.base_branch)
@@ -185,6 +231,7 @@ def run_iteration(
             outcome=outcome, changed_lines=changed_lines,
             reasons=tuple(gate.reasons),
             cfg=cfg, started_at=started_at, clock=clock,
+            ideation_cost=ideation_cost, next_issues=next_issues,
         )
 
     # gate 通過時のみ push → PR → merge へ進む。
@@ -205,7 +252,7 @@ def run_iteration(
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="paused", started_at=started_at, finished_at=clock(),
-            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
             gate_reasons=gate.reasons, pr_number=pr,
         )
         return IterationResult(
@@ -219,7 +266,7 @@ def run_iteration(
         _record(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="dry-run", started_at=started_at, finished_at=clock(),
-            cfg=cfg, ideation_cost=0.0, next_issues=[],
+            cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
             gate_reasons=gate.reasons, pr_number=pr,
         )
         return IterationResult(
@@ -233,14 +280,7 @@ def run_iteration(
     # loop:ready が残り、マージ済み issue が次反復で再び拾われて無駄に再実装される。
     gh.close_issue(issue.number, f"✅ PR #{pr} で develop にマージ済み。")
 
-    proposals, ideation_cost = ideation_runner(
-        context=f"iteration {iteration} で「{issue.title}」を完了した", cfg=cfg, cwd=repo_root
-    )
-    next_issues = [
-        gh.create_issue(title=p["title"], body=p["body"], labels=[cfg.ready_label])
-        for p in proposals
-    ]
-
+    # ideation（給油）は反復先頭で実施済み。給油点は一本化しているのでここでは行わない。
     _record(
         data_dir, iteration, issue, branch, outcome, changed_lines,
         verdict="merged", started_at=started_at, finished_at=clock(),
