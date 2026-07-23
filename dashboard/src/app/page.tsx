@@ -20,6 +20,7 @@ import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
 import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { GateReasonsPanel } from '@/components/GateReasonsPanel';
+import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -61,7 +62,10 @@ export default function Home() {
           <BuilderComparisonCard runs={runs} />
         </div>
         <ModelCostBreakdown runs={runs} />
-        <GateReasonsPanel runs={runs} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <GateReasonsPanel runs={runs} />
+          <GateFailureTypesPanel runs={runs} />
+        </div>
         <ReviseCyclesChart runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />

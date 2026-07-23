@@ -516,6 +516,53 @@ export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummar
     });
 }
 
+/** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
+const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
+
+export interface GateFailureTypeSummary {
+  /** この verdict に該当した run 数 */
+  verdict: Verdict;
+  count: number;
+  /** 該当した反復番号（重複なし・昇順） */
+  iterations: number[];
+}
+
+/**
+ * gateReasonBreakdown が「なぜゲートを通らなかったか」という理由文字列を分類するのに
+ * 対し、こちらは「ゲートを通らなかった結果どう扱われたか」という verdict の類型
+ * （failed=クラッシュ / abandoned=自動見送り / needs-human=旧経路）を集計する。
+ * paused・dry-run は evaluate_gate が reasons を積まない意図的な非マージ（orchestrator/gates.py）
+ * であり実際には gateReasons が常に空なので、gateReasons を持つ run だけを対象にすることで
+ * 「ゲート不通過」の対象 run 集合を gateReasonBreakdown と一致させる（count の単位は異なる:
+ * gateReasonBreakdown は理由の出現数、こちらは run 数なので、1 run が複数 gateReasons を
+ * 持つ場合は合計件数が一致しないことがある）。
+ */
+export function gateFailureTypeBreakdown(runs: RunRecord[]): GateFailureTypeSummary[] {
+  const byType = new Map<Verdict, { count: number; iterations: Set<number> }>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (run.gateReasons.length === 0) continue;
+    let entry = byType.get(run.verdict);
+    if (!entry) {
+      entry = { count: 0, iterations: new Set() };
+      byType.set(run.verdict, entry);
+    }
+    entry.count++;
+    entry.iterations.add(run.iteration);
+  }
+
+  return [...byType.entries()]
+    .map(([verdict, entry]) => ({
+      verdict,
+      count: entry.count,
+      iterations: [...entry.iterations].sort((a, b) => a - b),
+    }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      return GATE_FAILURE_TYPE_ORDER.indexOf(a.verdict) - GATE_FAILURE_TYPE_ORDER.indexOf(b.verdict);
+    });
+}
+
 export type CostRole = 'builder' | 'adversary' | 'ideation';
 
 const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];

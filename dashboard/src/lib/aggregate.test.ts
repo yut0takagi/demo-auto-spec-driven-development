@@ -19,6 +19,7 @@ import {
   REVISE_CYCLES_OUTLIER_THRESHOLD,
   classifyGateReason,
   gateReasonBreakdown,
+  gateFailureTypeBreakdown,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1102,5 +1103,66 @@ describe('gateReasonBreakdown', () => {
       '変更行数 450 が上限 400 を超えている',
       '変更行数 500 が上限 400 を超えている',
     ]);
+  });
+});
+
+describe('gateFailureTypeBreakdown', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(gateFailureTypeBreakdown([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateFailureTypeBreakdown(runs)).toEqual([]);
+  });
+
+  it('paused/dry-runはgateReasonsが空である限り、verdictがmerged以外でも集計対象から除外される', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', gateReasons: [] }),
+      makeRun({ iteration: 2, verdict: 'dry-run', gateReasons: [] }),
+    ];
+    expect(gateFailureTypeBreakdown(runs)).toEqual([]);
+  });
+
+  it('verdictごとにrun数を数える（1runに複数gateReasonsがあってもrunとしては1件）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', '変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const b = gateFailureTypeBreakdown(runs);
+    expect(b).toHaveLength(1);
+    expect(b[0]).toEqual({ verdict: 'abandoned', count: 1, iterations: [1] });
+  });
+
+  it('複数verdictにまたがる件数をcount降順で返し、対象iterationを昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        gateReasons: ['反復が例外で異常終了した: AgentError: claude exited 1'],
+      }),
+    ];
+    const b = gateFailureTypeBreakdown(runs);
+    expect(b[0]).toEqual({ verdict: 'abandoned', count: 2, iterations: [1, 3] });
+    expect(b[1]).toEqual({ verdict: 'failed', count: 1, iterations: [2] });
+  });
+
+  it('countが同数のときはGATE_FAILURE_TYPE_ORDER（failed→abandoned→needs-human）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        gateReasons: ['反復が例外で異常終了した: boom'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        gateReasons: ['adversary が approve していない'],
+      }),
+    ];
+    expect(gateFailureTypeBreakdown(runs).map((x) => x.verdict)).toEqual(['failed', 'abandoned', 'needs-human']);
   });
 });
