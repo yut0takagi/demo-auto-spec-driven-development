@@ -1,0 +1,41 @@
+{
+  "id": "20260723T201437Z-109",
+  "iteration": 60,
+  "issue": {
+    "number": 109,
+    "title": "Adversary 承認率の「理由別・モデル別」2 次元集計",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/109-adversary-2",
+  "startedAt": "2026-07-23T20:14:37Z",
+  "finishedAt": "2026-07-23T20:24:25Z",
+  "durationSec": 588,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 111,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件『理由別・モデル別2次元集計』を正確に実装。既存設計パターン(gateReasonBreakdown同じ)に合致し、ゲート不通過理由とadversaryモデルの2軸をクロス集計。承認率計算は正確で0除算なし。テストは境界値・空・実データパスを網羅し、実装を実質的に検証。README更新で定義の曖昧さも明記済み。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 480,
+  "cost": {
+    "builderUsd": 2.95302,
+    "adversaryUsd": 0.20301,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.15603
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
