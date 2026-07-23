@@ -52,6 +52,9 @@ import {
   recentAdversaryComments,
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
+  abandonedSummary,
+  abandonedRateTrend,
+  abandonedIterationDetails,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -3071,5 +3074,137 @@ describe('ideationCostQualityCorrelation', () => {
     expect(result.batches.map((b) => b.costPerIssueUsd)).toEqual([0.1, 0.1]);
     expect(result.costVsApprovalRateCorrelation).toBeNull();
     expect(result.costVsMergeRateCorrelation).toBeNull();
+  });
+});
+
+describe('abandonedSummary', () => {
+  it('空配列でもゼロ値を返す（境界値）', () => {
+    const s = abandonedSummary([]);
+    expect(s.count).toBe(0);
+    expect(s.rate).toBe(0);
+    expect(s.totalCostUsd).toBe(0);
+    expect(s.avgReviseCycles).toBe(0);
+    expect(s.topGateReasonCategory).toBeNull();
+    expect(s.topGateReasonCount).toBe(0);
+  });
+
+  it('abandonedが1件も無ければ、他verdictが混在していてもゼロ値を返す（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] }),
+    ];
+    const s = abandonedSummary(runs);
+    expect(s.count).toBe(0);
+    expect(s.rate).toBe(0);
+    expect(s.topGateReasonCategory).toBeNull();
+  });
+
+  it('abandoned以外のrunのコスト・revise回数・gateReasonsを集計に混ぜない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        reviseCycles: 9,
+        cost: { builderUsd: 1, adversaryUsd: 1, ideationUsd: 1, totalUsd: 3 },
+        gateReasons: [],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        reviseCycles: 2,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.02, ideationUsd: 0, totalUsd: 0.12 },
+        gateReasons: ['adversary が approve していない'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        reviseCycles: 4,
+        cost: { builderUsd: 0.2, adversaryUsd: 0.03, ideationUsd: 0, totalUsd: 0.23 },
+        gateReasons: ['adversary が approve していない'],
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'failed',
+        reviseCycles: 100,
+        cost: { builderUsd: 5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 5 },
+        // failed の gateReasons は abandoned のカテゴリ集計を汚染してはいけない
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const s = abandonedSummary(runs);
+    expect(s.count).toBe(2);
+    expect(s.rate).toBeCloseTo(0.5);
+    // merged/failed のコストを含めず abandoned の2件のみ合算する
+    expect(s.totalCostUsd).toBeCloseTo(0.35);
+    // merged(9)/failed(100)を含めず abandoned の2件のみ平均する: (2+4)/2 = 3
+    expect(s.avgReviseCycles).toBeCloseTo(3);
+    // failed の changedLinesExceeded ではなく abandoned 側の adversaryNotApproved が最多
+    expect(s.topGateReasonCategory).toBe('adversaryNotApproved');
+    expect(s.topGateReasonCount).toBe(2);
+  });
+});
+
+describe('abandonedRateTrend', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(abandonedRateTrend([])).toEqual([]);
+  });
+
+  it('累積abandoned率を各反復ごとに計算し、最終点はabandonedSummaryのrateと一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const trend = abandonedRateTrend(runs);
+    expect(trend).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 50 },
+      { iteration: 3, value: (2 / 3) * 100 },
+      { iteration: 4, value: 50 },
+    ]);
+    expect(trend[trend.length - 1].value).toBeCloseTo(abandonedSummary(runs).rate * 100);
+  });
+});
+
+describe('abandonedIterationDetails', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(abandonedIterationDetails([])).toEqual([]);
+  });
+
+  it('abandoned以外のrunを除外し、新しい反復から順に並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ];
+    const details = abandonedIterationDetails(runs);
+    expect(details.map((d) => d.iteration)).toEqual([3, 1]);
+  });
+
+  it('各反復の詳細フィールドを元のrunと一致する値で返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 5,
+        issue: { number: 42, title: '見送られたissue', labels: [] },
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        reviseCycles: 3,
+        durationSec: 240,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.02, ideationUsd: 0, totalUsd: 0.12 },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const [detail] = abandonedIterationDetails(runs);
+    expect(detail).toEqual({
+      iteration: 5,
+      issueNumber: 42,
+      issueTitle: '見送られたissue',
+      gateReasons: ['adversary が approve していない'],
+      reviseCycles: 3,
+      costUsd: 0.12,
+      durationSec: 240,
+      builderModel: 'claude-sonnet-5',
+    });
   });
 });

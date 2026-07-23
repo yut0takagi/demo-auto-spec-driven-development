@@ -1723,3 +1723,92 @@ export function ideationCostQualityCorrelation(runs: RunRecord[]): IdeationCostQ
     mergeRateSampleSize: mergeSamples.length,
   };
 }
+
+/**
+ * abandoned（ゲートを再試行しても満たせず、人間に振らず自動で見送った）反復専用の
+ * 追跡・分析サマリー。gateFailureTypeBreakdown は failed/abandoned/needs-human を
+ * 横並びに集計するため、abandoned 単体の「実際にどれだけコストを浪費し、何が支配的な
+ * 原因か」が他の類型の平均に薄まって見えない。こちらは abandoned だけに絞り込み、
+ * gateReasonBreakdown を再利用してそのカテゴリ内訳の先頭（最多カテゴリ）まで含める。
+ */
+export interface AbandonedSummary {
+  /** abandoned だった反復数 */
+  count: number;
+  /** 0..1。分母は全反復数（verdict は全 run で必ず記録されるため reachedVerify では絞り込まない） */
+  rate: number;
+  /**
+   * abandoned に至った反復が消費した合計コスト(USD)。costTrend/costBreakdown と同じ理由で
+   * verdict に関係なく実際に発生した値をそのまま合算する（＝「浪費」した実コスト）。
+   */
+  totalCostUsd: number;
+  /** abandoned 反復の平均 revise 回数。abandoned が0件なら mean([]) の定義通り0 */
+  avgReviseCycles: number;
+  /** abandoned 反復の gateReasons で最も多く出現したカテゴリ。abandoned が1件も無ければ null */
+  topGateReasonCategory: GateReasonCategory | null;
+  /** topGateReasonCategory の出現件数。topGateReasonCategory が null なら0 */
+  topGateReasonCount: number;
+}
+
+export function abandonedSummary(runs: RunRecord[]): AbandonedSummary {
+  const abandoned = runs.filter((r) => r.verdict === 'abandoned');
+  // gateReasonBreakdown は count 降順で返すため、先頭が最多カテゴリ。
+  const [top] = gateReasonBreakdown(abandoned);
+
+  return {
+    count: abandoned.length,
+    rate: runs.length === 0 ? 0 : abandoned.length / runs.length,
+    totalCostUsd: abandoned.reduce((sum, r) => sum + r.cost.totalUsd, 0),
+    avgReviseCycles: mean(abandoned.map((r) => r.reviseCycles)),
+    topGateReasonCategory: top ? top.category : null,
+    topGateReasonCount: top ? top.count : 0,
+  };
+}
+
+/**
+ * abandoned率の累積推移(0..100)。mergeRateTrend と同じ母集団定義（全run）・累積計算
+ * 方式で、最終点は abandonedSummary(runs).rate * 100 と一致する。verdict は全 run で
+ * 必ず記録されるため、costTrend/mergeRateTrend と同様 reachedVerify では絞り込まない。
+ */
+export function abandonedRateTrend(runs: RunRecord[]): TrendPoint[] {
+  const sorted = byIterationAsc(runs);
+  let abandonedCount = 0;
+  return sorted.map((r, i) => {
+    if (r.verdict === 'abandoned') abandonedCount++;
+    return { iteration: r.iteration, value: (abandonedCount / (i + 1)) * 100 };
+  });
+}
+
+export interface AbandonedIterationDetail {
+  iteration: number;
+  issueNumber: number;
+  issueTitle: string;
+  /** この反復の gateReasons（生の理由文字列。分類は表示側で classifyGateReason を使う） */
+  gateReasons: string[];
+  reviseCycles: number;
+  costUsd: number;
+  durationSec: number;
+  builderModel: string;
+}
+
+/**
+ * abandoned 反復ごとの追跡用詳細一覧。recentAdversaryComments と同様、新しい反復から
+ * 順に並べることで「直近何が起きて自動見送りになったか」をそのまま読める並びにする。
+ * ADVERSARY_COMMENT_DIGEST_LIMIT のような件数の打ち切りは設けない: abandoned は failed
+ * 同様に発生頻度が低いことを前提にした調査用の一覧であり、打ち切ると原因調査に必要な
+ * 反復が欠落しうるため。
+ */
+export function abandonedIterationDetails(runs: RunRecord[]): AbandonedIterationDetail[] {
+  return byIterationAsc(runs)
+    .filter((r) => r.verdict === 'abandoned')
+    .reverse()
+    .map((r) => ({
+      iteration: r.iteration,
+      issueNumber: r.issue.number,
+      issueTitle: r.issue.title,
+      gateReasons: r.gateReasons,
+      reviseCycles: r.reviseCycles,
+      costUsd: r.cost.totalUsd,
+      durationSec: r.durationSec,
+      builderModel: r.models.builder,
+    }));
+}
