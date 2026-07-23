@@ -1,0 +1,43 @@
+{
+  "id": "20260723T120503Z-51",
+  "iteration": 22,
+  "issue": {
+    "number": 51,
+    "title": "反復の成功/失敗を verdict 別に分岐表示する吹き出しサマリー",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/51-verdict",
+  "startedAt": "2026-07-23T12:05:03Z",
+  "finishedAt": "2026-07-23T12:07:08Z",
+  "durationSec": 125,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を完全に実装し、全6つの verdict 別分岐をテストで検証した。既存機能への破壊なし。テストは実装の振る舞いを実質的に検証している。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.3559,
+    "adversaryUsd": 0.066036,
+    "ideationUsd": 0.0,
+    "totalUsd": 0.421936
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
