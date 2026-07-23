@@ -29,6 +29,7 @@ const summary: Summary = {
   breakerStreak: 1,
   breakerThreshold: 3,
   breakerRemaining: 2,
+  e2eFailureRate: 0.1,
 };
 
 describe('MetricCards', () => {

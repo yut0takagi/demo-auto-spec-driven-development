@@ -59,6 +59,8 @@ export interface Summary {
   breakerThreshold: number;
   /** 発火まで残り何回連続で非マージが続けられるか（0 なら次の非マージで発火） */
   breakerRemaining: number;
+  /** e2e が失敗した割合 0..1。分母は approvalRate と同じ verify に到達した run のみ */
+  e2eFailureRate: number;
 }
 
 /**
@@ -130,6 +132,7 @@ export function summarize(runs: RunRecord[]): Summary {
       breakerStreak: 0,
       breakerThreshold: BREAKER_THRESHOLD,
       breakerRemaining: BREAKER_THRESHOLD,
+      e2eFailureRate: 0,
     };
   }
 
@@ -139,6 +142,7 @@ export function summarize(runs: RunRecord[]): Summary {
   const latestMeasured = completed.length > 0 ? completed[completed.length - 1] : latest;
   const mergedRuns = runs.filter((r) => r.verdict === 'merged').length;
   const approvedRuns = completed.filter((r) => r.adversary.approved).length;
+  const e2eFailedRuns = completed.filter((r) => !r.verify.e2ePassed).length;
   const streak = breakerStreak(sorted);
 
   return {
@@ -146,6 +150,7 @@ export function summarize(runs: RunRecord[]): Summary {
     mergedRuns,
     approvalRate: completed.length === 0 ? 0 : approvedRuns / completed.length,
     mergeRate: mergedRuns / runs.length,
+    e2eFailureRate: completed.length === 0 ? 0 : e2eFailedRuns / completed.length,
     avgCycleTimeSec: mean(completed.map((r) => r.durationSec)),
     avgReviseCycles: mean(completed.map((r) => r.reviseCycles)),
     medianReviseCycles: reviseCyclesMedian(runs),
@@ -235,5 +240,23 @@ export function mergeRateTrend(runs: RunRecord[]): TrendPoint[] {
   return sorted.map((r, i) => {
     if (r.verdict === 'merged') mergedCount++;
     return { iteration: r.iteration, value: (mergedCount / (i + 1)) * 100 };
+  });
+}
+
+/**
+ * E2E テスト失敗率の累積推移（0..100）。iteration 昇順に見て、その時点までの
+ * 「verify に到達した run のうち e2e が失敗した割合」を各点に持つ。
+ * approvalRateTrend と同じ母集団定義（reachedVerify）を使う: `failed` run の
+ * `verify.e2ePassed` は「実際に測定して落ちた」のではなく verify に到達できな
+ * かったための sentinel（false）なので、他の推移と同様に点を持たせない。
+ * Summary.e2eFailureRate と同じ母集団定義なので、最終点は
+ * summarize(runs).e2eFailureRate * 100 と一致する。
+ */
+export function e2eFailureRateTrend(runs: RunRecord[]): TrendPoint[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  let failedCount = 0;
+  return completed.map((r, i) => {
+    if (!r.verify.e2ePassed) failedCount++;
+    return { iteration: r.iteration, value: (failedCount / (i + 1)) * 100 };
   });
 }

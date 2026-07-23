@@ -8,6 +8,7 @@ import {
   reviseCyclesMedian,
   approvalRateTrend,
   mergeRateTrend,
+  e2eFailureRateTrend,
   REVISE_CYCLES_OUTLIER_THRESHOLD,
 } from './aggregate';
 import type { RunRecord } from './types';
@@ -53,6 +54,7 @@ describe('summarize', () => {
     expect(s.breakerStreak).toBe(0);
     expect(s.breakerThreshold).toBe(3);
     expect(s.breakerRemaining).toBe(3);
+    expect(s.e2eFailureRate).toBe(0);
   });
 
   it('承認率とマージ率を別々に数える', () => {
@@ -68,6 +70,20 @@ describe('summarize', () => {
     // iteration 3 は failed（クラッシュ）なので承認率の母集団から除外される: 2/3 (iteration 1, 2, 4)
     expect(s.approvalRate).toBeCloseTo(2 / 3);
     expect(s.mergeRate).toBeCloseTo(0.25);
+  });
+
+  it('e2e失敗率は承認率と同じ母集団（verify到達済み）で別々に数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+      makeRun({ iteration: 3, verdict: 'merged', verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+    ];
+    const s = summarize(runs);
+    // iteration 2 は failed（クラッシュ）なので母集団から除外される: 1/2 (iteration 1, 3)
+    expect(s.e2eFailureRate).toBeCloseTo(0.5);
   });
 
   it('平均と合計を計算する', () => {
@@ -505,5 +521,111 @@ describe('mergeRateTrend', () => {
     const trend = mergeRateTrend(runs);
     const summary = summarize(runs);
     expect(trend[trend.length - 1].value).toBeCloseTo(summary.mergeRate * 100);
+  });
+});
+
+describe('e2eFailureRateTrend', () => {
+  it('空配列では空配列を返す', () => {
+    expect(e2eFailureRateTrend([])).toEqual([]);
+  });
+
+  it('iteration 昇順に、その時点までの累積E2E失敗率(%)を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+      makeRun({ iteration: 3, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+    ];
+    // 1件目: 0/1=0%, 2件目: 1/2=50%, 3件目: 2/3≈66.7%
+    expect(e2eFailureRateTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 50 },
+      { iteration: 3, value: (2 / 3) * 100 },
+    ]);
+  });
+
+  it('failed run は verify に到達しておらず e2ePassed が sentinel なので点を持たない（approvalRateTrend と同様）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+      makeRun({ iteration: 3, verdict: 'merged', verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+    ];
+    // failed(iteration 2) を除外した [passed, failed] の累積: 0%, 50%
+    expect(e2eFailureRateTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 3, value: 50 },
+    ]);
+  });
+
+  it('全て成功なら 0% が続く（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+    ];
+    expect(e2eFailureRateTrend(runs)).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 2, value: 0 },
+    ]);
+  });
+
+  it('全て失敗なら 100% が続く（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+    ];
+    expect(e2eFailureRateTrend(runs)).toEqual([
+      { iteration: 1, value: 100 },
+      { iteration: 2, value: 100 },
+    ]);
+  });
+
+  it('連続する failed run は点も分母も増やさず、直前の点をまたいで次の測定済み run が分母を引き継ぐ（中間・最終点で検証）', () => {
+    const runs = [
+      // iteration 1: 測定済み・成功 → 1点目 0/1=0%
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      // iteration 2,3: 連続 failed。verify 未到達なので点を持たず、分母(completed.length)も増えない
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+      makeRun({
+        iteration: 3, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+      // iteration 4: 測定済み・失敗 → もし failed が分母に紛れ込んでいれば 1/4=25% になるが、
+      // 正しくは failed 2件を無視した 1/2=50%（2点目、中間点）
+      makeRun({ iteration: 4, verdict: 'merged', verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+      // iteration 5: 測定済み・成功 → 1/3≈33.3%（3点目、最終点）
+      makeRun({ iteration: 5, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+    ];
+    const trend = e2eFailureRateTrend(runs);
+    // 連続 failed の 2件は点を持たないため、trend は測定済み3件分のみ
+    expect(trend).toHaveLength(3);
+    expect(trend[0]).toEqual({ iteration: 1, value: 0 });
+    // 中間点: failed をまたいでも分母は「測定済み run 数」であり iteration 数ではない
+    expect(trend[1]).toEqual({ iteration: 4, value: 50 });
+    expect(trend[2].iteration).toBe(5);
+    expect(trend[2].value).toBeCloseTo((1 / 3) * 100);
+  });
+
+  it('全run が failed（verify 未到達）なら空配列を返す', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 } })];
+    expect(e2eFailureRateTrend(runs)).toEqual([]);
+  });
+
+  it('最終点は summarize(runs).e2eFailureRate * 100 と一致する（trend と summarize は別々の計算経路）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 } }),
+      makeRun({
+        iteration: 2, verdict: 'failed',
+        verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 },
+      }),
+      makeRun({ iteration: 3, verdict: 'needs-human', verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 } }),
+    ];
+    const trend = e2eFailureRateTrend(runs);
+    const summary = summarize(runs);
+    expect(trend[trend.length - 1].value).toBeCloseTo(summary.e2eFailureRate * 100);
   });
 });

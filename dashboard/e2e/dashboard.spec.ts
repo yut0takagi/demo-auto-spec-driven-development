@@ -1,6 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize } from '../src/lib/aggregate';
+import { summarize, e2eFailureRateTrend } from '../src/lib/aggregate';
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -142,6 +142,48 @@ test('承認率・マージ率の推移グラフが表示され、最新値が M
   const mergeCard = page.locator('div.rounded-xl').filter({ hasText: 'マージ率推移' });
   await expect(approvalCard).toContainText(`${(summary.approvalRate * 100).toFixed(1)}%`);
   await expect(mergeCard).toContainText(`${(summary.mergeRate * 100).toFixed(1)}%`);
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+});
+
+test('E2E失敗率推移グラフが表示され、最新値が data/runs から導出した累積失敗率と一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = e2eFailureRateTrend(runs);
+  const summary = summarize(runs);
+
+  const chart = page.getByRole('img', { name: 'E2E失敗率推移' });
+  await expect(chart).toBeVisible();
+
+  const card = page.locator('div.rounded-xl').filter({ hasText: 'E2E失敗率推移' });
+  await expect(card).toHaveCount(1);
+
+  // このリポジトリの data/runs は verify に到達した(非 failed の) run を常に含む
+  // 前提で運用されている（全 run が failed になるのは breaker が発火する異常事態）。
+  // そのため trend が空になる「データなし」分岐は実データでは構造的に到達できず、
+  // ここで if 分岐にして「テストしたつもり」にすると実際には検証されない。
+  // 空データ時の表示（「データなし」、svg 非描画）は TrendChart.test.tsx で、
+  // 空 trend を返す条件（全 run が failed）は aggregate.test.ts の
+  // e2eFailureRateTrend テストでそれぞれ単体テスト済み。ここでは前提を明示した
+  // 上で「データあり」経路だけを検証する。
+  expect(
+    trend.length,
+    'data/runs に verify 到達済みの run が1件も無い。fixture が全件 failed になっており、' +
+      'このテストが検証している「データあり」経路が実行されていない。',
+  ).toBeGreaterThan(0);
+
+  // 承認率・マージ率のテストと同様、trend の最終点ではなく summarize()（別の
+  // 計算経路）が導出した e2eFailureRate と突き合わせる。trend 自身から期待値を
+  // 作ると、実装のバグが期待値にもそのまま乗って検知できなくなるため。
+  await expect(card).toContainText(`${(summary.e2eFailureRate * 100).toFixed(1)}%`);
+  // 累積失敗率は 0..100 の範囲に収まるべき不変量（実装バグでの負値/100超えを検知）。
+  for (const point of trend) {
+    expect(point.value).toBeGreaterThanOrEqual(0);
+    expect(point.value).toBeLessThanOrEqual(100);
+  }
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
