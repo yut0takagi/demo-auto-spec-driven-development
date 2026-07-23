@@ -1,0 +1,47 @@
+{
+  "id": "20260723T112353Z-44",
+  "iteration": 20,
+  "issue": {
+    "number": 44,
+    "title": "Budget 残高パネル & Daily spend トレンド",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/44-budget-daily-spend",
+  "startedAt": "2026-07-23T11:23:53Z",
+  "finishedAt": "2026-07-23T11:53:53Z",
+  "durationSec": 1800,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "テストが rose-400 バーの存在を検証していない。予算超過時の色分け表示が実装されても、UI テストで「赤いバーが表示される」ことを確認していないため、潜在的なレグレッションリスクが残る。 / 指摘: BudgetPanel.test.tsx で overBudget 時に .bg-rose-400 バーが実際に存在することを検証するテストが欠けている"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 379,
+  "cost": {
+    "builderUsd": 8.208457,
+    "adversaryUsd": 0.205664,
+    "ideationUsd": 0.18375529999999998,
+    "totalUsd": 8.597876
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    49,
+    50,
+    51
+  ]
+}
