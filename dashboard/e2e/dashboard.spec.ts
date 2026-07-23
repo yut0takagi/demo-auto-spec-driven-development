@@ -20,6 +20,7 @@ import {
   ideationFailureRateTrend,
   ideationCostQualityCorrelation,
   e2eFailureReviseCorrelation,
+  e2eFailureDiffSizeCorrelation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
   timeToFirstPrTrend,
@@ -905,6 +906,48 @@ test('E2E失敗とrevise回数の相関パネルが実データから導出し�
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
+});
+
+test('E2E失敗と変更行数(diff size)の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = e2eFailureDiffSizeCorrelation(runs);
+  expect(
+    stats.sampleSize,
+    'data/runs に verify 到達済みの反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.failedCount,
+    'data/runs に e2e 失敗した反復が1件も無く、失敗群の表示を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('e2e-diffsize-correlation-panel');
+  await expect(panel).toBeVisible();
+
+  // 群別の平均変更行数は e2eFailureDiffSizeCorrelation()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('e2e-diffsize-passed-mean')).toHaveText(
+    `${stats.passedMeanChangedLines.toFixed(1)}行`,
+  );
+  await expect(page.getByTestId('e2e-diffsize-failed-mean')).toHaveText(
+    `${stats.failedMeanChangedLines.toFixed(1)}行`,
+  );
+
+  const coefficientEl = page.getByTestId('e2e-diffsize-correlation-coefficient');
+  if (stats.correlationCoefficient === null) {
+    await expect(coefficientEl).toHaveText('算出不可');
+  } else {
+    await expect(coefficientEl).toHaveText(`r = ${stats.correlationCoefficient.toFixed(2)}`);
+  }
+
+  await expect(page.getByTestId('e2e-diffsize-failed-iterations')).toContainText(
+    `E2E失敗した反復: ${stats.failedIterations.join(', ')}`,
+  );
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
 });
 
 test('CI/ゲート通過時間のトレンド観測パネルが実データから導出した傾向・直近直前平均を表示する', async ({ page }) => {

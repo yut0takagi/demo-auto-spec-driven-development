@@ -36,6 +36,7 @@ import {
   ideationFailureSummary,
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
+  e2eFailureDiffSizeCorrelation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
@@ -2479,6 +2480,85 @@ describe('e2eFailureReviseCorrelation', () => {
     ];
     const result = e2eFailureReviseCorrelation(runs);
     expect(result.delta).toBeCloseTo(-4, 10);
+    expect(result.correlationCoefficient!).toBeLessThan(0);
+  });
+});
+
+describe('e2eFailureDiffSizeCorrelation', () => {
+  it('run が0件なら全て0、相関係数はnull（境界値）', () => {
+    const result = e2eFailureDiffSizeCorrelation([]);
+    expect(result).toEqual({
+      sampleSize: 0,
+      passedCount: 0,
+      failedCount: 0,
+      passedMeanChangedLines: 0,
+      failedMeanChangedLines: 0,
+      delta: 0,
+      correlationCoefficient: null,
+      failedIterations: [],
+    });
+  });
+
+  it('verify に到達していない failed run は母集団から除外する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 }, changedLines: 0 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 50 }),
+    ];
+    const result = e2eFailureDiffSizeCorrelation(runs);
+    expect(result.sampleSize).toBe(1);
+    expect(result.passedCount).toBe(1);
+    expect(result.failedCount).toBe(0);
+  });
+
+  it('e2e成功群・失敗群それぞれ全て同じe2e結果（分散0）だと相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 10 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 90 }),
+    ];
+    const result = e2eFailureDiffSizeCorrelation(runs);
+    expect(result.passedCount).toBe(2);
+    expect(result.failedCount).toBe(0);
+    expect(result.passedMeanChangedLines).toBeCloseTo(50, 10);
+    expect(result.failedMeanChangedLines).toBe(0);
+    expect(result.correlationCoefficient).toBeNull();
+    expect(result.failedIterations).toEqual([]);
+  });
+
+  it('changedLinesが全run同値（分散0）でも相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 42 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, changedLines: 42 }),
+    ];
+    const result = e2eFailureDiffSizeCorrelation(runs);
+    expect(result.correlationCoefficient).toBeNull();
+  });
+
+  it('e2e失敗群の変更行数が明確に多いケースで正の相関・正のdeltaを算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 20 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 120 }),
+      makeRun({ iteration: 3, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, changedLines: 320 }),
+      makeRun({ iteration: 4, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, changedLines: 420 }),
+    ];
+    const result = e2eFailureDiffSizeCorrelation(runs);
+    expect(result.sampleSize).toBe(4);
+    expect(result.passedCount).toBe(2);
+    expect(result.failedCount).toBe(2);
+    expect(result.passedMeanChangedLines).toBeCloseTo(70, 10);
+    expect(result.failedMeanChangedLines).toBeCloseTo(370, 10);
+    expect(result.delta).toBeCloseTo(300, 10);
+    expect(result.correlationCoefficient).not.toBeNull();
+    expect(result.correlationCoefficient!).toBeCloseTo(0.9487, 4);
+    expect(result.failedIterations).toEqual([3, 4]);
+  });
+
+  it('e2e失敗群の変更行数が成功群より少ないと負のdeltaになる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, changedLines: 500 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, changedLines: 100 }),
+    ];
+    const result = e2eFailureDiffSizeCorrelation(runs);
+    expect(result.delta).toBeCloseTo(-400, 10);
     expect(result.correlationCoefficient!).toBeLessThan(0);
   });
 });

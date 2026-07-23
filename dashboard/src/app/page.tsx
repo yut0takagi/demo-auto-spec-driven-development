@@ -37,6 +37,7 @@ import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMer
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
+import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
@@ -104,6 +105,7 @@ export default function Home() {
         <ReviseVerdictMatrixPanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
+        <E2eDiffSizeCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <ModelApprovalMergeComparisonPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
