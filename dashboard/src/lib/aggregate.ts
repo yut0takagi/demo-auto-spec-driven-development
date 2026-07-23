@@ -516,6 +516,35 @@ export function gateReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummar
     });
 }
 
+export interface GateReasonBurdenPoint {
+  iteration: number;
+  /** カテゴリ別のこの反復での出現数（GATE_REASON_CATEGORY_ORDER の固定順）。合計は total と一致 */
+  counts: Record<GateReasonCategory, number>;
+  total: number;
+}
+
+/**
+ * ゲート不通過理由の時系列 burden（負担）推移。gateReasonBreakdown が全期間を1つの
+ * 分布に集約するのに対し、こちらは反復ごとにカテゴリ別件数を保持し、「いつ・どの
+ * カテゴリの負担が重かったか」を時系列（積み上げ棒グラフ用）で見えるようにする。
+ * gateReasons が空の反復（merged/paused/dry-run 等）は負担ゼロで積み上げる意味が
+ * 無いため、gateFailureTypeBreakdown と同じ母集団定義（gateReasons を持つ run のみ）
+ * で除外する。
+ */
+export function gateReasonBurdenTrend(runs: RunRecord[]): GateReasonBurdenPoint[] {
+  return byIterationAsc(runs)
+    .filter((r) => r.gateReasons.length > 0)
+    .map((r) => {
+      const counts = Object.fromEntries(
+        GATE_REASON_CATEGORY_ORDER.map((category) => [category, 0]),
+      ) as Record<GateReasonCategory, number>;
+      for (const reason of r.gateReasons) {
+        counts[classifyGateReason(reason)]++;
+      }
+      return { iteration: r.iteration, counts, total: r.gateReasons.length };
+    });
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
