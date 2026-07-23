@@ -30,6 +30,7 @@ import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
+import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -55,6 +56,7 @@ export default function Home() {
         <LoadErrorBanner errors={errors} />
         <StatusBadge status={status} />
         <VerdictSummaryBubble runs={runs} />
+        <AdversaryCommentTrendPanel runs={runs} />
         <EarlyWarningCard runs={runs} />
         <BreakerRunwayPanel runs={runs} />
         <MetricCards summary={summary} />

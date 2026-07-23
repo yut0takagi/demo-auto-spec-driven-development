@@ -1099,6 +1099,170 @@ export function e2eFailureReviseCorrelation(runs: RunRecord[]): E2eReviseCorrela
 }
 
 /**
+ * Adversary承認コメント(adversary.summary)の実効文字数。表示上意味を持たない前後の
+ * 空白は VerdictSummaryBubble の bubbleText と同じく trim してから数える。
+ */
+function adversarySummaryLength(run: RunRecord): number {
+  return run.adversary.summary.trim().length;
+}
+
+/**
+ * Adversary承認コメントの文字数推移。`failed` run の summary は「レビューに到達
+ * しなかった」等の定型文（sentinel）であり実際のレビュー内容ではないため、他の
+ * trend 系関数と同じ reachedVerify で除外する。
+ */
+export function adversarySummaryLengthTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs)
+    .filter(reachedVerify)
+    .map((r) => ({ iteration: r.iteration, value: adversarySummaryLength(r) }));
+}
+
+/** Adversaryコメント文字数トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。 */
+export const ADVERSARY_COMMENT_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウの平均文字数が直前ウィンドウよりこの割合(%)以上変化して初めて
+ * 「長文化」「短文化」と判定する。これ未満は「横ばい」として扱う
+ * （cycleTimeTrendSignal と同じ考え方だが、コメント文字数は所要時間よりブレが
+ * 大きいため、閾値は cycleTimeTrendSignal の5%より緩い10%にしている）。
+ */
+export const ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT = 10;
+
+/** lengthening: コメントが長文化（説明が増えている）。shortening: 短文化。 */
+export type AdversaryCommentTrendDirection = 'lengthening' | 'shortening' | 'flat';
+
+export interface AdversaryCommentTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は ADVERSARY_COMMENT_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が ADVERSARY_COMMENT_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgLength: number;
+  previousAvgLength: number;
+  /** recentAvgLength - previousAvgLength */
+  deltaLength: number;
+  /** deltaLength / previousAvgLength * 100。previousAvgLength が 0 のときは定義できないため null */
+  deltaPct: number | null;
+  direction: AdversaryCommentTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function adversaryCommentDirection(
+  deltaLength: number,
+  previousAvgLength: number,
+): AdversaryCommentTrendDirection {
+  if (previousAvgLength === 0) return deltaLength === 0 ? 'flat' : 'lengthening';
+  const deltaPct = (deltaLength / previousAvgLength) * 100;
+  if (Math.abs(deltaPct) < ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'lengthening' : 'shortening';
+}
+
+/**
+ * Adversary承認コメントの文字数トレンド観測。cycleTimeTrendSignal と同じローリング窓
+ * 比較（直近window/直前windowの平均）で、レビューコメントが長文化/短文化しているか
+ * （横ばいも含め）を判定する。母集団は adversarySummaryLengthTrend と同じ
+ * reachedVerify（failed run の summary は sentinel であり実測ではないため除外）。
+ * 比較対象となる「直前」ウィンドウが取れない（対象反復が1件以下）場合は null。
+ */
+export function adversaryCommentTrendSignal(runs: RunRecord[]): AdversaryCommentTrendSignal | null {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  if (completed.length < 2) return null;
+
+  const windowSize = Math.min(ADVERSARY_COMMENT_TREND_WINDOW, Math.floor(completed.length / 2));
+  const recent = completed.slice(completed.length - windowSize);
+  const previous = completed.slice(completed.length - windowSize * 2, completed.length - windowSize);
+
+  const recentAvgLength = mean(recent.map(adversarySummaryLength));
+  const previousAvgLength = mean(previous.map(adversarySummaryLength));
+  const deltaLength = recentAvgLength - previousAvgLength;
+
+  return {
+    windowSize,
+    partial: windowSize < ADVERSARY_COMMENT_TREND_WINDOW,
+    recentAvgLength,
+    previousAvgLength,
+    deltaLength,
+    deltaPct: previousAvgLength === 0 ? null : (deltaLength / previousAvgLength) * 100,
+    direction: adversaryCommentDirection(deltaLength, previousAvgLength),
+    recentIterations: recent.map((r) => r.iteration),
+    previousIterations: previous.map((r) => r.iteration),
+  };
+}
+
+export interface AdversaryApprovalCommentStats {
+  approvedCount: number;
+  rejectedCount: number;
+  approvedAvgLength: number;
+  rejectedAvgLength: number;
+  approvedMedianLength: number;
+  rejectedMedianLength: number;
+  /** rejectedAvgLength - approvedAvgLength。正なら却下時の方が説明が長い */
+  delta: number;
+}
+
+/**
+ * 承認(approved)/却下(not approved) でAdversaryコメントの文字数がどう違うかの比較。
+ * reachedVerify で failed run（sentinel summary）を除外するのは
+ * adversarySummaryLengthTrend と同じ理由。mean/median は空配列に対し 0 を返す
+ * 定義（このファイル冒頭の mean/median）なので、承認/却下のどちらかが0件でも
+ * NaN にならない。
+ */
+export function adversaryApprovalCommentStats(runs: RunRecord[]): AdversaryApprovalCommentStats {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const approvedLengths = completed.filter((r) => r.adversary.approved).map(adversarySummaryLength);
+  const rejectedLengths = completed.filter((r) => !r.adversary.approved).map(adversarySummaryLength);
+  const approvedAvgLength = mean(approvedLengths);
+  const rejectedAvgLength = mean(rejectedLengths);
+
+  return {
+    approvedCount: approvedLengths.length,
+    rejectedCount: rejectedLengths.length,
+    approvedAvgLength,
+    rejectedAvgLength,
+    approvedMedianLength: median(approvedLengths),
+    rejectedMedianLength: median(rejectedLengths),
+    delta: rejectedAvgLength - approvedAvgLength,
+  };
+}
+
+/** ダイジェストに表示する直近Adversaryコメントの最大件数。 */
+export const ADVERSARY_COMMENT_DIGEST_LIMIT = 5;
+
+export interface AdversaryCommentDigestEntry {
+  iteration: number;
+  issueNumber: number;
+  issueTitle: string;
+  approved: boolean;
+  verdict: Verdict;
+  summary: string;
+  length: number;
+}
+
+/**
+ * 直近Adversaryコメントの要約ダイジェスト。VerdictSummaryBubble が最新1件だけを
+ * 吹き出し表示するのに対し、こちらは直近 ADVERSARY_COMMENT_DIGEST_LIMIT 件を新しい
+ * 順に並べて一覧化し、トレンド（長文化/短文化）と合わせて「何が起きているか」を
+ * 実際のコメント文面で裏付けられるようにする。reachedVerify で failed run を除外
+ * するのは adversarySummaryLengthTrend と同じ理由。
+ */
+export function recentAdversaryComments(runs: RunRecord[]): AdversaryCommentDigestEntry[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  return completed
+    .slice(-ADVERSARY_COMMENT_DIGEST_LIMIT)
+    .reverse()
+    .map((r) => ({
+      iteration: r.iteration,
+      issueNumber: r.issue.number,
+      issueTitle: r.issue.title,
+      approved: r.adversary.approved,
+      verdict: r.verdict,
+      summary: r.adversary.summary.trim(),
+      length: adversarySummaryLength(r),
+    }));
+}
+
+/**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は
  * 分母が0で無意味なため、最初の承認PRが出た iteration 以降だけ点を持つ
