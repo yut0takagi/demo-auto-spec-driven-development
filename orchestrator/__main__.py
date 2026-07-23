@@ -8,7 +8,7 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from orchestrator.breaker import BreakerAction, check_breakers
+from orchestrator.breaker import BreakerAction, check_breakers, preflight_budget_halt
 from orchestrator.config import Config
 from orchestrator.gates import read_kill_switch
 from orchestrator.github_ops import GitHubOps
@@ -42,6 +42,21 @@ def main() -> int:
         return read_kill_switch(env=os.environ, control=_read_control(repo_root)).enabled
 
     gh = GitHubOps(cwd=str(repo_root))
+
+    # 予算 teeth（pre-flight）: 反復を「実走する前」に本日のコストが予算超過なら、高価な
+    # builder を起動せずに halt する。実走後の check_breakers だけだと連続運転で新起動ごとに
+    # 1 周ぶんオーバーシュートして日次予算がザルになるため。halt issue は post-hoc の breaker が
+    # 初回に立てるので、ここでは status 更新のみ（起動ごとの halt issue スパムを避ける）。
+    _pf_now = _utc_now()
+    preflight = preflight_budget_halt(load_runs(data_dir), cfg=cfg, today=_pf_now[:10])
+    if preflight.should_halt:
+        write_status(
+            data_dir, state="HALTED", reason=preflight.reason, actor=preflight.actor,
+            resume_hint="翌日になるか、予算(DAILY_COST_BUDGET_USD)を引き上げると再開する",
+            now=_pf_now,
+        )
+        print(json.dumps({"status": "halted", "reason": preflight.reason}, ensure_ascii=False))
+        return 0
 
     # 無人実行の最終防波堤: 反復のどこで例外が飛んでも、必ず verdict="failed" の
     # 記録を残してから異常終了する。これが無いと、課金は発生したのにダッシュ
