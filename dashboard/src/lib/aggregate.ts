@@ -839,6 +839,54 @@ export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary
     });
 }
 
+export interface IdeationFailureSummary {
+  /** ideation が実際に実行された反復数（cost.ideationUsd > 0）。ready が既に足りていて
+   *  ideation 自体がスキップされた反復（ideationUsd === 0）は分母に含めない。 */
+  attempted: number;
+  /** attempted のうち、次の issue を1件も生成できなかった（nextIssues が空）反復数 */
+  failed: number;
+  /** 0..1。attempted が0のときは0 */
+  failureRate: number;
+  /** 失敗した反復番号（昇順） */
+  failedIterations: number[];
+}
+
+/**
+ * ideation（バックログ補充）が実行されたにもかかわらず次の issue を1件も生成できな
+ * かった反復の割合。orchestrator/loop.py の _refuel_backlog は ready が
+ * ideation_low_water を満たしていれば ideation を呼ばず (0.0, []) を返す一方、
+ * ideation_runner が例外を投げた場合も同じ (0.0, []) を返す。つまり
+ * ideationUsd === 0 の反復は「未実行（不要）」と「実行したが例外で落ちた」を区別
+ * できないため、この指標の母集団には含めない（誤って「失敗」に数えて実際には
+ * ideation 自体が不要だった反復を汚染しないため）。ideationUsd > 0 は
+ * run_agent の呼び出しが実際にコストを消費して完了したことを意味するので、
+ * その中で nextIssues が空なら「呼べたが提案を1件も出せなかった」実際の失敗。
+ */
+export function ideationFailureSummary(runs: RunRecord[]): IdeationFailureSummary {
+  const attempted = byIterationAsc(runs).filter((r) => r.cost.ideationUsd > 0);
+  const failedRuns = attempted.filter((r) => r.nextIssues.length === 0);
+  return {
+    attempted: attempted.length,
+    failed: failedRuns.length,
+    failureRate: attempted.length === 0 ? 0 : failedRuns.length / attempted.length,
+    failedIterations: failedRuns.map((r) => r.iteration),
+  };
+}
+
+/**
+ * ideation 失敗率の累積推移(0..100)。ideation が実行された反復（cost.ideationUsd > 0）
+ * だけを対象に、iteration 昇順でその時点までの累積失敗率を点として持つ。
+ * 最終点は ideationFailureSummary(runs).failureRate * 100 と一致する。
+ */
+export function ideationFailureRateTrend(runs: RunRecord[]): TrendPoint[] {
+  const attempted = byIterationAsc(runs).filter((r) => r.cost.ideationUsd > 0);
+  let failedCount = 0;
+  return attempted.map((r, i) => {
+    if (r.nextIssues.length === 0) failedCount++;
+    return { iteration: r.iteration, value: (failedCount / (i + 1)) * 100 };
+  });
+}
+
 /**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は

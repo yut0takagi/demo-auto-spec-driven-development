@@ -26,6 +26,8 @@ import {
   reviseCyclesByModel,
   breakerRunway,
   modelEffectiveness,
+  ideationFailureSummary,
+  ideationFailureRateTrend,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1707,5 +1709,126 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('ideationFailureSummary', () => {
+  it('run が0件なら attempted/failed が0でfailureRateも0', () => {
+    const result = ideationFailureSummary([]);
+    expect(result).toEqual({ attempted: 0, failed: 0, failureRate: 0, failedIterations: [] });
+  });
+
+  it('ideationUsd が0の反復（ready充足でideation未実行）は分母に含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 }, nextIssues: [] }),
+      makeRun({ iteration: 2, cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 }, nextIssues: [] }),
+    ];
+    const result = ideationFailureSummary(runs);
+    expect(result).toEqual({ attempted: 0, failed: 0, failureRate: 0, failedIterations: [] });
+  });
+
+  it('ideationUsd > 0 かつ nextIssues が空の反復だけを失敗として数える', () => {
+    const runs = [
+      // 実行して成功（提案あり）
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 },
+        nextIssues: [10],
+      }),
+      // 実行したが提案0件 → 失敗
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.08, totalUsd: 0.19 },
+        nextIssues: [],
+      }),
+      // 未実行（ready充足）→ 母集団に含めない
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 },
+        nextIssues: [],
+      }),
+      // 実行したが提案0件 → 失敗
+      makeRun({
+        iteration: 4,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 },
+        nextIssues: [],
+      }),
+    ];
+    const result = ideationFailureSummary(runs);
+    expect(result.attempted).toBe(3);
+    expect(result.failed).toBe(2);
+    expect(result.failureRate).toBeCloseTo(2 / 3, 10);
+    expect(result.failedIterations).toEqual([2, 4]);
+  });
+
+  it('実行した反復が全て成功していればfailureRateは0（境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 },
+        nextIssues: [2],
+      }),
+    ];
+    const result = ideationFailureSummary(runs);
+    expect(result.attempted).toBe(1);
+    expect(result.failed).toBe(0);
+    expect(result.failureRate).toBe(0);
+    expect(result.failedIterations).toEqual([]);
+  });
+
+  it('実行した反復が全て失敗していればfailureRateは1（境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 },
+        nextIssues: [],
+      }),
+    ];
+    const result = ideationFailureSummary(runs);
+    expect(result.attempted).toBe(1);
+    expect(result.failed).toBe(1);
+    expect(result.failureRate).toBe(1);
+    expect(result.failedIterations).toEqual([1]);
+  });
+});
+
+describe('ideationFailureRateTrend', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(ideationFailureRateTrend([])).toEqual([]);
+  });
+
+  it('ideationUsd=0の反復は点を持たず、実行された反復だけの累積失敗率を辿る', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 },
+        nextIssues: [2],
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 },
+        nextIssues: [],
+      }),
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.08, totalUsd: 0.19 },
+        nextIssues: [],
+      }),
+      makeRun({
+        iteration: 4,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 },
+        nextIssues: [],
+      }),
+    ];
+    const trend = ideationFailureRateTrend(runs);
+    // iteration2は未実行なので点を持たない → [1, 3, 4] の3点のみ
+    expect(trend.map((p) => p.iteration)).toEqual([1, 3, 4]);
+    expect(trend[0].value).toBeCloseTo(0, 10); // 1件中0件失敗
+    expect(trend[1].value).toBeCloseTo(50, 10); // 2件中1件失敗
+    expect(trend[2].value).toBeCloseTo((2 / 3) * 100, 10); // 3件中2件失敗
+
+    // 最終点は ideationFailureSummary().failureRate*100 と一致するはず
+    const summary = ideationFailureSummary(runs);
+    expect(trend[trend.length - 1].value).toBeCloseTo(summary.failureRate * 100, 10);
   });
 });
