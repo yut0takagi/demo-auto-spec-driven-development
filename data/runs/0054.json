@@ -1,0 +1,45 @@
+{
+  "id": "20260723T185529Z-93",
+  "iteration": 54,
+  "issue": {
+    "number": 93,
+    "title": "Abandoned 反復の追跡・分析パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/93-abandoned",
+  "startedAt": "2026-07-23T18:55:29Z",
+  "finishedAt": "2026-07-23T19:11:20Z",
+  "durationSec": 951,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 102,
+  "adversary": {
+    "approved": true,
+    "summary": "abandoned 反復の単独集計・分析機能が要件を正確に満たし、既存挙動を壊さず、実質的なテストで検証されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 513,
+  "cost": {
+    "builderUsd": 6.084784,
+    "adversaryUsd": 0.055221,
+    "ideationUsd": 0.1384542,
+    "totalUsd": 6.278459
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    99,
+    100,
+    101
+  ]
+}
