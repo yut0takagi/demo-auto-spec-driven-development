@@ -2684,3 +2684,164 @@ export function adversaryOutcomeDivergence(runs: RunRecord[]): AdversaryOutcomeD
       return a.model.localeCompare(b.model);
     });
 }
+
+/**
+ * 隣接する2反復（iteration昇順で連続する2件）間の verdict 遷移を分類したラベル。
+ * - recovered: 非merged → merged（ゲート不通過から回復した）
+ * - regressed: merged → 非merged（直前は通過していたのに今回は不通過になった）
+ * - sustainedSuccess: merged → merged（連続してゲートを通過している）
+ * - repeatedFailure: 非merged → 同じverdictの非merged（同じ型で足踏みしている）
+ * - shiftedFailure: 非merged → 別のverdictの非merged（不通過の性質が変わった）
+ */
+export type VerdictTransitionKind = 'recovered' | 'regressed' | 'sustainedSuccess' | 'repeatedFailure' | 'shiftedFailure';
+
+export interface VerdictTransition {
+  fromIteration: number;
+  toIteration: number;
+  from: Verdict;
+  to: Verdict;
+  kind: VerdictTransitionKind;
+}
+
+function classifyVerdictTransition(from: Verdict, to: Verdict): VerdictTransitionKind {
+  const fromMerged = from === 'merged';
+  const toMerged = to === 'merged';
+  if (!fromMerged && toMerged) return 'recovered';
+  if (fromMerged && !toMerged) return 'regressed';
+  if (fromMerged && toMerged) return 'sustainedSuccess';
+  return from === to ? 'repeatedFailure' : 'shiftedFailure';
+}
+
+/**
+ * 反復を跨いだ verdict の遷移を、隣接する2反復ごとに自動分類する。breakerStreak が
+ * 「非マージの連続数」という単一指標に潰すのに対し、こちらは遷移1件ごとに
+ * 「回復した/悪化した/連続成功している/足踏みしている/不通過の性質が変わった」を
+ * 分類し、パターンをそのまま追える形で返す。iteration昇順で隣接ペアを作るため、
+ * runs が1件以下（比較対象となる隣接ペアが無い）場合は空配列。
+ */
+export function verdictTransitions(runs: RunRecord[]): VerdictTransition[] {
+  const sorted = byIterationAsc(runs);
+  const transitions: VerdictTransition[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const from = sorted[i - 1];
+    const to = sorted[i];
+    transitions.push({
+      fromIteration: from.iteration,
+      toIteration: to.iteration,
+      from: from.verdict,
+      to: to.verdict,
+      kind: classifyVerdictTransition(from.verdict, to.verdict),
+    });
+  }
+  return transitions;
+}
+
+/** count 同値のときの表示順（改善→悪化の軸で、まず良い遷移から並べる）。 */
+const VERDICT_TRANSITION_KIND_ORDER: readonly VerdictTransitionKind[] = [
+  'sustainedSuccess',
+  'recovered',
+  'repeatedFailure',
+  'shiftedFailure',
+  'regressed',
+];
+
+export interface VerdictTransitionKindSummary {
+  kind: VerdictTransitionKind;
+  count: number;
+  /** count / 全遷移数 * 100。全遷移数が0のときは0 */
+  pct: number;
+}
+
+/**
+ * verdictTransitions を種別ごとに集計する。0件の種別は含めない（gateReasonBreakdown と
+ * 同様、実際に出現したものだけを見せる）。count降順、同数は VERDICT_TRANSITION_KIND_ORDER の順。
+ */
+export function verdictTransitionSummary(runs: RunRecord[]): VerdictTransitionKindSummary[] {
+  const transitions = verdictTransitions(runs);
+  const counts = new Map<VerdictTransitionKind, number>();
+  for (const t of transitions) {
+    counts.set(t.kind, (counts.get(t.kind) ?? 0) + 1);
+  }
+
+  return VERDICT_TRANSITION_KIND_ORDER.filter((kind) => (counts.get(kind) ?? 0) > 0)
+    .map((kind) => {
+      const count = counts.get(kind) ?? 0;
+      return { kind, count, pct: transitions.length === 0 ? 0 : (count / transitions.length) * 100 };
+    })
+    .sort((a, b) => b.count - a.count);
+}
+
+/** 離脱パターン判定の対象とする最小連続長。1回だけの非マージはまだ「パターン」ではないため2以上を対象にする。 */
+export const DROPOUT_STREAK_MIN_LENGTH = 2;
+
+/**
+ * recovered: 連続の直後に merged が来た（回復した）
+ * droppedOut: データの終端まで連続が続き、かつ連続内の最後の verdict が abandoned
+ *             （ゲートを再試行しても満たせず自動で見送った＝回復を試みず離脱した）
+ * ongoing: データの終端まで連続が続いているが、最後の verdict が abandoned ではない
+ *          （failed/needs-human/paused/dry-run で止まっている、まだ結末の付いていない連続）
+ */
+export type DropoutOutcome = 'recovered' | 'droppedOut' | 'ongoing';
+
+export interface DropoutStreak {
+  startIteration: number;
+  endIteration: number;
+  /** 連続に含まれる反復数（DROPOUT_STREAK_MIN_LENGTH 以上） */
+  length: number;
+  /** 連続に含まれるverdict（iteration昇順） */
+  verdicts: Verdict[];
+  /** 連続に含まれる反復番号（iteration昇順） */
+  iterations: number[];
+  outcome: DropoutOutcome;
+  /** 連続の最後のverdictが abandoned だったか（recovered でも離脱を経て回復したことを示せる） */
+  endedInAbandonment: boolean;
+  /** 連続に含まれる反復の cost.totalUsd 合計（浪費コストの目安） */
+  totalCostUsd: number;
+}
+
+/**
+ * 「離脱パターン」＝非マージ verdict が DROPOUT_STREAK_MIN_LENGTH 回以上連続した区間を
+ * 検知する。breakerRunway/breakerStreak が「最新の連続」だけを見て発火判定するのに対し、
+ * こちらは過去分も含めた全ての連続区間を抽出し、各区間が最終的に回復したか(recovered)・
+ * 離脱に終わったか(droppedOut)・まだ進行中か(ongoing)を分類する。
+ * BREAKER_TRIP_VERDICTS（failed/abandoned/needs-human）とは異なり paused/dry-run も
+ * 連続の一部として扱う: これらはブレーカ発火の対象ではないが、ゲート通過(merged)には
+ * 至っていないため「離脱パターン」としては連続を構成する非マージ事象の一種とみなす方が
+ * 実態に合う（breakerStreakとは母集団の定義が異なることに注意）。
+ */
+export function dropoutStreaks(runs: RunRecord[]): DropoutStreak[] {
+  const sorted = byIterationAsc(runs);
+  const streaks: DropoutStreak[] = [];
+  let current: RunRecord[] = [];
+
+  const finalize = (followedByMerged: boolean) => {
+    if (current.length < DROPOUT_STREAK_MIN_LENGTH) {
+      current = [];
+      return;
+    }
+    const last = current[current.length - 1];
+    const endedInAbandonment = last.verdict === 'abandoned';
+    streaks.push({
+      startIteration: current[0].iteration,
+      endIteration: last.iteration,
+      length: current.length,
+      verdicts: current.map((r) => r.verdict),
+      iterations: current.map((r) => r.iteration),
+      outcome: followedByMerged ? 'recovered' : endedInAbandonment ? 'droppedOut' : 'ongoing',
+      endedInAbandonment,
+      totalCostUsd: current.reduce((sum, r) => sum + r.cost.totalUsd, 0),
+    });
+    current = [];
+  };
+
+  for (const run of sorted) {
+    if (run.verdict === 'merged') {
+      finalize(true);
+    } else {
+      current.push(run);
+    }
+  }
+  finalize(false);
+
+  return streaks;
+}

@@ -34,6 +34,7 @@ import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel'
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
+import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMergeComparisonPanel';
@@ -116,6 +117,7 @@ export default function Home() {
         <ReviseCyclesByVerdictPanel runs={runs} />
         <ReviseVerdictMatrixPanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
+        <VerdictTransitionPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
