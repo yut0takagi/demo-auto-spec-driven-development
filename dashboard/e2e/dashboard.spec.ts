@@ -41,6 +41,9 @@ import {
   pausedDryRunSummary,
   pausedDryRunDetails,
   adversaryOutcomeDivergence,
+  ideationToStartLeadTimes,
+  ideationToStartLeadTimeTrendSignal,
+  ideationStartSuccessSummary,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1092,6 +1095,84 @@ test('Ideationコスト効率と生成品質の関連性パネルが実データ
   await expect(page.getByTestId(`ideation-cost-quality-row-${lastBatch.iteration}`)).toContainText(
     `$${lastBatch.costPerIssueUsd.toFixed(3)}`,
   );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation→着手までのリードタイム・着手成功率観測パネルが実データから導出した着手率・未着手issue・リードタイム傾向を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = ideationStartSuccessSummary(runs);
+  expect(
+    summary.proposedTotal,
+    'data/runs に ideation が提案した(nextIssuesに含めた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const points = ideationToStartLeadTimes(runs);
+  const signal = ideationToStartLeadTimeTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs に着手済み(提案元が特定できissue.numberとして後続反復に現れた)issueが2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-to-start-lead-time-panel');
+  await expect(panel).toBeVisible();
+
+  // 着手成功率・件数は ideationStartSuccessSummary()（別の計算経路）と一致するはず
+  const startRatePct = (summary.startRate ?? 0) * 100;
+  await expect(page.getByTestId('ideation-to-start-success-rate')).toHaveText(`${startRatePct.toFixed(1)}%`);
+  await expect(page.getByTestId('ideation-to-start-success-counts')).toContainText(
+    `提案 ${summary.proposedTotal}件中 ${summary.startedCount}件が着手済み`,
+  );
+
+  if (summary.notStartedIssueNumbers.length > 0) {
+    const notStartedBlock = page.getByTestId('ideation-to-start-not-started-issues');
+    const firstNotStarted = summary.notStartedIssueNumbers[0];
+    await expect(notStartedBlock).toContainText(`#${firstNotStarted}`);
+  }
+
+  // 折れ線の最新値（分表記）が ideationToStartLeadTimes()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(toMinutes(latest.leadTimeSec));
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(`issue #${latest.issueNumber}`);
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(
+    `提案 iteration ${latest.proposedIteration}`,
+  );
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(
+    `着手 iteration ${latest.startIteration}`,
+  );
+
+  const signalBlock = page.getByTestId('ideation-to-start-lead-time-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('ideation-to-start-lead-time-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('ideation-to-start-lead-time-recent-avg')).toHaveText(toMinutes(signal!.recentAvgSec));
+  await expect(page.getByTestId('ideation-to-start-lead-time-previous-avg')).toHaveText(
+    toMinutes(signal!.previousAvgSec),
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: 同一issue番号は着手済み一覧に高々1回しか現れない
+  const issueNumbers = points.map((p) => p.issueNumber);
+  expect(new Set(issueNumbers).size).toBe(issueNumbers.length);
+  // 回帰防止（不変量）: 未着手issueと着手済みissueは重複しない
+  for (const n of summary.notStartedIssueNumbers) {
+    expect(issueNumbers).not.toContain(n);
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
