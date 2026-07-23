@@ -1,0 +1,41 @@
+{
+  "id": "20260723T173943Z-88",
+  "iteration": 48,
+  "issue": {
+    "number": 88,
+    "title": "Issue開始から初PR作成までの時間トレンド観測",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/88-issue-pr",
+  "startedAt": "2026-07-23T17:39:43Z",
+  "finishedAt": "2026-07-23T17:51:58Z",
+  "durationSec": 735,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 92,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue開始から初PR作成までの時間トレンド観測パネルの実装は、PRが作られた反復のみを対象にする要件を正確に満たし、既存のCycleTimeTrendPanelとの区別も明確です。単体・UI・e2eテストが境界値・異常系を網羅しており、実装との整合性も高い。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 583,
+  "cost": {
+    "builderUsd": 5.217466,
+    "adversaryUsd": 0.085379,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.302845
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
