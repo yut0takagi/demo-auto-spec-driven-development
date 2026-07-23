@@ -1,0 +1,43 @@
+{
+  "id": "20260723T184953Z-94",
+  "iteration": 53,
+  "issue": {
+    "number": 94,
+    "title": "Revise 回数と最終 Verdict の関連図",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/94-revise-verdict",
+  "startedAt": "2026-07-23T18:49:53Z",
+  "finishedAt": "2026-07-23T18:55:26Z",
+  "durationSec": 333,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "完全に実装された「Revise回数とVerdictの関連図」。2つのパネルで異なる視点から相関を可視化し、包括的なテストで検証済み。既存機能への悪影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.850988,
+    "adversaryUsd": 0.174665,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.025653
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
