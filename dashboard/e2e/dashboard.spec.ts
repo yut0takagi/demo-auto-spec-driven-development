@@ -8,6 +8,7 @@ import {
   builderComparison,
   earlyWarningSignal,
   gateReasonBreakdown,
+  gateFailureTypeBreakdown,
 } from '../src/lib/aggregate';
 
 /**
@@ -378,6 +379,57 @@ test('ゲート不通過理由の分類パネルが実データから導出し�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-row-', '')),
   );
   expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過の類型別集計パネルが実データから導出したverdict別件数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateFailureTypeBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-failure-types-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
+  await expect(panel).toContainText(`${totalCount}件`);
+
+  // 各行が gateFailureTypeBreakdown()（別の計算経路）と一致する件数・割合・対象iterationを表示する
+  for (const b of breakdown) {
+    const countEl = page.getByTestId(`gate-failure-type-count-${b.verdict}`);
+    const pct = (b.count / totalCount) * 100;
+    await expect(countEl).toHaveText(`${b.count}件 (${pct.toFixed(1)}%)`);
+
+    const row = page.getByTestId(`gate-failure-type-row-${b.verdict}`);
+    await expect(row).toContainText(`対象iteration: ${b.iterations.join(', ')}`);
+  }
+
+  // 件数降順で描画されていること
+  const rows = await page.locator('[data-testid^="gate-failure-type-row-"]').all();
+  const renderedVerdicts = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-failure-type-row-', '')),
+  );
+  expect(renderedVerdicts).toEqual(breakdown.map((b) => b.verdict));
+
+  // paused/dry-run は gateReasons が常に空（意図的な非マージ）なので、
+  // このパネルの「ゲート不通過」母集団には現れないはずという不変量。
+  const pausedOrDryRun = runs.filter((r) => r.verdict === 'paused' || r.verdict === 'dry-run');
+  for (const r of pausedOrDryRun) {
+    expect(
+      r.gateReasons,
+      `iteration ${r.iteration} (${r.verdict}) の gateReasons は空である前提が崩れている`,
+    ).toEqual([]);
+  }
+  await expect(page.getByTestId('gate-failure-type-row-paused')).toHaveCount(0);
+  await expect(page.getByTestId('gate-failure-type-row-dry-run')).toHaveCount(0);
 
   const body = await page.locator('body').innerText();
   expect(body).not.toContain('NaN');
