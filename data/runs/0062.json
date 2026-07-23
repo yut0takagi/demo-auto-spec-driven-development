@@ -1,0 +1,41 @@
+{
+  "id": "20260723T203107Z-108",
+  "iteration": 62,
+  "issue": {
+    "number": 108,
+    "title": "ゲート失敗別・revise サイクルの「実質的コスト」可視化",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/108-revise",
+  "startedAt": "2026-07-23T20:31:07Z",
+  "finishedAt": "2026-07-23T20:44:14Z",
+  "durationSec": 787,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 112,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を正確に満たし、テストが実装を実質的に検証し、既存機能を壊していない。承認。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 455,
+  "cost": {
+    "builderUsd": 4.63674,
+    "adversaryUsd": 0.267764,
+    "ideationUsd": 0.0,
+    "totalUsd": 4.904504
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
