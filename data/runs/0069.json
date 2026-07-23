@@ -1,0 +1,41 @@
+{
+  "id": "20260723T215427Z-121",
+  "iteration": 69,
+  "issue": {
+    "number": 121,
+    "title": "Verdict 遷移の自動分類と離脱パターン検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/121-verdict",
+  "startedAt": "2026-07-23T21:54:27Z",
+  "finishedAt": "2026-07-23T22:08:00Z",
+  "durationSec": 813,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 123,
+  "adversary": {
+    "approved": true,
+    "summary": "Verdict遷移の自動分類と離脱パターン検知が完全に実装されており、要件を満たすテストも充実している。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 619,
+  "cost": {
+    "builderUsd": 5.548846,
+    "adversaryUsd": 0.193121,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.741967
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
