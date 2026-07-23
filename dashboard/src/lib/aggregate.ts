@@ -869,6 +869,49 @@ export function gateReasonTrendSignal(runs: RunRecord[]): GateReasonTrendSignal 
   };
 }
 
+export interface GateReasonChain {
+  iteration: number;
+  issueNumber: number;
+  verdict: Verdict;
+  /**
+   * そのパス(反復)で実際に起きたカテゴリの連鎖。gates.py の evaluate_gate が理由を
+   * 積む順（GATE_REASON_CATEGORY_ORDER）そのままに、重複を除いて並べたもの。
+   * 例: verify失敗 → e2e失敗 → adversary未承認 のように、1つの不通過が
+   * どのカテゴリを連鎖的に巻き込んだかを示す。
+   */
+  categories: GateReasonCategory[];
+}
+
+/**
+ * ゲート不通過理由の「連鎖」をパス（反復）単位で可視化するためのデータ。
+ * gateReasonBreakdown/gateReasonBurdenTrend が全反復・全カテゴリを1つの分布/時系列に
+ * 集約するのに対し、こちらは1パスごとに、その回でどのカテゴリがどの順で連鎖して
+ * 発生したかをそのまま保持する。gateReasons が空のパス（merged/paused等）は対象外。
+ * 新しい反復順（iteration降順）で返す（abandonedIterationDetails と同じ並び）。
+ */
+export function gateReasonChains(runs: RunRecord[]): GateReasonChain[] {
+  return byIterationAsc(runs)
+    .filter((r) => r.gateReasons.length > 0)
+    .map((r) => {
+      const seen = new Set<GateReasonCategory>();
+      const categories: GateReasonCategory[] = [];
+      for (const reason of r.gateReasons) {
+        const category = classifyGateReason(reason);
+        if (!seen.has(category)) {
+          seen.add(category);
+          categories.push(category);
+        }
+      }
+      return {
+        iteration: r.iteration,
+        issueNumber: r.issue.number,
+        verdict: r.verdict,
+        categories,
+      };
+    })
+    .reverse();
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
