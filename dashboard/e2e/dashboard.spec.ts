@@ -17,6 +17,8 @@ import {
   ideationFailureSummary,
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
+  cycleTimeTrend,
+  cycleTimeTrendSignal,
 } from '../src/lib/aggregate';
 
 /**
@@ -692,6 +694,48 @@ test('E2E失敗とrevise回数の相関パネルが実データから導出し�
   await expect(page.getByTestId('e2e-revise-failed-iterations')).toContainText(
     `E2E失敗した反復: ${stats.failedIterations.join(', ')}`,
   );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('CI/ゲート通過時間のトレンド観測パネルが実データから導出した傾向・直近直前平均を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = cycleTimeTrend(runs);
+  const signal = cycleTimeTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の反復数が1件以下で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('cycle-time-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が cycleTimeTrend()（別の計算経路）の最終点と一致するはず
+  const latestMinutes = points[points.length - 1].value / 60;
+  await expect(panel).toContainText(`${latestMinutes.toFixed(1)}分`);
+
+  const signalBlock = page.getByTestId('cycle-time-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('cycle-time-trend-direction')).toContainText(directionLabels[signal!.direction]);
+  await expect(page.getByTestId('cycle-time-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('cycle-time-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

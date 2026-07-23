@@ -29,6 +29,7 @@ import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
+import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -57,6 +58,7 @@ export default function Home() {
         <EarlyWarningCard runs={runs} />
         <BreakerRunwayPanel runs={runs} />
         <MetricCards summary={summary} />
+        <CycleTimeTrendPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
