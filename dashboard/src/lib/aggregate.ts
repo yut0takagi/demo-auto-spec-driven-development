@@ -1127,6 +1127,67 @@ export function reviseCyclesByVerdict(runs: RunRecord[]): VerdictReviseCyclesSum
     });
 }
 
+/** revise 回数の分類。3回以上は '3+' にまとめ、桁数の異なる少数サンプルでbucketが乱立するのを防ぐ。 */
+export type ReviseVerdictBucketLabel = '0' | '1' | '2' | '3+';
+
+const REVISE_VERDICT_BUCKET_ORDER: readonly ReviseVerdictBucketLabel[] = ['0', '1', '2', '3+'];
+
+function reviseVerdictBucket(reviseCycles: number): ReviseVerdictBucketLabel {
+  if (reviseCycles <= 0) return '0';
+  if (reviseCycles === 1) return '1';
+  if (reviseCycles === 2) return '2';
+  return '3+';
+}
+
+export interface ReviseVerdictMatrixRow {
+  bucket: ReviseVerdictBucketLabel;
+  /** このbucketに属した反復数（全verdict合計） */
+  total: number;
+  /** verdict別の件数。Verdict の全メンバーをキーに持つ（0件のverdictも0で入る） */
+  byVerdict: Record<Verdict, number>;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * revise回数(bucket化: 0/1/2/3+) × verdict のクロス集計。reviseCyclesByVerdict が
+ * verdictごとのrevise回数を平均・中央値等の要約統計に潰すのに対し、こちらは
+ * 「revise回数がN回だった反復のうち、実際にどのverdictへ何件分岐したか」という分布
+ * そのものを見せる（＝revise回数とverdictの関連図）。例えば「revise 0回はほぼ全部
+ * merged だが、3回以上になるとabandonedが増える」といった閾値付近の傾向は、平均値
+ * だけを見る reviseCyclesByVerdict では読み取れない。
+ * reviseCyclesByVerdict と同じ理由で failed run も除外しない（failed グループの
+ * reviseCyclesは「クラッシュするまでの値」として意味を持つ）。
+ * bucketはデータに実際に出現したものだけを、少ない方から多い方の順で返す
+ * （空bucketは含めない）。
+ */
+export function reviseVerdictMatrix(runs: RunRecord[]): ReviseVerdictMatrixRow[] {
+  const byBucket = new Map<ReviseVerdictBucketLabel, { byVerdict: Record<Verdict, number>; iterations: number[] }>();
+
+  for (const run of byIterationAsc(runs)) {
+    const bucket = reviseVerdictBucket(run.reviseCycles);
+    let entry = byBucket.get(bucket);
+    if (!entry) {
+      entry = {
+        byVerdict: { merged: 0, abandoned: 0, 'needs-human': 0, paused: 0, 'dry-run': 0, failed: 0 },
+        iterations: [],
+      };
+      byBucket.set(bucket, entry);
+    }
+    entry.byVerdict[run.verdict]++;
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byBucket.entries()]
+    .map(([bucket, entry]) => ({
+      bucket,
+      total: entry.iterations.length,
+      byVerdict: entry.byVerdict,
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => REVISE_VERDICT_BUCKET_ORDER.indexOf(a.bucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.bucket));
+}
+
 export interface VerdictDurationSummary {
   verdict: Verdict;
   /** この verdict に該当した反復数 */
