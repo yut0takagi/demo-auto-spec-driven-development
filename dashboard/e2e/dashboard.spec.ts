@@ -19,6 +19,10 @@ import {
   e2eFailureReviseCorrelation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
+  adversarySummaryLengthTrend,
+  adversaryCommentTrendSignal,
+  adversaryApprovalCommentStats,
+  recentAdversaryComments,
 } from '../src/lib/aggregate';
 
 /**
@@ -39,20 +43,25 @@ function toMinutes(sec: number): string {
 }
 
 /**
- * verdict-summary-bubble は adversary.summary / gateReasons という自由記述
- * （別AIが書いた過去のレビュー文言）をそのまま表示する。そこには QA トピック
- * として "NaN" や "undefined" という単語そのものが登場しうる（例:
- * data/runs/0036.json の summary）。これは実際の数値フォーマットバグ（計算結果が
- * 生の NaN/undefined としてレンダリングされる事故）とは無関係なので、後者だけを
- * 検出したいテストでは自由記述の吹き出しを除いた本文で判定する。
+ * verdict-summary-bubble や adversary-comment-trend-panel のダイジェストは
+ * adversary.summary / gateReasons という自由記述（別AIが書いた過去のレビュー文言）を
+ * そのまま表示する。そこには QA トピックとして "NaN" や "undefined" という単語
+ * そのものが登場しうる（例: data/runs/0036.json の summary）。これは実際の数値
+ * フォーマットバグ（計算結果が生の NaN/undefined としてレンダリングされる事故）とは
+ * 無関係なので、後者だけを検出したいテストでは自由記述を含む要素を除いた本文で判定する。
  */
 async function bodyTextExcludingFreeform(page: Page): Promise<string> {
   return page.evaluate(() => {
-    const bubble = document.querySelector('[data-testid="verdict-summary-bubble"]') as HTMLElement | null;
-    const prevDisplay = bubble?.style.display ?? '';
-    if (bubble) bubble.style.display = 'none';
+    const selectors = ['[data-testid="verdict-summary-bubble"]', '[data-testid="adversary-comment-trend-panel"]'];
+    const restores: Array<{ el: HTMLElement; prevDisplay: string }> = [];
+    for (const selector of selectors) {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      if (!el) continue;
+      restores.push({ el, prevDisplay: el.style.display });
+      el.style.display = 'none';
+    }
     const text = document.body.innerText;
-    if (bubble) bubble.style.display = prevDisplay;
+    for (const { el, prevDisplay } of restores) el.style.display = prevDisplay;
     return text;
   });
 }
@@ -736,6 +745,70 @@ test('CI/ゲート通過時間のトレンド観測パネルが実データか�
   );
   await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
   await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary承認コメントの要約・トレンドパネルが実データから導出した文字数トレンド・承認/却下統計・直近ダイジェストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = adversarySummaryLengthTrend(runs);
+  const signal = adversaryCommentTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の verify 到達済み反復数が1件以下で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('adversary-comment-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの最新値は adversarySummaryLengthTrend()（別の計算経路）の最終点と一致するはず
+  const latestLength = points[points.length - 1].value;
+  await expect(panel).toContainText(`${latestLength.toFixed(1)}文字`);
+
+  const signalBlock = page.getByTestId('adversary-comment-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    lengthening: '長文化傾向',
+    shortening: '短文化傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('adversary-comment-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('adversary-comment-trend-recent-avg')).toHaveText(
+    `${signal!.recentAvgLength.toFixed(1)}文字`,
+  );
+  await expect(page.getByTestId('adversary-comment-trend-previous-avg')).toHaveText(
+    `${signal!.previousAvgLength.toFixed(1)}文字`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 承認/却下の平均文字数は adversaryApprovalCommentStats()（別の計算経路）と一致するはず
+  const stats = adversaryApprovalCommentStats(runs);
+  await expect(page.getByTestId('adversary-comment-approved-avg')).toHaveText(
+    `${stats.approvedAvgLength.toFixed(1)}文字 (${stats.approvedCount}件)`,
+  );
+  await expect(page.getByTestId('adversary-comment-rejected-avg')).toHaveText(
+    `${stats.rejectedAvgLength.toFixed(1)}文字 (${stats.rejectedCount}件)`,
+  );
+
+  // ダイジェストは recentAdversaryComments()（別の計算経路）と件数・iteration・承認バッジが一致する
+  const digest = recentAdversaryComments(runs);
+  for (const entry of digest) {
+    const row = page.getByTestId(`adversary-comment-digest-${entry.iteration}`);
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute('data-approved', String(entry.approved));
+    await expect(row).toContainText(`issue #${entry.issueNumber}`);
+  }
+  const digestRows = page.locator('[data-testid^="adversary-comment-digest-"]');
+  await expect(digestRows).toHaveCount(digest.length);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

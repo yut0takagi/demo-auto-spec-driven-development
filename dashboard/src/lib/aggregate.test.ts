@@ -34,6 +34,13 @@ import {
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
   CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT,
+  adversarySummaryLengthTrend,
+  adversaryCommentTrendSignal,
+  ADVERSARY_COMMENT_TREND_WINDOW,
+  ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT,
+  adversaryApprovalCommentStats,
+  recentAdversaryComments,
+  ADVERSARY_COMMENT_DIGEST_LIMIT,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -2128,5 +2135,242 @@ describe('cycleTimeTrendSignal', () => {
     const signal = cycleTimeTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+describe('adversarySummaryLengthTrend', () => {
+  it('iteration昇順に、前後の空白を除いたsummaryの文字数を返す', () => {
+    const runs = [
+      makeRun({ iteration: 2, adversary: { approved: true, summary: '  ab  ' } }),
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'あいうえお' } }),
+    ];
+    expect(adversarySummaryLengthTrend(runs)).toEqual([
+      { iteration: 1, value: 5 },
+      { iteration: 2, value: 2 },
+    ]);
+  });
+
+  it('failed runは除外する（summaryはレビュー未到達の定型文であり実測ではないため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '12345' } }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: 'レビューに到達しなかった。' } }),
+    ];
+    expect(adversarySummaryLengthTrend(runs)).toEqual([{ iteration: 1, value: 5 }]);
+  });
+
+  it('空白のみのsummaryは0文字になる（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, adversary: { approved: true, summary: '   ' } })];
+    expect(adversarySummaryLengthTrend(runs)).toEqual([{ iteration: 1, value: 0 }]);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(adversarySummaryLengthTrend([])).toEqual([]);
+  });
+});
+
+describe('adversaryCommentTrendSignal', () => {
+  it('run が0件ならnull（比較対象が存在しない）', () => {
+    expect(adversaryCommentTrendSignal([])).toBeNull();
+  });
+
+  it('verify到達済みrunが1件だけならnull（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(10) } })];
+    expect(adversaryCommentTrendSignal(runs)).toBeNull();
+  });
+
+  it('2件ちょうどならwindow=1で直近1件・直前1件を比較する', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(30) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgLength).toBeCloseTo(30, 10);
+    expect(signal!.previousAvgLength).toBeCloseTo(10, 10);
+    expect(signal!.recentIterations).toEqual([2]);
+    expect(signal!.previousIterations).toEqual([1]);
+    expect(signal!.direction).toBe('lengthening');
+  });
+
+  it('直近平均が直前平均より閾値(ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT)以上長いとlengthening', () => {
+    expect(ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT).toBe(10);
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 3, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 4, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+      makeRun({ iteration: 5, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+      makeRun({ iteration: 6, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal!.windowSize).toBe(ADVERSARY_COMMENT_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgLength).toBeCloseTo(20, 10);
+    expect(signal!.recentAvgLength).toBeCloseTo(40, 10);
+    expect(signal!.deltaPct).toBeCloseTo(100, 10);
+    expect(signal!.direction).toBe('lengthening');
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('直近平均が直前平均より短いとshortening', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+      makeRun({ iteration: 3, adversary: { approved: true, summary: 'x'.repeat(40) } }),
+      makeRun({ iteration: 4, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 5, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 6, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal!.direction).toBe('shortening');
+    expect(signal!.deltaPct).toBeCloseTo(-50, 10);
+  });
+
+  it('変化率が閾値未満ならflat（僅かなブレをトレンドと誤認しない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(100) } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(100) } }),
+      makeRun({ iteration: 3, adversary: { approved: true, summary: 'x'.repeat(100) } }),
+      // +5% は閾値(10%)未満なのでflatになるはず
+      makeRun({ iteration: 4, adversary: { approved: true, summary: 'x'.repeat(105) } }),
+      makeRun({ iteration: 5, adversary: { approved: true, summary: 'x'.repeat(105) } }),
+      makeRun({ iteration: 6, adversary: { approved: true, summary: 'x'.repeat(105) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('failed runは母集団から除外する（summaryが実測ではないため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: 'x'.repeat(9999) } }),
+      makeRun({ iteration: 3, verdict: 'merged', adversary: { approved: true, summary: 'x'.repeat(30) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    // failedのsummaryが混ざっていたらrecentAvgLengthは巨大な値になるはずだが、
+    // 除外されるのでwindow=1として iteration 1 vs 3 の比較になる
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.recentAvgLength).toBeCloseTo(30, 10);
+    expect(signal!.previousAvgLength).toBeCloseTo(10, 10);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でもdirectionを安全に判定する（ゼロ除算を回避）', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(10) } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal!.previousAvgLength).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('lengthening');
+  });
+
+  it('直前・直近ともに文字数が0(境界値)ならflat', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: '' } }),
+    ];
+    const signal = adversaryCommentTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+describe('adversaryApprovalCommentStats', () => {
+  it('承認/却下それぞれの平均・中央値・件数を分けて集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 3, adversary: { approved: false, summary: 'x'.repeat(50) } }),
+      makeRun({ iteration: 4, adversary: { approved: false, summary: 'x'.repeat(70) } }),
+    ];
+    const stats = adversaryApprovalCommentStats(runs);
+    expect(stats.approvedCount).toBe(2);
+    expect(stats.rejectedCount).toBe(2);
+    expect(stats.approvedAvgLength).toBeCloseTo(15, 10);
+    expect(stats.rejectedAvgLength).toBeCloseTo(60, 10);
+    expect(stats.approvedMedianLength).toBeCloseTo(15, 10);
+    expect(stats.rejectedMedianLength).toBeCloseTo(60, 10);
+    expect(stats.delta).toBeCloseTo(45, 10);
+  });
+
+  it('failed runは除外する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: 'x'.repeat(9999) } }),
+    ];
+    const stats = adversaryApprovalCommentStats(runs);
+    expect(stats.rejectedCount).toBe(0);
+    expect(stats.rejectedAvgLength).toBe(0);
+  });
+
+  it('却下が1件も無い(境界値)場合はNaNにならずrejectedAvgLengthが0になる', () => {
+    const runs = [makeRun({ iteration: 1, adversary: { approved: true, summary: 'ok' } })];
+    const stats = adversaryApprovalCommentStats(runs);
+    expect(stats.rejectedCount).toBe(0);
+    expect(stats.rejectedAvgLength).toBe(0);
+    expect(stats.rejectedMedianLength).toBe(0);
+    expect(Number.isNaN(stats.delta)).toBe(false);
+  });
+
+  it('空配列でも全項目が0になる', () => {
+    const stats = adversaryApprovalCommentStats([]);
+    expect(stats).toEqual({
+      approvedCount: 0,
+      rejectedCount: 0,
+      approvedAvgLength: 0,
+      rejectedAvgLength: 0,
+      approvedMedianLength: 0,
+      rejectedMedianLength: 0,
+      delta: 0,
+    });
+  });
+});
+
+describe('recentAdversaryComments', () => {
+  it('新しい順（iteration降順）に並べ、ADVERSARY_COMMENT_DIGEST_LIMIT件を超えない', () => {
+    expect(ADVERSARY_COMMENT_DIGEST_LIMIT).toBe(5);
+    const runs = Array.from({ length: 8 }, (_, i) =>
+      makeRun({ iteration: i + 1, adversary: { approved: true, summary: `summary-${i + 1}` } }),
+    );
+    const digest = recentAdversaryComments(runs);
+    expect(digest).toHaveLength(5);
+    expect(digest.map((d) => d.iteration)).toEqual([8, 7, 6, 5, 4]);
+    expect(digest[0].summary).toBe('summary-8');
+  });
+
+  it('failed runは除外し、issue情報・approved・verdict・lengthを実データから複製する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 42, title: 'あるissue', labels: [] },
+        verdict: 'merged',
+        adversary: { approved: true, summary: '  ok です  ' },
+      }),
+      makeRun({ iteration: 2, verdict: 'failed', adversary: { approved: false, summary: '到達せず' } }),
+    ];
+    const digest = recentAdversaryComments(runs);
+    expect(digest).toHaveLength(1);
+    expect(digest[0]).toEqual({
+      iteration: 1,
+      issueNumber: 42,
+      issueTitle: 'あるissue',
+      approved: true,
+      verdict: 'merged',
+      summary: 'ok です',
+      length: 5,
+    });
+  });
+
+  it('件数がLIMIT未満(境界値)ならあるだけ返す', () => {
+    const runs = [makeRun({ iteration: 1, adversary: { approved: true, summary: 'x' } })];
+    expect(recentAdversaryComments(runs)).toHaveLength(1);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(recentAdversaryComments([])).toEqual([]);
   });
 });
