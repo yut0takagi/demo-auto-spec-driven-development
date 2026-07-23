@@ -26,6 +26,7 @@ import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
+import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -71,6 +72,7 @@ export default function Home() {
           <ModelCostBreakdown runs={runs} />
           <CostEfficiencyPanel runs={runs} />
         </div>
+        <IdeationFailurePanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <GateReasonsPanel runs={runs} />
           <GateFailureTypesPanel runs={runs} />

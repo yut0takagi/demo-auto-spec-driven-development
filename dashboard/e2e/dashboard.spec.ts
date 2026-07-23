@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
 import {
   summarize,
@@ -14,6 +14,8 @@ import {
   costPerApprovedPrTrend,
   breakerRunway,
   modelEffectiveness,
+  ideationFailureSummary,
+  ideationFailureRateTrend,
 } from '../src/lib/aggregate';
 
 /**
@@ -31,6 +33,25 @@ function summaryFromRealData() {
 
 function toMinutes(sec: number): string {
   return `${(sec / 60).toFixed(1)}分`;
+}
+
+/**
+ * verdict-summary-bubble は adversary.summary / gateReasons という自由記述
+ * （別AIが書いた過去のレビュー文言）をそのまま表示する。そこには QA トピック
+ * として "NaN" や "undefined" という単語そのものが登場しうる（例:
+ * data/runs/0036.json の summary）。これは実際の数値フォーマットバグ（計算結果が
+ * 生の NaN/undefined としてレンダリングされる事故）とは無関係なので、後者だけを
+ * 検出したいテストでは自由記述の吹き出しを除いた本文で判定する。
+ */
+async function bodyTextExcludingFreeform(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const bubble = document.querySelector('[data-testid="verdict-summary-bubble"]') as HTMLElement | null;
+    const prevDisplay = bubble?.style.display ?? '';
+    if (bubble) bubble.style.display = 'none';
+    const text = document.body.innerText;
+    if (bubble) bubble.style.display = prevDisplay;
+    return text;
+  });
 }
 
 test('ダッシュボードが稼働ステータスと主要メトリクスを表示する', async ({ page }) => {
@@ -89,7 +110,7 @@ test('累計コストが $X.XX に整形され、生 float や NaN が漏れな�
   const formattedCost = `$${summary.totalCostUsd.toFixed(2)}`;
   await expect(page.getByText(formattedCost, { exact: true }).first()).toBeVisible();
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   // 整形前の高精度 float（例 1.1099999999999999）がそのまま漏れていないこと。
   const rawCost = String(summary.totalCostUsd);
   if (rawCost !== summary.totalCostUsd.toFixed(2)) {
@@ -122,7 +143,7 @@ test('カバレッジは failed 反復を拾わず、verify 到達済みの最�
   expect(lastNonFailed, 'verify 到達済み（非 failed）の run が1件も無い').toBeTruthy();
   expect(summary.latestCoverageIteration).toBe(lastNonFailed!.iteration);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
 });
 
@@ -146,7 +167,7 @@ test('承認率・マージ率の推移グラフが表示され、最新値が M
   await expect(approvalCard).toContainText(`${(summary.approvalRate * 100).toFixed(1)}%`);
   await expect(mergeCard).toContainText(`${(summary.mergeRate * 100).toFixed(1)}%`);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
 });
 
@@ -220,7 +241,7 @@ test('E2E失敗率推移グラフが表示され、最新値が data/runs から
     expect(point.value).toBeLessThanOrEqual(100);
   }
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
 });
 
@@ -258,7 +279,7 @@ test('モデルコストの内訳が役割別合計とモデル別合計を表�
     await expect(rows).toContainText(`$${entry.totalUsd.toFixed(2)}`);
   }
 
-  const body2 = await page.locator('body').innerText();
+  const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
 });
@@ -293,7 +314,7 @@ test('ブレーカ発火までのランウェイパネルが実データから�
     await expect(panel).not.toContainText('対象iteration');
   }
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -319,7 +340,7 @@ test('変更行数推移グラフが表示され、最新値が data/runs から
   const latestValue = trend[trend.length - 1].value;
   await expect(card).toContainText(`${latestValue.toFixed(1)}行`);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
 });
 
@@ -348,7 +369,7 @@ test('Builder改善の前反復比較カードが直近2件の測定済み反復
     await expect(verdictEl).toContainText(expectedLabel);
   }
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -381,7 +402,7 @@ test('高revise + 低承認率の前兆検知カードが実データから導�
 
   await expect(card).toContainText(`対象iteration: ${signal!.iterations.join(', ')}`);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -420,7 +441,7 @@ test('ゲート不通過理由の分類パネルが実データから導出し�
   );
   expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -461,7 +482,7 @@ test('ゲート理由の時系列burdenチャートが実データから導出�
     `対象iteration: ${points.map((p) => p.iteration).join(', ')}`,
   );
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -512,7 +533,7 @@ test('ゲート不通過の類型別集計パネルが実データから導出�
   await expect(page.getByTestId('gate-failure-type-row-paused')).toHaveCount(0);
   await expect(page.getByTestId('gate-failure-type-row-dry-run')).toHaveCount(0);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -556,7 +577,7 @@ test('モデル選択の効果測定パネルが実データから導出したmo
   );
   expect(renderedModels).toEqual(summaries.map((s) => s.model));
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
@@ -592,7 +613,48 @@ test('Cost効率（USD per 承認PR）パネルが実データから導出した
   const lastPoint = trend[trend.length - 1];
   await expect(page.getByTestId(`cost-efficiency-bar-${lastPoint.iteration}`)).toBeVisible();
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation失敗率パネルが実データから導出した実行件数・失敗件数・失敗率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = ideationFailureSummary(runs);
+  expect(
+    summary.attempted,
+    'data/runs に ideation が実行された（cost.ideationUsd > 0 の）反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-failure-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの実行件数・失敗件数は ideationFailureSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('ideation-failure-attempted')).toHaveText(
+    `実行 ${summary.attempted}件中 ${summary.failed}件が提案0件`,
+  );
+  await expect(page.getByTestId('ideation-failure-value')).toHaveText(`${(summary.failureRate * 100).toFixed(1)}%`);
+
+  if (summary.failedIterations.length > 0) {
+    await expect(page.getByTestId('ideation-failure-iterations')).toContainText(
+      `対象iteration: ${summary.failedIterations.join(', ')}`,
+    );
+  } else {
+    await expect(page.getByTestId('ideation-failure-iterations')).toHaveCount(0);
+  }
+
+  // 推移チャートは ideationFailureRateTrend()（別の計算経路）の点数・対象iterationと一致する
+  const trend = ideationFailureRateTrend(runs);
+  const trendBars = page.locator('[data-testid^="ideation-failure-trend-bar-"]');
+  await expect(trendBars).toHaveCount(trend.length);
+  for (const point of trend) {
+    await expect(page.getByTestId(`ideation-failure-trend-bar-${point.iteration}`)).toBeVisible();
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
   expect(body).not.toContain('undefined');
 });
