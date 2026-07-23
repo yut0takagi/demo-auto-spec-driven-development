@@ -12,6 +12,7 @@ import {
   gateFailureTypeBreakdown,
   costEfficiency,
   costPerApprovedPrTrend,
+  breakerRunway,
 } from '../src/lib/aggregate';
 
 /**
@@ -259,6 +260,41 @@ test('モデルコストの内訳が役割別合計とモデル別合計を表�
   const body2 = await page.locator('body').innerText();
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('ブレーカ発火までのランウェイパネルが実データから導出した残反復数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const runway = breakerRunway(runs);
+
+  const panel = page.getByTestId('breaker-runway-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-tripped', String(runway.tripped));
+
+  // 残り回数（別経路の breakerRunway() と一致するはず）
+  await expect(page.getByTestId('breaker-runway-remaining')).toHaveText(String(runway.remaining));
+
+  // threshold 個のスロットのうち発火に近い側（末尾）の streak 個が「消費済み」であること
+  for (let i = 0; i < runway.threshold; i++) {
+    const slot = page.getByTestId(`breaker-runway-slot-${i}`);
+    await expect(slot).toHaveAttribute(
+      'data-consumed',
+      String(i >= runway.threshold - runway.streak),
+    );
+  }
+
+  // 連続が1件以上あるときだけ対象iteration注記が出る
+  if (runway.iterations.length > 0) {
+    await expect(panel).toContainText(`対象iteration: ${runway.iterations.join(', ')}`);
+  } else {
+    await expect(panel).not.toContainText('対象iteration');
+  }
+
+  const body = await page.locator('body').innerText();
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
 });
 
 test('変更行数推移グラフが表示され、最新値が data/runs から導出した changedLinesTrend の最終点と一致する', async ({ page }) => {
