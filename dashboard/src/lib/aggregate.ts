@@ -384,6 +384,87 @@ export function cycleTimeTrendSignal(runs: RunRecord[]): CycleTimeTrendSignal | 
   };
 }
 
+/**
+ * issue開始(startedAt)から初PR作成までの所要時間の時系列推移。RunRecord は PR が実際に
+ * 開かれた時刻を個別に記録していないため、durationSec（issue開始〜反復完了）を近似値
+ * として使う（cycleTimeTrend と値の出処は同じ）。cycleTimeTrend との違いは母集団: こちらは
+ * 実際にPRが作られた反復（prNumber !== null）だけを対象にする。PRを一度も開けなかった
+ * 反復（例: builder が変更を生成しなかった abandoned、verify到達前に例外終了した failed）は
+ * 「PR作成までの時間」という定義そのものが存在しないため含めない。
+ */
+export function timeToFirstPrTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs)
+    .filter((r) => r.prNumber !== null)
+    .map((r) => ({ iteration: r.iteration, value: r.durationSec }));
+}
+
+/** トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。cycleTimeTrendSignal と揃えている。 */
+export const TIME_TO_FIRST_PR_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウの平均が直前ウィンドウよりこの割合(%)以上変化して初めて
+ * 増加/減少と判定する。cycleTimeTrendSignal と同じ閾値・考え方。
+ */
+export const TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT = 5;
+
+/** increasing: 初PR作成までの時間が悪化(長期化)傾向。decreasing: 改善(短縮)傾向。 */
+export type TimeToFirstPrTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface TimeToFirstPrTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は TIME_TO_FIRST_PR_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が TIME_TO_FIRST_PR_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgSec: number;
+  previousAvgSec: number;
+  /** recentAvgSec - previousAvgSec */
+  deltaSec: number;
+  /** deltaSec / previousAvgSec * 100。previousAvgSec が 0 のときは定義できないため null */
+  deltaPct: number | null;
+  direction: TimeToFirstPrTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function timeToFirstPrDirection(deltaSec: number, previousAvgSec: number): TimeToFirstPrTrendDirection {
+  if (previousAvgSec === 0) return deltaSec === 0 ? 'flat' : 'increasing';
+  const deltaPct = (deltaSec / previousAvgSec) * 100;
+  if (Math.abs(deltaPct) < TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * issue開始から初PR作成までの所要時間のトレンド観測。cycleTimeTrendSignal と同じ
+ * ローリング窓比較（直近window反復の平均 vs 直前window反復の平均）を、timeToFirstPrTrend
+ * と同じ母集団（PRが実際に作られた反復のみ）に対して行う。比較対象となる「直前」
+ * ウィンドウが取れない（対象点が1件以下）場合は null。
+ */
+export function timeToFirstPrTrendSignal(runs: RunRecord[]): TimeToFirstPrTrendSignal | null {
+  const points = timeToFirstPrTrend(runs);
+  if (points.length < 2) return null;
+
+  const windowSize = Math.min(TIME_TO_FIRST_PR_TREND_WINDOW, Math.floor(points.length / 2));
+  const recent = points.slice(points.length - windowSize);
+  const previous = points.slice(points.length - windowSize * 2, points.length - windowSize);
+
+  const recentAvgSec = mean(recent.map((p) => p.value));
+  const previousAvgSec = mean(previous.map((p) => p.value));
+  const deltaSec = recentAvgSec - previousAvgSec;
+
+  return {
+    windowSize,
+    partial: windowSize < TIME_TO_FIRST_PR_TREND_WINDOW,
+    recentAvgSec,
+    previousAvgSec,
+    deltaSec,
+    deltaPct: previousAvgSec === 0 ? null : (deltaSec / previousAvgSec) * 100,
+    direction: timeToFirstPrDirection(deltaSec, previousAvgSec),
+    recentIterations: recent.map((p) => p.iteration),
+    previousIterations: previous.map((p) => p.iteration),
+  };
+}
+
 export type ComparisonVerdict = 'improved' | 'regressed' | 'unchanged';
 
 export type BuilderMetricKey = 'reviseCycles' | 'changedLines' | 'coveragePct' | 'builderUsd';
