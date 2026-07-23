@@ -28,6 +28,7 @@ import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel'
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
+import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMergeComparisonPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
@@ -91,6 +92,7 @@ export default function Home() {
         <ReviseCyclesByVerdictPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
+        <ModelApprovalMergeComparisonPanel runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>
