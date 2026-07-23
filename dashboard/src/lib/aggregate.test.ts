@@ -32,6 +32,7 @@ import {
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
+  builderModelSwitchComparisons,
   approvalRateTrendByModel,
   ideationFailureSummary,
   ideationFailureRateTrend,
@@ -2144,6 +2145,175 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('builderModelSwitchComparisons', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(builderModelSwitchComparisons([])).toEqual([]);
+  });
+
+  it('builder モデルが1種類のまま（切り替えが一度も無い）なら空配列を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 2, models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 3, models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+    ];
+    expect(builderModelSwitchComparisons(runs)).toEqual([]);
+  });
+
+  it('1回の切り替えで、切り替え直前区間(A)と直後区間(B)の承認率・マージ率・差分・verdictを算出する', () => {
+    const runs = [
+      // model-a: merged+approved 1件, needs-human+却下 1件 → approvalRate=0.5, mergeRate=0.5
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      // model-b: merged+approved 1件のみ → approvalRate=1, mergeRate=1
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = builderModelSwitchComparisons(runs);
+    expect(result).toHaveLength(1);
+
+    const [c] = result;
+    expect(c.switchIndex).toBe(1);
+    expect(c.before).toEqual({
+      model: 'model-a',
+      fromIteration: 1,
+      toIteration: 2,
+      count: 2,
+      approvalRate: 0.5,
+      mergeRate: 0.5,
+    });
+    expect(c.after).toEqual({
+      model: 'model-b',
+      fromIteration: 3,
+      toIteration: 3,
+      count: 1,
+      approvalRate: 1,
+      mergeRate: 1,
+    });
+    expect(c.approvalRateDelta).toBeCloseTo(0.5, 10);
+    expect(c.mergeRateDelta).toBeCloseTo(0.5, 10);
+    expect(c.approvalVerdict).toBe('improved');
+    expect(c.mergeVerdict).toBe('improved');
+  });
+
+  it('入力順が iteration 順でなくても、iteration 昇順に並べ直してから区間分割する', () => {
+    const runs = [
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = builderModelSwitchComparisons(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].before.model).toBe('model-a');
+    expect(result[0].before.count).toBe(2);
+    expect(result[0].after.model).toBe('model-b');
+  });
+
+  it('A→B→A のように同じモデルが後で再登板した場合、揺り戻しごとに独立した切り替えイベントとして扱う（Aの合算はしない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = builderModelSwitchComparisons(runs);
+    expect(result).toHaveLength(2);
+
+    expect(result[0].switchIndex).toBe(1);
+    expect(result[0].before).toMatchObject({ model: 'model-a', fromIteration: 1, toIteration: 1 });
+    expect(result[0].after).toMatchObject({ model: 'model-b', fromIteration: 2, toIteration: 2 });
+    expect(result[0].approvalRateDelta).toBeCloseTo(0, 10);
+    expect(result[0].mergeRateDelta).toBeCloseTo(0, 10);
+    expect(result[0].approvalVerdict).toBe('unchanged');
+    expect(result[0].mergeVerdict).toBe('unchanged');
+
+    expect(result[1].switchIndex).toBe(2);
+    expect(result[1].before).toMatchObject({ model: 'model-b', fromIteration: 2, toIteration: 2 });
+    // 2回目の model-a 区間は1回目(iteration 1)と合算されず、iteration 3 のみの独立区間になる
+    expect(result[1].after).toMatchObject({ model: 'model-a', fromIteration: 3, toIteration: 3, count: 1 });
+    expect(result[1].after.approvalRate).toBe(0);
+    expect(result[1].after.mergeRate).toBe(0);
+    expect(result[1].approvalVerdict).toBe('regressed');
+    expect(result[1].mergeVerdict).toBe('regressed');
+  });
+
+  it('failed run（verify未到達）は承認率の母集団から除くが、マージ率の母集団には含める', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = builderModelSwitchComparisons(runs);
+    expect(result).toHaveLength(1);
+    // 承認率の分母は verify 到達済みの iteration 2 のみ → 1/1 = 1（failed は除外)
+    expect(result[0].before.approvalRate).toBe(1);
+    // マージ率の分母は全件(failed含む) 2件中 merged 1件 → 0.5
+    expect(result[0].before.count).toBe(2);
+    expect(result[0].before.mergeRate).toBe(0.5);
   });
 });
 

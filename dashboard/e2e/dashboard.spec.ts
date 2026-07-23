@@ -16,6 +16,7 @@ import {
   costPerApprovedPrTrend,
   breakerRunway,
   modelEffectiveness,
+  builderModelSwitchComparisons,
   ideationFailureSummary,
   ideationFailureRateTrend,
   ideationCostQualityCorrelation,
@@ -742,6 +743,75 @@ test('モデル別 承認率・マージ率比較パネルが実データから�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-approval-merge-row-', '')),
   );
   expect(renderedModels).toEqual(byModelNameAsc(summaries).map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Builderモデル切り替えのA/B比較パネルが実データから導出した切り替えイベントの有無・承認率/マージ率の変化を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const comparisons = builderModelSwitchComparisons(runs);
+
+  if (comparisons.length === 0) {
+    // 現状データでは builder モデルが切り替わったことが一度も無い経路。将来 run が積み増され
+    // モデル切り替えが発生すれば下の else 側（実際のA/B比較表示）に切り替わる。
+    await expect(page.getByText('Builderモデル切り替えのA/B比較')).toBeVisible();
+    await expect(
+      page.getByText('データなし（builder モデルの切り替えが記録されていません）'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="builder-model-switch-ab-panel"]')).toHaveCount(0);
+  } else {
+    const panel = page.getByTestId('builder-model-switch-ab-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText(`${comparisons.length}回の切り替え`);
+
+    // 各切り替えイベント行が builderModelSwitchComparisons()（別の計算経路）と一致する
+    // 承認率・マージ率の before→after・差分・verdictを表示していること
+    for (const c of comparisons) {
+      const row = page.getByTestId(`builder-model-switch-row-${c.switchIndex}`);
+      await expect(row).toContainText(
+        `${c.before.model} (iteration ${c.before.fromIteration}〜${c.before.toIteration}) → ${c.after.model} (iteration ${c.after.fromIteration}〜${c.after.toIteration})`,
+      );
+
+      const approvalPctBefore = (c.before.approvalRate * 100).toFixed(1);
+      const approvalPctAfter = (c.after.approvalRate * 100).toFixed(1);
+      const approvalValue = page.getByTestId(`builder-model-switch-approval-value-${c.switchIndex}`);
+      await expect(approvalValue).toHaveText(`${approvalPctBefore}% → ${approvalPctAfter}%`);
+
+      const approvalDeltaPt = c.approvalRateDelta * 100;
+      const approvalSign = approvalDeltaPt > 0 ? '+' : '';
+      const approvalVerdictLabel =
+        c.approvalVerdict === 'improved' ? '改善' : c.approvalVerdict === 'regressed' ? '悪化' : '変化なし';
+      const approvalVerdict = page.getByTestId(`builder-model-switch-approval-verdict-${c.switchIndex}`);
+      await expect(approvalVerdict).toHaveText(
+        `${approvalSign}${approvalDeltaPt.toFixed(1)}pt (${approvalVerdictLabel})`,
+      );
+
+      const mergePctBefore = (c.before.mergeRate * 100).toFixed(1);
+      const mergePctAfter = (c.after.mergeRate * 100).toFixed(1);
+      const mergeValue = page.getByTestId(`builder-model-switch-merge-value-${c.switchIndex}`);
+      await expect(mergeValue).toHaveText(`${mergePctBefore}% → ${mergePctAfter}%`);
+
+      const mergeDeltaPt = c.mergeRateDelta * 100;
+      const mergeSign = mergeDeltaPt > 0 ? '+' : '';
+      const mergeVerdictLabel =
+        c.mergeVerdict === 'improved' ? '改善' : c.mergeVerdict === 'regressed' ? '悪化' : '変化なし';
+      const mergeVerdict = page.getByTestId(`builder-model-switch-merge-verdict-${c.switchIndex}`);
+      await expect(mergeVerdict).toHaveText(`${mergeSign}${mergeDeltaPt.toFixed(1)}pt (${mergeVerdictLabel})`);
+
+      await expect(row).toContainText(`対象反復数: ${c.before.model} ${c.before.count}件 / ${c.after.model} ${c.after.count}件`);
+    }
+
+    const rows = await page.locator('[data-testid^="builder-model-switch-row-"]').all();
+    const renderedIndices = await Promise.all(
+      rows.map(async (r) => Number((await r.getAttribute('data-testid'))!.replace('builder-model-switch-row-', ''))),
+    );
+    expect(renderedIndices).toEqual(comparisons.map((c) => c.switchIndex));
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
