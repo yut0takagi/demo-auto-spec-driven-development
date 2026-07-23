@@ -23,6 +23,7 @@ import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
+import { AbandonedIterationsPanel } from '@/components/AbandonedIterationsPanel';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { IdeationCostQualityPanel } from '@/components/IdeationCostQualityPanel';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
@@ -94,6 +95,7 @@ export default function Home() {
         </div>
         <GateReasonBurdenChart runs={runs} />
         <GateReasonTrendPanel runs={runs} />
+        <AbandonedIterationsPanel runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
         <ReviseCyclesByVerdictPanel runs={runs} />

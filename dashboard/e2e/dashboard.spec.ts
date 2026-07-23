@@ -28,6 +28,9 @@ import {
   adversaryApprovalCommentStats,
   recentAdversaryComments,
   approvalRateTrendByModel,
+  abandonedSummary,
+  abandonedRateTrend,
+  abandonedIterationDetails,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1071,4 +1074,62 @@ test('Model別承認率トレンド観測パネルが実データから導出し
   const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('Abandoned反復の追跡・分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = abandonedSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に abandoned な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('abandoned-iterations-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダ・サマリー指標は abandonedSummary()/abandonedRateTrend()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('abandoned-count')).toHaveText(`${summary.count}件`);
+
+  const trend = abandonedRateTrend(runs);
+  const latestRatePct = trend[trend.length - 1].value;
+  await expect(page.getByTestId('abandoned-latest-rate')).toHaveText(`${latestRatePct.toFixed(1)}%`);
+  await expect(page.getByTestId('abandoned-total-cost')).toHaveText(`$${summary.totalCostUsd.toFixed(2)}`);
+  await expect(page.getByTestId('abandoned-avg-revise')).toHaveText(`${summary.avgReviseCycles.toFixed(1)}`);
+
+  const topReasonEl = page.getByTestId('abandoned-top-reason');
+  if (summary.topGateReasonCategory === null) {
+    await expect(topReasonEl).toHaveText('なし');
+  } else {
+    await expect(topReasonEl).toContainText(`${summary.topGateReasonCount}件`);
+  }
+
+  // 一覧は abandonedIterationDetails()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = abandonedIterationDetails(runs);
+  const rows = page.locator('[data-testid^="abandoned-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`abandoned-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('abandoned-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: abandoned 以外の verdict はこの一覧に現れてはいけない
+  const nonAbandonedIterations = runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(nonAbandonedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
 });
