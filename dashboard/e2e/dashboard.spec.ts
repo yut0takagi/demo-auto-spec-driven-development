@@ -40,6 +40,7 @@ import {
   adversaryApprovalByReasonAndModel,
   pausedDryRunSummary,
   pausedDryRunDetails,
+  adversaryOutcomeDivergence,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -849,6 +850,57 @@ test('モデル別 承認率・マージ率比較パネルが実データから�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-approval-merge-row-', '')),
   );
   expect(renderedModels).toEqual(byModelNameAsc(summaries).map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary 承認⇔実結果 乖離パネルが実データから導出した見落とし件数・乖離率・発生反復を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = adversaryOutcomeDivergence(runs);
+  expect(
+    summaries.length,
+    'data/runs に verify 到達済み run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-outcome-divergence-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が adversaryOutcomeDivergence()（別の計算経路）と一致する
+  // 乖離率・見落とし件数・誤却下件数・見落とし発生反復を表示していること
+  for (const s of summaries) {
+    const rateEl = page.getByTestId(`adversary-outcome-divergence-rate-${s.model}`);
+    await expect(rateEl).toHaveText(`${s.divergenceRatePct.toFixed(1)}%`);
+
+    const falseApproveEl = page.getByTestId(`adversary-outcome-divergence-false-approve-${s.model}`);
+    await expect(falseApproveEl).toContainText(
+      `見落とし（承認したのに非マージ）: ${s.falseApproveCount}件 / 承認${s.approvedCount}件中（${s.falseApproveRatePct.toFixed(1)}%）`,
+    );
+
+    const falseRejectEl = page.getByTestId(`adversary-outcome-divergence-false-reject-${s.model}`);
+    await expect(falseRejectEl).toContainText(
+      `誤却下（却下したのにマージ）: ${s.falseRejectCount}件 / 却下${s.rejectedCount}件中（${s.falseRejectRatePct.toFixed(1)}%）`,
+    );
+
+    const row = page.getByTestId(`adversary-outcome-divergence-row-${s.model}`);
+    if (s.falseApproveIterations.length > 0) {
+      await expect(row).toContainText(`見落とし発生反復: ${s.falseApproveIterations.map((n) => `#${n}`).join(', ')}`);
+    } else {
+      await expect(row).not.toContainText('見落とし発生反復');
+    }
+  }
+
+  // 乖離率降順で並ぶはず
+  const rows = await page.locator('[data-testid^="adversary-outcome-divergence-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-outcome-divergence-row-', '')),
+  );
+  expect(renderedModels).toEqual(summaries.map((s) => s.model));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
