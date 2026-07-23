@@ -1,0 +1,43 @@
+{
+  "id": "20260723T090725Z-46",
+  "iteration": 17,
+  "issue": {
+    "number": 46,
+    "title": "Model 切り替え影響パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/46-model",
+  "startedAt": "2026-07-23T09:07:25Z",
+  "finishedAt": "2026-07-23T09:35:37Z",
+  "durationSec": 1692,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "テストが部分マッチ（toContain）に依存し、小数点精度・計算値の正確性を実質的に検証していない。また時間分割モデルの state 管理や失敗系のエッジケース（全 run が failed）の正当性がコメント不足で不明。 / 指摘: ModelImpactPanel.test.tsx line 43: expect(screen.getByText('$0.20')) は部分マッチで '$0.2000' も通る。toFixed(2) の精度を厳密に検証すること（textContent の正確な値確認）; ModelImpactPanel.test.tsx line 117-122: toContain() は部分マッチ。formatDelta の小数点以下桁数が正確か、textContent.includes() でなく正確な値マッチに変更し、digits パラメータの動作を検証する; aggregate.test.ts line 697-699: runCount/firstIteration/lastIteration の同時検証に加え、時間分割後の iteration 範囲が連続でない場合（e.g., 1,2,5,6）の動作を検証; page.tsx への統合で、既存パネルとの相互作用・レイアウト崩損・レンダリング順序をテストする E2E テストが不在"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 440,
+  "cost": {
+    "builderUsd": 6.61809,
+    "adversaryUsd": 0.184017,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.802107
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
