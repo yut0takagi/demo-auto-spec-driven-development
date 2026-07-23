@@ -1,0 +1,43 @@
+{
+  "id": "20260723T202426Z-109",
+  "iteration": 61,
+  "issue": {
+    "number": 109,
+    "title": "Adversary 承認率の「理由別・モデル別」2 次元集計",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/109-adversary-2",
+  "startedAt": "2026-07-23T20:24:26Z",
+  "finishedAt": "2026-07-23T20:31:05Z",
+  "durationSec": 399,
+  "reviseCycles": 1,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue #109 (Adversary 承認率の「理由別・モデル別」2 次元集計) is already fully implemented, tested, and documented on this branch. The feature landed via commit 2aba7c7 with AdversaryReasonModelPanel component, adversaryApprovalByReasonAndModel() aggregate function, comprehensive unit/component/e2e tests, and README documentation. Working tree is clean with no pending changes."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.079226,
+    "adversaryUsd": 0.079678,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.158904
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
