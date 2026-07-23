@@ -465,6 +465,135 @@ export function timeToFirstPrTrendSignal(runs: RunRecord[]): TimeToFirstPrTrendS
   };
 }
 
+/** issue を「クローズした」とみなす verdict。types.ts の通り merged はマージで、abandoned は再試行しても満たせず自動で見送った（issue はクローズ）。 */
+const ISSUE_CLOSING_VERDICTS: readonly Verdict[] = ['merged', 'abandoned'];
+
+export interface IssueResolutionPoint {
+  /** issue をクローズした反復番号（x軸） */
+  iteration: number;
+  issueNumber: number;
+  /** issue生成(nextIssuesに現れた反復のfinishedAt)からクローズまでの秒数 */
+  value: number;
+  /** issue を生成した(nextIssuesに含めて提案した)反復番号 */
+  createdIteration: number;
+}
+
+/**
+ * Issue生成からIssueクローズまでの解決時間(秒)の時系列推移。
+ *
+ * 「生成」は ideationCostQualityCorrelation と同じ考え方で、issue番号が最初にどこかの
+ * 反復の nextIssues に現れた時点（その反復のfinishedAt）とする（orchestratorはnextIssuesを
+ * そのままissue番号として起票するため、issue番号が実際の作業単位を一意に特定できる）。
+ * 「クローズ」は ISSUE_CLOSING_VERDICTS（merged/abandoned）のいずれかに達した反復の
+ * finishedAtとする。
+ *
+ * data/runs には同一issue番号が複数回dispatchされるケースがある（例: 敵対レビュー指摘で
+ * 別反復として再修正された、既にマージ済みの issue が誤って再度着手された等）。この場合は
+ * 生成後最初に到達したクローズ反復だけを1点として採用し、以降の同issue番号の反復は無視する
+ * （実際にissueが「解決した」瞬間は最初のクローズだから）。
+ *
+ * 生成元(nextIssuesに現れた反復)が見つからないissue（例: seed issue、手動起票issue）は
+ * 解決時間の起点が無いため対象外。ideationCostQualityCorrelationのコメントにある自己参照
+ * ケース（nextIssuesが提案元自身のissue番号を含む）と同様、生成反復のiterationがクローズ
+ * 反復のiteration以上の場合も対象外にする。
+ */
+export function issueResolutionTimeTrend(runs: RunRecord[]): IssueResolutionPoint[] {
+  const sorted = byIterationAsc(runs);
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+
+  const resolvedIssueNumbers = new Set<number>();
+  const points: IssueResolutionPoint[] = [];
+
+  for (const r of sorted) {
+    if (!ISSUE_CLOSING_VERDICTS.includes(r.verdict)) continue;
+    if (resolvedIssueNumbers.has(r.issue.number)) continue;
+
+    const created = createdBy.get(r.issue.number);
+    if (!created || created.iteration >= r.iteration) continue;
+
+    resolvedIssueNumbers.add(r.issue.number);
+    const resolutionSec = (new Date(r.finishedAt).getTime() - new Date(created.finishedAt).getTime()) / 1000;
+    points.push({
+      iteration: r.iteration,
+      issueNumber: r.issue.number,
+      value: resolutionSec,
+      createdIteration: created.iteration,
+    });
+  }
+
+  return points;
+}
+
+/** トレンド判定に使う直近/直前ウィンドウの解決件数(既定値)。cycleTimeTrendSignal と揃えている。 */
+export const ISSUE_RESOLUTION_TIME_TREND_WINDOW = 3;
+/** 直近ウィンドウの平均が直前ウィンドウよりこの割合(%)以上変化して初めて増加/減少と判定する。cycleTimeTrendSignal と同じ閾値・考え方。 */
+export const ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT = 5;
+
+/** increasing: issue解決までの時間が悪化(長期化)傾向。decreasing: 改善(短縮)傾向。 */
+export type IssueResolutionTimeTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface IssueResolutionTimeTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は ISSUE_RESOLUTION_TIME_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が ISSUE_RESOLUTION_TIME_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgSec: number;
+  previousAvgSec: number;
+  /** recentAvgSec - previousAvgSec */
+  deltaSec: number;
+  /** deltaSec / previousAvgSec * 100。previousAvgSec が 0 のときは定義できないため null */
+  deltaPct: number | null;
+  direction: IssueResolutionTimeTrendDirection;
+  /** 直近ウィンドウに含まれるクローズ反復番号(昇順) */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれるクローズ反復番号(昇順) */
+  previousIterations: number[];
+}
+
+function issueResolutionTimeDirection(deltaSec: number, previousAvgSec: number): IssueResolutionTimeTrendDirection {
+  if (previousAvgSec === 0) return deltaSec === 0 ? 'flat' : 'increasing';
+  const deltaPct = (deltaSec / previousAvgSec) * 100;
+  if (Math.abs(deltaPct) < ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * Issue生成からIssueクローズまでの解決時間のトレンド観測。cycleTimeTrendSignal /
+ * timeToFirstPrTrendSignal と同じローリング窓比較（直近window件の平均 vs 直前window件の
+ * 平均）を、issueResolutionTimeTrend が返す解決済みissueの母集団に対して行う。比較対象と
+ * なる「直前」ウィンドウが取れない（解決済みissueが1件以下）場合は null。
+ */
+export function issueResolutionTimeTrendSignal(runs: RunRecord[]): IssueResolutionTimeTrendSignal | null {
+  const points = issueResolutionTimeTrend(runs);
+  if (points.length < 2) return null;
+
+  const windowSize = Math.min(ISSUE_RESOLUTION_TIME_TREND_WINDOW, Math.floor(points.length / 2));
+  const recent = points.slice(points.length - windowSize);
+  const previous = points.slice(points.length - windowSize * 2, points.length - windowSize);
+
+  const recentAvgSec = mean(recent.map((p) => p.value));
+  const previousAvgSec = mean(previous.map((p) => p.value));
+  const deltaSec = recentAvgSec - previousAvgSec;
+
+  return {
+    windowSize,
+    partial: windowSize < ISSUE_RESOLUTION_TIME_TREND_WINDOW,
+    recentAvgSec,
+    previousAvgSec,
+    deltaSec,
+    deltaPct: previousAvgSec === 0 ? null : (deltaSec / previousAvgSec) * 100,
+    direction: issueResolutionTimeDirection(deltaSec, previousAvgSec),
+    recentIterations: recent.map((p) => p.iteration),
+    previousIterations: previous.map((p) => p.iteration),
+  };
+}
+
 export type ComparisonVerdict = 'improved' | 'regressed' | 'unchanged';
 
 export type BuilderMetricKey = 'reviseCycles' | 'changedLines' | 'coveragePct' | 'builderUsd';

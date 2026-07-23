@@ -27,6 +27,8 @@ import {
   cycleTimeTrendSignal,
   timeToFirstPrTrend,
   timeToFirstPrTrendSignal,
+  issueResolutionTimeTrend,
+  issueResolutionTimeTrendSignal,
   adversarySummaryLengthTrend,
   adversaryCommentTrendSignal,
   adversaryApprovalCommentStats,
@@ -1213,6 +1215,68 @@ test('Issue開始から初PR作成までの時間トレンド観測パネルが�
   for (const it of [...signal!.recentIterations, ...signal!.previousIterations]) {
     expect(noPrIterations).not.toContain(it);
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue生成からIssueクローズまでの解決時間トレンドパネルが実データから導出した傾向・直近直前平均・直近解決issueを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = issueResolutionTimeTrend(runs);
+  const signal = issueResolutionTimeTrendSignal(runs);
+
+  // このリポジトリの data/runs は nextIssues 経由で生成され、後に merged/abandoned で
+  // クローズされたissueを複数含む前提で運用されている。0/1件しか無いと「データあり」経路
+  // 自体を検証できないため、前提を明示した上で失敗させる。
+  expect(
+    signal,
+    'data/runs に生成元(nextIssues)が特定できクローズもされたissueが2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('issue-resolution-time-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が issueResolutionTimeTrend()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(`${(latest.value / 60).toFixed(1)}分`);
+
+  // 直近解決issueの注記が生成元/クローズ先の反復番号込みで一致するはず
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(`issue #${latest.issueNumber}`);
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(
+    `生成 iteration ${latest.createdIteration}`,
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(
+    `クローズ iteration ${latest.iteration}`,
+  );
+
+  const signalBlock = page.getByTestId('issue-resolution-time-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('issue-resolution-time-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: 同一issue番号は解決済み一覧に高々1回しか現れない
+  // （重複dispatchされていても最初のクローズだけを1件として数えるはず）。
+  const issueNumbers = points.map((p) => p.issueNumber);
+  expect(new Set(issueNumbers).size).toBe(issueNumbers.length);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
