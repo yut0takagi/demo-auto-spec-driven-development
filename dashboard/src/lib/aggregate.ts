@@ -887,6 +887,79 @@ export function ideationFailureRateTrend(runs: RunRecord[]): TrendPoint[] {
   });
 }
 
+export interface E2eReviseCorrelation {
+  /** verify に到達した run 数（passedCount + failedCount と一致） */
+  sampleSize: number;
+  /** e2e が成功した反復数 */
+  passedCount: number;
+  /** e2e が失敗した反復数 */
+  failedCount: number;
+  /** e2e成功群の平均revise回数。passedCountが0ならmean([])の定義通り0 */
+  passedMeanRevise: number;
+  /** e2e失敗群の平均revise回数。failedCountが0ならmean([])の定義通り0 */
+  failedMeanRevise: number;
+  /** failedMeanRevise - passedMeanRevise。正なら失敗群の方がrevise回数が多い */
+  delta: number;
+  /**
+   * e2e失敗(1)/成功(0)とreviseCyclesのPearson相関係数(-1..1)。
+   * どちらかの分散が0（全run同じe2e結果、または全run同じrevise回数）だと
+   * 定義できないためnull。
+   */
+  correlationCoefficient: number | null;
+  /** e2eが失敗した反復番号（昇順） */
+  failedIterations: number[];
+}
+
+function pearsonCorrelation(xs: number[], ys: number[]): number | null {
+  const n = xs.length;
+  if (n < 2) return null;
+  const meanX = mean(xs);
+  const meanY = mean(ys);
+  let numerator = 0;
+  let denomX = 0;
+  let denomY = 0;
+  for (let i = 0; i < n; i++) {
+    const dx = xs[i] - meanX;
+    const dy = ys[i] - meanY;
+    numerator += dx * dy;
+    denomX += dx * dx;
+    denomY += dy * dy;
+  }
+  if (denomX === 0 || denomY === 0) return null;
+  return numerator / Math.sqrt(denomX * denomY);
+}
+
+/**
+ * E2Eテスト失敗とrevise回数の相関。reviseCyclesTrend/e2eFailureRateTrendと同じ
+ * reachedVerifyの母集団（failed run はrevise/e2e結果が測定されなかったsentinelを
+ * 持つため除外）で、e2e成功/失敗の2群のreviseCycles平均を比較し、e2e失敗を1・
+ * 成功を0としたPearson相関係数も算出する。相関係数は「revise回数が多いほどe2eが
+ * 失敗しやすい」という関係の強さの目安であり、平均比較（delta）は同じ関係を
+ * 群ごとの実測値として補足する。
+ */
+export function e2eFailureReviseCorrelation(runs: RunRecord[]): E2eReviseCorrelation {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const passed = completed.filter((r) => r.verify.e2ePassed);
+  const failed = completed.filter((r) => !r.verify.e2ePassed);
+
+  const xs = completed.map((r) => (r.verify.e2ePassed ? 0 : 1));
+  const ys = completed.map((r) => r.reviseCycles);
+
+  const passedMeanRevise = mean(passed.map((r) => r.reviseCycles));
+  const failedMeanRevise = mean(failed.map((r) => r.reviseCycles));
+
+  return {
+    sampleSize: completed.length,
+    passedCount: passed.length,
+    failedCount: failed.length,
+    passedMeanRevise,
+    failedMeanRevise,
+    delta: failedMeanRevise - passedMeanRevise,
+    correlationCoefficient: pearsonCorrelation(xs, ys),
+    failedIterations: failed.map((r) => r.iteration),
+  };
+}
+
 /**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は

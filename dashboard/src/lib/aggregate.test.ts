@@ -28,6 +28,7 @@ import {
   modelEffectiveness,
   ideationFailureSummary,
   ideationFailureRateTrend,
+  e2eFailureReviseCorrelation,
 } from './aggregate';
 import type { RunRecord } from './types';
 
@@ -1830,5 +1831,84 @@ describe('ideationFailureRateTrend', () => {
     // 最終点は ideationFailureSummary().failureRate*100 と一致するはず
     const summary = ideationFailureSummary(runs);
     expect(trend[trend.length - 1].value).toBeCloseTo(summary.failureRate * 100, 10);
+  });
+});
+
+describe('e2eFailureReviseCorrelation', () => {
+  it('run が0件なら全て0、相関係数はnull（境界値）', () => {
+    const result = e2eFailureReviseCorrelation([]);
+    expect(result).toEqual({
+      sampleSize: 0,
+      passedCount: 0,
+      failedCount: 0,
+      passedMeanRevise: 0,
+      failedMeanRevise: 0,
+      delta: 0,
+      correlationCoefficient: null,
+      failedIterations: [],
+    });
+  });
+
+  it('verify に到達していない failed run は母集団から除外する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 }, reviseCycles: 0 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 1 }),
+    ];
+    const result = e2eFailureReviseCorrelation(runs);
+    expect(result.sampleSize).toBe(1);
+    expect(result.passedCount).toBe(1);
+    expect(result.failedCount).toBe(0);
+  });
+
+  it('e2e成功群・失敗群それぞれ全て同じe2e結果（分散0）だと相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 0 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 2 }),
+    ];
+    const result = e2eFailureReviseCorrelation(runs);
+    expect(result.passedCount).toBe(2);
+    expect(result.failedCount).toBe(0);
+    expect(result.passedMeanRevise).toBeCloseTo(1, 10);
+    expect(result.failedMeanRevise).toBe(0);
+    expect(result.correlationCoefficient).toBeNull();
+    expect(result.failedIterations).toEqual([]);
+  });
+
+  it('reviseCyclesが全run同値（分散0）でも相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 1 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, reviseCycles: 1 }),
+    ];
+    const result = e2eFailureReviseCorrelation(runs);
+    expect(result.correlationCoefficient).toBeNull();
+  });
+
+  it('e2e失敗群のrevise回数が明確に多いケースで正の相関・正のdeltaを算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 0 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 1 }),
+      makeRun({ iteration: 3, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, reviseCycles: 3 }),
+      makeRun({ iteration: 4, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, reviseCycles: 4 }),
+    ];
+    const result = e2eFailureReviseCorrelation(runs);
+    expect(result.sampleSize).toBe(4);
+    expect(result.passedCount).toBe(2);
+    expect(result.failedCount).toBe(2);
+    expect(result.passedMeanRevise).toBeCloseTo(0.5, 10);
+    expect(result.failedMeanRevise).toBeCloseTo(3.5, 10);
+    expect(result.delta).toBeCloseTo(3, 10);
+    expect(result.correlationCoefficient).not.toBeNull();
+    expect(result.correlationCoefficient!).toBeCloseTo(0.9487, 4);
+    expect(result.failedIterations).toEqual([3, 4]);
+  });
+
+  it('e2e失敗群のrevise回数が成功群より少ないと負のdeltaになる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verify: { unitPassed: true, e2ePassed: true, coveragePct: 80 }, reviseCycles: 5 }),
+      makeRun({ iteration: 2, verify: { unitPassed: true, e2ePassed: false, coveragePct: 80 }, reviseCycles: 1 }),
+    ];
+    const result = e2eFailureReviseCorrelation(runs);
+    expect(result.delta).toBeCloseTo(-4, 10);
+    expect(result.correlationCoefficient!).toBeLessThan(0);
   });
 });

@@ -27,6 +27,7 @@ import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel'
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { ModelEffectivenessPanel } from '@/components/ModelEffectivenessPanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
+import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -80,6 +81,7 @@ export default function Home() {
         <GateReasonBurdenChart runs={runs} />
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
+        <E2eReviseCorrelationPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
