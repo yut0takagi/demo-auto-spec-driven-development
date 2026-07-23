@@ -67,6 +67,11 @@ import {
   pausedDryRunDetails,
   pausedDryRunSummary,
   adversaryOutcomeDivergence,
+  ideationToStartLeadTimes,
+  ideationToStartLeadTimeTrendSignal,
+  IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
+  IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
+  ideationStartSuccessSummary,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -3901,6 +3906,251 @@ describe('ideationCostQualityCorrelation', () => {
     expect(result.batches.map((b) => b.costPerIssueUsd)).toEqual([0.1, 0.1]);
     expect(result.costVsApprovalRateCorrelation).toBeNull();
     expect(result.costVsMergeRateCorrelation).toBeNull();
+  });
+});
+
+describe('ideationToStartLeadTimes', () => {
+  it('nextIssuesに現れた反復のfinishedAtを提案時刻、issue.numberとして現れた反復のstartedAtを着手時刻としてリードタイム(秒)を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [10],
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:10:00Z',
+      }),
+    ];
+    expect(ideationToStartLeadTimes(runs)).toEqual([
+      {
+        issueNumber: 10,
+        proposedIteration: 1,
+        proposedAt: '2026-07-20T00:00:00Z',
+        startIteration: 2,
+        startedAt: '2026-07-20T00:10:00Z',
+        leadTimeSec: 600,
+      },
+    ]);
+  });
+
+  it.each<Verdict>(['failed', 'paused', 'dry-run', 'needs-human', 'abandoned'])(
+    '着手判定はverdictを問わない(%s でもissue.numberとして現れれば着手とみなす)',
+    (verdict) => {
+      const runs = [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+        makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict }),
+      ];
+      expect(ideationToStartLeadTimes(runs)).toHaveLength(1);
+    },
+  );
+
+  it('nextIssuesにも自分自身のissue番号にも一度も現れないissue（提案元不明）は対象外', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'x', labels: [] } })];
+    expect(ideationToStartLeadTimes(runs)).toEqual([]);
+  });
+
+  it('提案元の反復のiterationが着手反復以上（自己参照）の場合は対象外', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 5, title: 'x', labels: [] }, nextIssues: [5] }),
+    ];
+    expect(ideationToStartLeadTimes(runs)).toEqual([]);
+  });
+
+  it('提案されただけでまだ後続反復として着手されていないissueは含めない', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] })];
+    expect(ideationToStartLeadTimes(runs)).toEqual([]);
+  });
+
+  it('同一issue番号が複数回dispatchされても、最初の着手だけを1件として数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [10],
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:10:00Z',
+      }),
+      // 誤って再dispatchされた2回目。重複カウントされてはいけない
+      makeRun({
+        iteration: 3,
+        issue: { number: 10, title: 'x', labels: [] },
+        startedAt: '2026-07-20T05:00:00Z',
+      }),
+    ];
+    const points = ideationToStartLeadTimes(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].startIteration).toBe(2);
+  });
+
+  it('提案元の反復のnextIssuesに複数issueが含まれていても、それぞれ着手時に個別の点として現れる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [10, 20],
+      }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'a', labels: [] }, startedAt: '2026-07-20T00:05:00Z' }),
+      makeRun({ iteration: 3, issue: { number: 20, title: 'b', labels: [] }, startedAt: '2026-07-20T00:20:00Z' }),
+    ];
+    expect(ideationToStartLeadTimes(runs).map((p) => ({ issueNumber: p.issueNumber, leadTimeSec: p.leadTimeSec }))).toEqual([
+      { issueNumber: 10, leadTimeSec: 300 },
+      { issueNumber: 20, leadTimeSec: 1200 },
+    ]);
+  });
+
+  it('空配列で空配列を返す', () => {
+    expect(ideationToStartLeadTimes([])).toEqual([]);
+  });
+});
+
+describe('ideationToStartLeadTimeTrendSignal', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(ideationToStartLeadTimeTrendSignal([])).toBeNull();
+  });
+
+  it('着手済みissueが1件だけなら直前ウィンドウが取れず null（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] } }),
+    ];
+    expect(ideationToStartLeadTimeTrendSignal(runs)).toBeNull();
+  });
+
+  function proposeAndStart(
+    proposeIteration: number,
+    startIteration: number,
+    issueNumber: number,
+    leadTimeSec: number,
+  ): RunRecord[] {
+    return [
+      makeRun({
+        iteration: proposeIteration,
+        issue: { number: proposeIteration, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z',
+        nextIssues: [issueNumber],
+      }),
+      makeRun({
+        iteration: startIteration,
+        issue: { number: issueNumber, title: 'x', labels: [] },
+        startedAt: new Date(new Date('2026-07-20T00:00:00Z').getTime() + leadTimeSec * 1000).toISOString(),
+      }),
+    ];
+  }
+
+  it('リードタイムの直近平均が直前平均より閾値以上長いと increasing(悪化)', () => {
+    expect(IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT).toBe(5);
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 200),
+      ...proposeAndStart(9, 10, 105, 200),
+      ...proposeAndStart(11, 12, 106, 200),
+    ];
+    const signal = ideationToStartLeadTimeTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(IDEATION_TO_START_LEAD_TIME_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgSec).toBeCloseTo(200, 10);
+    expect(signal!.deltaPct).toBeCloseTo(100, 10);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.recentIterations).toEqual([8, 10, 12]);
+    expect(signal!.previousIterations).toEqual([2, 4, 6]);
+  });
+
+  it('リードタイムの直近平均が直前平均より短いと decreasing(改善)', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 200),
+      ...proposeAndStart(3, 4, 102, 200),
+      ...proposeAndStart(5, 6, 103, 200),
+      ...proposeAndStart(7, 8, 104, 100),
+      ...proposeAndStart(9, 10, 105, 100),
+      ...proposeAndStart(11, 12, 106, 100),
+    ];
+    const signal = ideationToStartLeadTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('decreasing');
+  });
+
+  it('変化率が閾値未満なら flat(横ばい)（境界値）', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 103),
+      ...proposeAndStart(9, 10, 105, 103),
+      ...proposeAndStart(11, 12, 106, 103),
+    ];
+    const signal = ideationToStartLeadTimeTrendSignal(runs);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('着手済みissueが2〜4件のときはwindowSizeがWINDOW未満に縮小し partial=true になる（境界値）', () => {
+    const runs = [...proposeAndStart(1, 2, 101, 100), ...proposeAndStart(3, 4, 102, 300)];
+    const signal = ideationToStartLeadTimeTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgSec).toBeCloseTo(300, 10);
+    expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+});
+
+describe('ideationStartSuccessSummary', () => {
+  it('runsが空なら提案0件・着手率null（境界値）', () => {
+    expect(ideationStartSuccessSummary([])).toEqual({
+      proposedTotal: 0,
+      startedCount: 0,
+      notStartedCount: 0,
+      startRate: null,
+      notStartedIssueNumbers: [],
+    });
+  });
+
+  it('提案issueのうち着手されたものと未着手のものを正しく分類し、着手率を算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'a', labels: [] } }),
+    ];
+    const summary = ideationStartSuccessSummary(runs);
+    expect(summary.proposedTotal).toBe(3);
+    expect(summary.startedCount).toBe(1);
+    expect(summary.notStartedCount).toBe(2);
+    expect(summary.startRate).toBeCloseTo(1 / 3, 10);
+    expect(summary.notStartedIssueNumbers).toEqual([20, 30]);
+  });
+
+  it('提案issueが全て着手されると着手率100%・未着手0件', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'a', labels: [] } }),
+    ];
+    const summary = ideationStartSuccessSummary(runs);
+    expect(summary.startRate).toBe(1);
+    expect(summary.notStartedIssueNumbers).toEqual([]);
+  });
+
+  it('提案元自身のissue番号がnextIssuesに含まれる自己参照は着手扱いにしない（未着手のまま残る）', () => {
+    const runs = [
+      makeRun({ iteration: 5, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10, 11] }),
+    ];
+    const summary = ideationStartSuccessSummary(runs);
+    expect(summary.proposedTotal).toBe(2);
+    expect(summary.startedCount).toBe(0);
+    expect(summary.notStartedIssueNumbers).toEqual([10, 11]);
+  });
+
+  it('nextIssuesを一度も出していない反復だけの場合は提案0件（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [] })];
+    expect(ideationStartSuccessSummary(runs).proposedTotal).toBe(0);
   });
 });
 

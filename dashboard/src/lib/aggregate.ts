@@ -2249,6 +2249,175 @@ export function ideationCostQualityCorrelation(runs: RunRecord[]): IdeationCostQ
   };
 }
 
+export interface IdeationToStartLeadTimePoint {
+  issueNumber: number;
+  /** issue を提案した(nextIssuesに含めた)反復番号 */
+  proposedIteration: number;
+  /** 提案時刻(提案元反復のfinishedAt) */
+  proposedAt: string;
+  /** issue.number として実際に着手された反復番号 */
+  startIteration: number;
+  /** 着手時刻(着手反復のstartedAt) */
+  startedAt: string;
+  /** 提案からの着手までのリードタイム(秒) = startedAt - proposedAt */
+  leadTimeSec: number;
+}
+
+/**
+ * Ideationが提案してから、実際にその issue が別反復として着手される(issue.number に
+ * 現れる)までのリードタイム(秒)の一覧。issueResolutionTimeTrend が「クローズ」（merged/
+ * abandoned）までを終点にするのに対し、こちらは「着手」（verdict を問わず後続反復が
+ * issue.number として受け取った瞬間）を終点にする。ゲートの結果が出るまでの実行時間を含めず
+ * 「バックログに積まれてからビルダーが手を付けるまで」だけを切り出すのが狙い。
+ *
+ * 「提案」は issueResolutionTimeTrend / ideationCostQualityCorrelation と同じく、issue番号が
+ * 最初にどこかの反復の nextIssues に現れた時点（その反復の finishedAt）。「着手」は
+ * ideationCostQualityCorrelation の attemptedCount と同じ判定（提案元より後のiterationで
+ * issue.number として現れた最初の反復）だが、こちらは verdict を問わず reachedVerify の
+ * 絞り込みもしない（failed でも「着手はした」という事実は変わらないため）。自己参照
+ * （nextIssuesが提案元自身のissue番号を含む）を除外する理由も issueResolutionTimeTrend と同じ。
+ * 複数回dispatchされたissueは最初の着手だけを1点として数える。
+ */
+export function ideationToStartLeadTimes(runs: RunRecord[]): IdeationToStartLeadTimePoint[] {
+  const sorted = byIterationAsc(runs);
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+
+  const startedIssueNumbers = new Set<number>();
+  const points: IdeationToStartLeadTimePoint[] = [];
+
+  for (const r of sorted) {
+    const created = createdBy.get(r.issue.number);
+    if (!created || created.iteration >= r.iteration) continue;
+    if (startedIssueNumbers.has(r.issue.number)) continue;
+
+    startedIssueNumbers.add(r.issue.number);
+    const leadTimeSec = (new Date(r.startedAt).getTime() - new Date(created.finishedAt).getTime()) / 1000;
+    points.push({
+      issueNumber: r.issue.number,
+      proposedIteration: created.iteration,
+      proposedAt: created.finishedAt,
+      startIteration: r.iteration,
+      startedAt: r.startedAt,
+      leadTimeSec,
+    });
+  }
+
+  return points;
+}
+
+/** トレンド判定に使う直近/直前ウィンドウの着手件数(既定値)。issueResolutionTimeTrendSignal と揃えている。 */
+export const IDEATION_TO_START_LEAD_TIME_TREND_WINDOW = 3;
+/** 直近ウィンドウの平均が直前ウィンドウよりこの割合(%)以上変化して初めて増加/減少と判定する。 */
+export const IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT = 5;
+
+/** increasing: 着手までのリードタイムが悪化(長期化)傾向。decreasing: 改善(短縮)傾向。 */
+export type IdeationToStartLeadTimeTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface IdeationToStartLeadTimeTrendSignal {
+  windowSize: number;
+  partial: boolean;
+  recentAvgSec: number;
+  previousAvgSec: number;
+  deltaSec: number;
+  deltaPct: number | null;
+  direction: IdeationToStartLeadTimeTrendDirection;
+  recentIterations: number[];
+  previousIterations: number[];
+}
+
+function ideationToStartLeadTimeDirection(
+  deltaSec: number,
+  previousAvgSec: number,
+): IdeationToStartLeadTimeTrendDirection {
+  if (previousAvgSec === 0) return deltaSec === 0 ? 'flat' : 'increasing';
+  const deltaPct = (deltaSec / previousAvgSec) * 100;
+  if (Math.abs(deltaPct) < IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * Ideation提案から着手までのリードタイムのトレンド観測。issueResolutionTimeTrendSignal と
+ * 同じローリング窓比較（直近window件の平均 vs 直前window件の平均）を、
+ * ideationToStartLeadTimes が返す着手済みissueの母集団（着手した順、= startIteration昇順）
+ * に対して行う。比較対象となる「直前」ウィンドウが取れない（着手済みissueが1件以下）場合は
+ * null。
+ */
+export function ideationToStartLeadTimeTrendSignal(runs: RunRecord[]): IdeationToStartLeadTimeTrendSignal | null {
+  const points = ideationToStartLeadTimes(runs);
+  if (points.length < 2) return null;
+
+  const windowSize = Math.min(IDEATION_TO_START_LEAD_TIME_TREND_WINDOW, Math.floor(points.length / 2));
+  const recent = points.slice(points.length - windowSize);
+  const previous = points.slice(points.length - windowSize * 2, points.length - windowSize);
+
+  const recentAvgSec = mean(recent.map((p) => p.leadTimeSec));
+  const previousAvgSec = mean(previous.map((p) => p.leadTimeSec));
+  const deltaSec = recentAvgSec - previousAvgSec;
+
+  return {
+    windowSize,
+    partial: windowSize < IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
+    recentAvgSec,
+    previousAvgSec,
+    deltaSec,
+    deltaPct: previousAvgSec === 0 ? null : (deltaSec / previousAvgSec) * 100,
+    direction: ideationToStartLeadTimeDirection(deltaSec, previousAvgSec),
+    recentIterations: recent.map((p) => p.startIteration),
+    previousIterations: previous.map((p) => p.startIteration),
+  };
+}
+
+export interface IdeationStartSuccessSummary {
+  /** Ideationが提案した(いずれかの反復のnextIssuesに現れた)ユニークissue数 */
+  proposedTotal: number;
+  /** 提案issueのうち、実際に別反復として着手された件数 */
+  startedCount: number;
+  /** 提案issueのうち、まだ一度も着手されていない件数 */
+  notStartedCount: number;
+  /** startedCount / proposedTotal。proposedTotal が0ならnull（提案自体が無い） */
+  startRate: number | null;
+  /** まだ着手されていない issue 番号(昇順)。バックログに滞留している提案 */
+  notStartedIssueNumbers: number[];
+}
+
+/**
+ * Ideationが提案したissueのうち、実際にどれだけの割合が着手（別反復のissue.numberとして
+ * 実行）まで至ったかの着手成功率サマリー。ideationFailureSummary が「ideationが提案を0件
+ * 出せたか」という生成側の失敗を見るのに対し、こちらは「生成された提案がバックログで
+ * 放置されず実際に手が付けられたか」という消化側の成功率を見る。判定方法は
+ * ideationToStartLeadTimes と同じ（提案元より後のiterationでissue.numberとして現れたか）。
+ */
+export function ideationStartSuccessSummary(runs: RunRecord[]): IdeationStartSuccessSummary {
+  const sorted = byIterationAsc(runs);
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+
+  const startedIssueNumbers = new Set(ideationToStartLeadTimes(runs).map((p) => p.issueNumber));
+  const proposedIssueNumbers = [...createdBy.keys()];
+  const notStartedIssueNumbers = proposedIssueNumbers
+    .filter((issueNumber) => !startedIssueNumbers.has(issueNumber))
+    .sort((a, b) => a - b);
+
+  return {
+    proposedTotal: proposedIssueNumbers.length,
+    startedCount: startedIssueNumbers.size,
+    notStartedCount: notStartedIssueNumbers.length,
+    startRate: proposedIssueNumbers.length === 0 ? null : startedIssueNumbers.size / proposedIssueNumbers.length,
+    notStartedIssueNumbers,
+  };
+}
+
 /**
  * abandoned（ゲートを再試行しても満たせず、人間に振らず自動で見送った）反復専用の
  * 追跡・分析サマリー。gateFailureTypeBreakdown は failed/abandoned/needs-human を
