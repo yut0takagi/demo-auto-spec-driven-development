@@ -6,6 +6,7 @@ import { IdeationToStartLeadTimeDistributionPanel } from '@/components/IdeationT
 import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
 import { IdeationProposalQualityDropPanel } from '@/components/IdeationProposalQualityDropPanel';
 import { IdeationEarlyAbandonmentPanel } from '@/components/IdeationEarlyAbandonmentPanel';
+import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 
 export default function IdeationPage() {
   const { runs } = loadRuns();
@@ -27,6 +28,7 @@ export default function IdeationPage() {
         <IdeationDropRatePanel runs={runs} />
         <IdeationProposalQualityDropPanel runs={runs} />
         <IdeationEarlyAbandonmentPanel runs={runs} />
+        <BacklogLowWaterEtaPanel runs={runs} />
       </div>
     </main>
   );

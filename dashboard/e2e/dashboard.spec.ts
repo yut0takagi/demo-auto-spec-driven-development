@@ -70,6 +70,7 @@ import {
   reviseCycleCostRecovery,
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
+  backlogLowWaterEta,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1649,6 +1650,38 @@ test('Ideation生成Issueの早期abandonment率パネルが実データから�
     expect(r.verdict).toBe('abandoned');
     expect(r.reviseCycles).toBeLessThanOrEqual(signal!.maxReviseCycles);
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('バックログ枯渇予測パネルが実データから導出した残量・消費速度・ETAを表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const eta = backlogLowWaterEta(runs);
+  expect(eta, 'runsが1件以上あればbacklogLowWaterEtaはnullを返さないはず').not.toBeNull();
+
+  const panel = page.getByTestId('backlog-low-water-eta-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-below-low-water', String(eta!.belowLowWater));
+
+  // 残量・ETAは backlogLowWaterEta()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('backlog-low-water-eta-balance')).toHaveText(String(eta!.currentBalance));
+  await expect(page.getByTestId('backlog-low-water-eta-value')).toHaveText(
+    eta!.etaIterations === null ? '—' : String(eta!.etaIterations),
+  );
+
+  const status = page.getByTestId('backlog-low-water-eta-status');
+  if (eta!.belowLowWater) {
+    await expect(status).toContainText('低水位に到達済み');
+  } else if (eta!.etaIterations === null) {
+    await expect(status).toContainText('減少傾向なし');
+  }
+
+  await expect(panel).toContainText(`対象iteration: ${eta!.iterations.join(', ')}`);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
