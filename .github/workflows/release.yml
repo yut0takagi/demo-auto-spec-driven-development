@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pull-requests: write
 
 concurrency:
@@ -51,9 +51,14 @@ jobs:
             "_この PR は release.yml が常設で維持し、develop が進むたび自動で最新化されます。_")
           PR=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number // empty')
           if [ -z "$PR" ]; then
-            gh pr create --base main --head develop --title "$TITLE" --body "$BODY"
-            echo "常設 PR を新規作成した。"
+            URL=$(gh pr create --base main --head develop --title "$TITLE" --body "$BODY")
+            PR=$(printf '%s' "$URL" | grep -oE '[0-9]+$')
+            echo "常設 PR #${PR} を新規作成した。"
           else
             gh pr edit "$PR" --title "$TITLE" --body "$BODY"
             echo "常設 PR #${PR} を最新（${N} commits 待ち）に更新した。"
           fi
+          # 自動リコンサイル: squash 昇格などで main↔develop の履歴が分岐しても、main を
+          # develop に取り込んで揃える。これで常設 PR の diff / コミット数が常にクリーンに保たれ、
+          # BEHIND（main が develop 未取り込みの過去マージを持つ状態）も自動解消される。
+          gh pr update-branch "$PR" 2>&1 | tail -1 || echo "update-branch は不要 or 一時失敗（次回再試行）"
