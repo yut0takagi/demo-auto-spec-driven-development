@@ -19,6 +19,7 @@ import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
 import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
+import { CostQualityElasticityTrendPanel } from '@/components/CostQualityElasticityTrendPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { MergedStreakPanel } from '@/components/MergedStreakPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
@@ -81,6 +82,7 @@ export default function Home() {
           <ModelCostBreakdown runs={runs} />
           <CostEfficiencyPanel runs={runs} />
         </div>
+        <CostQualityElasticityTrendPanel runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>

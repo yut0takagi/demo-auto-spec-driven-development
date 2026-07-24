@@ -152,6 +152,9 @@ import {
   GENERATION_RATE_WINDOW,
   GENERATION_RATE_SUSTAINABLE,
   GENERATION_RATE_ALERT_STREAK,
+  costQualityElasticityTrend,
+  costQualityElasticityTrendSignal,
+  ELASTICITY_WINDOW,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -9634,5 +9637,148 @@ describe('ideationExecutionConsumptionGapSignal', () => {
     expect(signal!.ratio).toBeCloseTo(0.05, 10);
     expect(signal!.direction).toBe('consumption-ahead');
     expect(signal!.triggered).toBe(true);
+  });
+});
+
+/** iteration 1..costs.length の完了(reachedVerify)runを、cost(USD)とapproved配列から生成する。 */
+function makeElasticityRuns(costs: number[], approved: boolean[]): RunRecord[] {
+  return costs.map((cost, i) =>
+    makeRun({
+      iteration: i + 1,
+      cost: { builderUsd: cost, adversaryUsd: 0, ideationUsd: 0, totalUsd: cost },
+      adversary: { approved: approved[i], summary: '' },
+      verdict: approved[i] ? 'merged' : 'needs-human',
+    }),
+  );
+}
+
+describe('costQualityElasticityTrend', () => {
+  it('runsが空なら空配列、ウィンドウ2倍未満(境界値)も空配列', () => {
+    expect(costQualityElasticityTrend([])).toEqual([]);
+    const short = Array(ELASTICITY_WINDOW * 2 - 1).fill(1);
+    expect(costQualityElasticityTrend(makeElasticityRuns(short, short.map(() => true)))).toEqual([]);
+  });
+
+  it('ちょうどELASTICITY_WINDOWの2倍件数だと点が1件だけ、期待通りの弾性値になる（境界値）', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2];
+    const approved = [false, false, false, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(10);
+    expect(points[0].costChangePct).toBeCloseTo(100, 10); // avg 1→2
+    expect(points[0].qualityChangePct).toBeCloseTo(150, 10); // 承認率 40%→100%
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+  });
+
+  it('コスト・品質とも各ウィンドウで単調増加していれば正の弾性が算出される', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points).toHaveLength(2);
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+    expect(points[1].iteration).toBe(11);
+    expect(points[1].costChangePct).toBeCloseTo(100, 10);
+    expect(points[1].qualityChangePct).toBeCloseTo(200 / 3, 10);
+    expect(points[1].elasticity).toBeCloseTo(2 / 3, 10);
+  });
+
+  it('直前ウィンドウの平均コストが0だとゼロ除算になるため elasticity は null', () => {
+    const costs = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+    const approved = [false, false, true, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].costChangePct).toBeNull();
+    expect(points[0].qualityChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('直前ウィンドウの承認率が0(基準がゼロ)だと品質変化率が定義できないため elasticity は null', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2];
+    const approved = [false, false, false, false, false, true, true, true, false, false];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].qualityChangePct).toBeNull();
+    expect(points[0].costChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('コスト変化率がちょうど0だと弾性はゼロ除算を避けて null になる（境界値）', () => {
+    const costs = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+    const approved = [false, false, false, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].costChangePct).toBe(0);
+    expect(points[0].qualityChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('failed run(reachedVerify=false)は母集団から除外される', () => {
+    const completed = makeElasticityRuns(
+      [1, 1, 1, 1, 1, 2, 2, 2, 2, 2],
+      [false, false, false, true, true, true, true, true, true, true],
+    );
+    // iteration 6 に failed run(巨大コスト999)を挟み、完了runは1-5,7-11にずらす
+    const runs: RunRecord[] = [
+      ...completed.slice(0, 5).map((r, i) => ({ ...r, iteration: i + 1 })),
+      makeRun({
+        iteration: 6,
+        verdict: 'failed',
+        cost: { builderUsd: 999, adversaryUsd: 999, ideationUsd: 999, totalUsd: 999 },
+        adversary: { approved: false, summary: '' },
+      }),
+      ...completed.slice(5).map((r, i) => ({ ...r, iteration: i + 7 })),
+    ];
+    const points = costQualityElasticityTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(11);
+    expect(points[0].recentAvgCostUsd).toBeCloseTo(2, 10); // 999が紛れ込んでいない
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+  });
+});
+
+describe('costQualityElasticityTrendSignal', () => {
+  it('runsが空、またはウィンドウ2倍未満(境界値)ならnull', () => {
+    expect(costQualityElasticityTrendSignal([])).toBeNull();
+    const short = Array(ELASTICITY_WINDOW * 2 - 1).fill(1);
+    expect(costQualityElasticityTrendSignal(makeElasticityRuns(short, short.map(() => true)))).toBeNull();
+  });
+
+  it('直近の弾性(絶対値)が過去平均より大きいと strengthening', () => {
+    // 1点目: elasticity=-40/-50=0.8, 2点目(最新): elasticity=-60/-50=1.2 → |1.2|>|0.8|
+    const costs = [4, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1];
+    const approved = [true, true, true, true, true, true, true, true, false, false, false];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(1.2, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(0.8, 10);
+    expect(signal!.sampleSize).toBe(1);
+    expect(signal!.direction).toBe('strengthening');
+  });
+
+  it('直近の弾性(絶対値)が過去平均より小さいと weakening', () => {
+    // 1点目: elasticity=1.5, 2点目(最新): elasticity=2/3 → |2/3|<|1.5|
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(2 / 3, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.direction).toBe('weakening');
+  });
+
+  it('直近の弾性(絶対値)が過去平均とほぼ同じ(閾値未満の変化)なら flat', () => {
+    // 1点目・2点目(最新)とも厳密に elasticity=1.5 になるよう cost/quality を設計
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2 / 3];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('最新点のelasticityがnull（コスト変化率0）だと判定不能でnull', () => {
+    const costs = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const runs = makeElasticityRuns(costs, approved);
+    expect(costQualityElasticityTrend(runs).at(-1)!.elasticity).toBeNull();
+    expect(costQualityElasticityTrendSignal(runs)).toBeNull();
   });
 });
