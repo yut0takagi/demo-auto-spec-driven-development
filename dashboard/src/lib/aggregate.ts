@@ -1904,7 +1904,7 @@ export type ReviseVerdictBucketLabel = '0' | '1' | '2' | '3+';
 
 const REVISE_VERDICT_BUCKET_ORDER: readonly ReviseVerdictBucketLabel[] = ['0', '1', '2', '3+'];
 
-function reviseVerdictBucket(reviseCycles: number): ReviseVerdictBucketLabel {
+export function reviseVerdictBucket(reviseCycles: number): ReviseVerdictBucketLabel {
   if (reviseCycles <= 0) return '0';
   if (reviseCycles === 1) return '1';
   if (reviseCycles === 2) return '2';
@@ -2157,6 +2157,77 @@ export function reviseCyclesSizeCurve(runs: RunRecord[]): ReviseSizeCurveSignal 
     mediumToLargeDelta,
     accelerationDelta,
   };
+}
+
+export interface ReviseCycleCostRecoveryBucket {
+  bucket: ReviseVerdictBucketLabel;
+  /** このbucketに属した反復数 */
+  count: number;
+  totalCostUsd: number;
+  meanCostUsd: number;
+  medianCostUsd: number;
+  minCostUsd: number;
+  maxCostUsd: number;
+  p90CostUsd: number;
+  /** verdict === 'merged' だった件数 */
+  mergedCount: number;
+  /** 0..1. mergedCount / count。「このbucketで消費したコストのうちmergeに到達した割合」＝回収効率 */
+  recoveryRate: number;
+  /** merge到達1件あたりの平均コスト(USD)。totalCostUsd / mergedCount。mergedCount=0ならnull（回収実績なし） */
+  usdPerMergedIteration: number | null;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * revise回数(bucket: 0/1/2/3+)ごとの API 呼び出しコスト(cost.totalUsd)分布と、
+ * そのコストが実際に merge へ回収された割合（回収効率）。
+ * reviseVerdictMatrix は revise回数×verdictの「件数」分布を見るのに対し、こちらは
+ * 件数ではなくコスト（金額）そのものの分布を見る。costEfficiency/costBreakdown は
+ * revise回数で束ねずコスト全体を集計するため、「revise回数が多い反復ほどコストが
+ * 嵩み、かつmergeに至る割合(回収効率)が下がる」という revise回数依存の傾向を
+ * 読み取れない。cost は cost.totalUsd（builder+adversary+ideation合算）を使う。
+ * costEfficiency と同じ理由で、verdictに関係なく実際に消費された金額をそのまま
+ * 分子に含める（failed/abandoned のコストも「回収できなかった支出」として bucket の
+ * 分布に含める必要があるため）。
+ * bucketはデータに実際に出現したものだけを、reviseVerdictMatrix と同じ順序で返す。
+ */
+export function reviseCycleCostRecovery(runs: RunRecord[]): ReviseCycleCostRecoveryBucket[] {
+  const byBucket = new Map<ReviseVerdictBucketLabel, { costs: number[]; mergedCount: number; iterations: number[] }>();
+
+  for (const run of byIterationAsc(runs)) {
+    const bucket = reviseVerdictBucket(run.reviseCycles);
+    let entry = byBucket.get(bucket);
+    if (!entry) {
+      entry = { costs: [], mergedCount: 0, iterations: [] };
+      byBucket.set(bucket, entry);
+    }
+    entry.costs.push(run.cost.totalUsd);
+    if (run.verdict === 'merged') entry.mergedCount++;
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byBucket.entries()]
+    .map(([bucket, entry]) => {
+      const sorted = [...entry.costs].sort((a, b) => a - b);
+      const totalCostUsd = entry.costs.reduce((a, b) => a + b, 0);
+      const count = entry.costs.length;
+      return {
+        bucket,
+        count,
+        totalCostUsd,
+        meanCostUsd: mean(entry.costs),
+        medianCostUsd: median(entry.costs),
+        minCostUsd: sorted[0],
+        maxCostUsd: sorted[sorted.length - 1],
+        p90CostUsd: percentile(sorted, 90),
+        mergedCount: entry.mergedCount,
+        recoveryRate: count === 0 ? 0 : entry.mergedCount / count,
+        usdPerMergedIteration: entry.mergedCount === 0 ? null : totalCostUsd / entry.mergedCount,
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => REVISE_VERDICT_BUCKET_ORDER.indexOf(a.bucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.bucket));
 }
 
 export interface VerdictDurationSummary {
