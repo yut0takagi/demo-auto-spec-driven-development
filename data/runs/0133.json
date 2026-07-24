@@ -1,0 +1,42 @@
+{
+  "id": "20260724T121423Z-214",
+  "iteration": 133,
+  "issue": {
+    "number": 214,
+    "title": "Ideation信頼度トレンドパネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/214-ideation",
+  "startedAt": "2026-07-24T12:14:23Z",
+  "finishedAt": "2026-07-24T12:34:01Z",
+  "durationSec": 1178,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 235,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation提案消費成功率にベイズ信頼度・加重スコアを適用した新パネル。要件充足、既存挙動無傷、テストは計算値・単調性・描画分岐を検証。行数制限内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 381,
+  "cost": {
+    "builderUsd": 4.712177,
+    "adversaryUsd": 0.106617,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.9180996999999997,
+    "totalUsd": 5.736894
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
