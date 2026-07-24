@@ -1,0 +1,42 @@
+{
+  "id": "20260724T100836Z-203",
+  "iteration": 124,
+  "issue": {
+    "number": 203,
+    "title": "Ideation提案⇔実消費の対応関係パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/203-ideation",
+  "startedAt": "2026-07-24T10:08:36Z",
+  "finishedAt": "2026-07-24T10:22:16Z",
+  "durationSec": 820,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 221,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を正しく満たし、既存挙動を保持し、境界値・空・未着手・着手・自己参照を網羅したテストで実装を実質的に検証している。変更行数も制限以内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 523,
+  "cost": {
+    "builderUsd": 4.17543,
+    "adversaryUsd": 0.06406,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 4.23949
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

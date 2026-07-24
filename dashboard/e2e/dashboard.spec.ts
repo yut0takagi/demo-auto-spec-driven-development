@@ -24,6 +24,7 @@ import {
   ideationFailureSummary,
   ideationFailureRateTrend,
   ideationCostQualityCorrelation,
+  ideationProposalConsumption,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
   e2eFailureBuilderWorkloadSeparation,
@@ -74,6 +75,7 @@ import {
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
+  backlogFlowByIteration,
   ideationQualityDegradationSignal,
 } from '../src/lib/aggregate';
 
@@ -1433,6 +1435,58 @@ test('Ideationコスト効率と生成品質の関連性パネルが実データ
   expect(body).not.toContain('undefined');
 });
 
+test('Ideation提案と実消費の対応関係パネルが実データから導出した提案issueごとの見積り・実績を表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  const stats = ideationProposalConsumption(runs);
+  expect(
+    stats.proposedCount,
+    'data/runs に ideation が提案を行った issue が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.startedCount,
+    'data/runs に提案issueが実際に着手された反復が1件も無く、実消費の対応付け経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-proposal-consumption-panel');
+  await expect(panel).toBeVisible();
+
+  await expect(page.getByTestId('ideation-proposal-consumption-proposed-count')).toHaveText(
+    String(stats.proposedCount),
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-started-count')).toHaveText(
+    String(stats.startedCount),
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-proposed-total')).toHaveText(
+    `$${stats.proposedTotalUsd.toFixed(3)}`,
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-actual-total')).toHaveText(
+    `$${stats.actualConsumedTotalUsd.toFixed(3)}`,
+  );
+
+  const ratioEl = page.getByTestId('ideation-proposal-consumption-ratio');
+  if (stats.consumptionRatio === null) {
+    await expect(ratioEl).toHaveText('算出不可');
+  } else {
+    await expect(ratioEl).toHaveText(`${stats.consumptionRatio.toFixed(1)}倍`);
+  }
+
+  // 行数は ideationProposalConsumption()（別の計算経路）と同数のはず
+  const rows = page.locator('[data-testid^="ideation-proposal-consumption-row-"]');
+  await expect(rows).toHaveCount(stats.rows.length);
+  const startedRow = stats.rows.find((r) => r.startIteration !== null);
+  if (startedRow) {
+    await expect(page.getByTestId(`ideation-proposal-consumption-row-${startedRow.issueNumber}`)).toContainText(
+      `$${(startedRow.actualCostUsd as number).toFixed(3)}`,
+    );
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
 test('Ideation→着手までのリードタイム・着手成功率観測パネルが実データから導出した着手率・未着手issue・リードタイム傾向を表示する', async ({
   page,
 }) => {
@@ -1726,6 +1780,41 @@ test('バックログ枯渇予測パネルが実データから導出した残�
   }
 
   await expect(panel).toContainText(`対象iteration: ${eta!.iterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('反復ごとのバックログ増減フローパネルが実データから導出したinflow/outflow/純増減・残量を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = backlogFlowByIteration(runs);
+  expect(points.length).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('backlog-flow-panel');
+  await expect(panel).toBeVisible();
+
+  // 集計値は backlogFlowByIteration()（別の計算経路）と一致するはず
+  const totalInflow = points.reduce((sum, p) => sum + p.inflow, 0);
+  const totalOutflow = points.reduce((sum, p) => sum + p.outflow, 0);
+  const totalNet = totalInflow - totalOutflow;
+  const currentBalance = points[points.length - 1].balance;
+
+  await expect(page.getByTestId('backlog-flow-total-inflow')).toHaveText(String(totalInflow));
+  await expect(page.getByTestId('backlog-flow-total-outflow')).toHaveText(String(totalOutflow));
+  await expect(page.getByTestId('backlog-flow-total-net')).toHaveText(
+    totalNet > 0 ? `+${totalNet}` : `${totalNet}`,
+  );
+  await expect(page.getByTestId('backlog-flow-balance')).toHaveText(String(currentBalance));
+  await expect(panel).toContainText(`対象iteration: ${points.map((p) => p.iteration).join(', ')}`);
+
+  // 反復ごとのバーが1本ずつ、過不足なく描画されているはず
+  await expect(page.locator('[data-testid^="backlog-flow-bar-"]')).toHaveCount(points.length);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

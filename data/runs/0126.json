@@ -1,0 +1,46 @@
+{
+  "id": "20260724T102536Z-204",
+  "iteration": 126,
+  "issue": {
+    "number": 204,
+    "title": "反復ごとのバックログ増減フロー表示",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/204-task",
+  "startedAt": "2026-07-24T10:25:36Z",
+  "finishedAt": "2026-07-24T10:38:39Z",
+  "durationSec": 783,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 225,
+  "adversary": {
+    "approved": true,
+    "summary": "反復ごとのバックログ増減フロー表示機能が要件通り実装され、単体・コンポーネント・E2E テストが挙動を実質的に検証。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 330,
+  "cost": {
+    "builderUsd": 4.056756,
+    "adversaryUsd": 0.063384,
+    "ideationUsd": 0.12268490000000001,
+    "plannerUsd": 0.0,
+    "totalUsd": 4.242825
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    222,
+    223,
+    224
+  ]
+}
