@@ -58,6 +58,8 @@ import {
   modelEfficiencyByRole,
   issueLabelSuccessRates,
   modelSkillStratification,
+  approvedButBuilderFailedSummary,
+  approvedButBuilderFailedIterations,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1700,6 +1702,63 @@ test('Abandoned反復の追跡・分析パネルが実データから導出し�
   const nonAbandonedIterations = runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(nonAbandonedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary承認済みなのにBuilder実装失敗パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = approvedButBuilderFailedSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に adversary承認済みなのに builder が失敗した反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('approved-builder-failed-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダ・サマリー指標は approvedButBuilderFailedSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('approved-builder-failed-count')).toHaveText(`${summary.count}件`);
+  await expect(page.getByTestId('approved-builder-failed-rate')).toHaveText(`${summary.ratePct.toFixed(1)}%`);
+  await expect(page.getByTestId('approved-builder-failed-cost')).toHaveText(`$${summary.totalCostUsd.toFixed(2)}`);
+
+  const topCategoryEl = page.getByTestId('approved-builder-failed-top-category');
+  if (summary.topCategory === null) {
+    await expect(topCategoryEl).toHaveText('なし');
+  } else {
+    await expect(topCategoryEl).toContainText(`${summary.topCategoryCount}件`);
+  }
+
+  // 一覧は approvedButBuilderFailedIterations()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = approvedButBuilderFailedIterations(runs);
+  const rows = page.locator('[data-testid^="approved-builder-failed-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`approved-builder-failed-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('approved-builder-failed-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: merged になった反復、および adversary が approve していない反復は
+  // このパネルの一覧に現れてはいけない
+  const ineligibleIterations = runs
+    .filter((r) => r.verdict === 'merged' || !r.adversary.approved)
+    .map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(ineligibleIterations).not.toContain(it);
   }
 
   const body = await bodyTextExcludingFreeform(page);

@@ -4145,3 +4145,101 @@ export function modelSkillStratification(runs: RunRecord[]): ModelSkillStratific
       return a.model.localeCompare(b.model);
     });
 }
+
+/**
+ * adversary が approve した（＝内容を読んで許可を出した）にもかかわらず、builder 側の
+ * 要因でゲートを通過できなかった反復を検出する。「Adversary 承認⇔実結果 乖離」の
+ * falseApprove は verdict の一致/不一致だけを見て非マージ全般を一括りにするのに対し、
+ * こちらは gateReasons を classifyGateReason で分類し、adversaryNotApproved /
+ * adversaryUnparseable（adversary 自身の判断内容の分類。定義上 approved=true の反復には
+ * 現れないはずだが、不整合データに備えて明示的に除外する）を除いた「builder が
+ * 実装として失敗した」ことを示す理由（verify失敗・e2e失敗・変更行数超過・保護パス変更・
+ * 変更なし・例外クラッシュ等）を持つ反復だけに絞り込む。paused/dry-run のように
+ * ゲート自体は通過している（gateReasons が空）反復は対象外になる。
+ */
+const ADVERSARY_SIDE_GATE_REASON_CATEGORIES: ReadonlySet<GateReasonCategory> = new Set([
+  'adversaryNotApproved',
+  'adversaryUnparseable',
+]);
+
+export interface ApprovedButBuilderFailedIteration {
+  iteration: number;
+  issueNumber: number;
+  issueTitle: string;
+  verdict: Verdict;
+  gateReasons: string[];
+  categories: GateReasonCategory[];
+  builderModel: string;
+  adversaryModel: string;
+  costUsd: number;
+}
+
+export function approvedButBuilderFailedIterations(runs: RunRecord[]): ApprovedButBuilderFailedIteration[] {
+  return byIterationAsc(runs)
+    .filter((r) => r.adversary.approved && r.verdict !== 'merged')
+    .map((r) => ({
+      r,
+      categories: r.gateReasons
+        .map((reason) => classifyGateReason(reason, r.adversary.summary))
+        .filter((c) => !ADVERSARY_SIDE_GATE_REASON_CATEGORIES.has(c)),
+    }))
+    .filter(({ categories }) => categories.length > 0)
+    .map(({ r, categories }) => ({
+      iteration: r.iteration,
+      issueNumber: r.issue.number,
+      issueTitle: r.issue.title,
+      verdict: r.verdict,
+      gateReasons: r.gateReasons,
+      categories,
+      builderModel: r.models.builder,
+      adversaryModel: r.models.adversary,
+      costUsd: r.cost.totalUsd,
+    }))
+    .reverse();
+}
+
+export interface ApprovedButBuilderFailedSummary {
+  /** 検知した反復数 */
+  count: number;
+  /** 分母。adversary.approved が true だった反復数（verdict は問わない） */
+  approvedCount: number;
+  /** 0..100。approvedCount が0なら0 */
+  ratePct: number;
+  /** 検知した反復が消費した合計コスト(USD) */
+  totalCostUsd: number;
+  /** 検知した反復の中で最も多く出現した builder 側カテゴリ。0件なら null */
+  topCategory: GateReasonCategory | null;
+  /** topCategory の出現件数（1反復が複数カテゴリを持つ場合は複数カウント）。topCategory が null なら0 */
+  topCategoryCount: number;
+}
+
+export function approvedButBuilderFailedSummary(runs: RunRecord[]): ApprovedButBuilderFailedSummary {
+  const details = approvedButBuilderFailedIterations(runs);
+  const approvedCount = runs.filter((r) => r.adversary.approved).length;
+  const totalCostUsd = details.reduce((sum, d) => sum + d.costUsd, 0);
+
+  const categoryCounts = new Map<GateReasonCategory, number>();
+  for (const d of details) {
+    for (const c of d.categories) {
+      categoryCounts.set(c, (categoryCounts.get(c) ?? 0) + 1);
+    }
+  }
+  let topCategory: GateReasonCategory | null = null;
+  let topCategoryCount = 0;
+  for (const category of GATE_REASON_CATEGORY_ORDER) {
+    const c = categoryCounts.get(category) ?? 0;
+    if (c > topCategoryCount) {
+      topCategoryCount = c;
+      topCategory = category;
+    }
+  }
+
+  return {
+    count: details.length,
+    approvedCount,
+    ratePct: approvedCount === 0 ? 0 : (details.length / approvedCount) * 100,
+    totalCostUsd,
+    topCategory,
+    topCategoryCount,
+  };
+}
