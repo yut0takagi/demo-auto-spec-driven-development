@@ -1,0 +1,42 @@
+{
+  "id": "20260724T150912Z-233",
+  "iteration": 144,
+  "issue": {
+    "number": 233,
+    "title": "Model切り替え直後のパフォーマンスギャップ計測パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/233-model",
+  "startedAt": "2026-07-24T15:09:12Z",
+  "finishedAt": "2026-07-24T15:32:35Z",
+  "durationSec": 1403,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 250,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件（Model切り替え後のパフォーマンスギャップ計測）を完全に満たしており、既存の区間分割ロジックと一貫している。テストは境界値・複数イベント・再登板の独立性を含め実装を実質的に検証している。コンポーネント統合も既存ページ構成に自然に組み込まれており、新規機能として well-formed である。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 361,
+  "cost": {
+    "builderUsd": 5.322194,
+    "adversaryUsd": 0.05449,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.45823899999999995,
+    "totalUsd": 5.834923
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
