@@ -1,0 +1,42 @@
+{
+  "id": "20260724T134121Z-224",
+  "iteration": 138,
+  "issue": {
+    "number": 224,
+    "title": "Cost-to-quality elasticity trend: コスト増加に対する品質向上の弾性率（Cost-Quality ROI）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/224-cost-to-quality-elasticity-trend-cost-qu",
+  "startedAt": "2026-07-24T13:41:21Z",
+  "finishedAt": "2026-07-24T14:16:35Z",
+  "durationSec": 2114,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 244,
+  "adversary": {
+    "approved": true,
+    "summary": "3つのパネル実装（Ideation信頼度トレンド・モデル役別コスト偏差・ゲート不通過理由共起クラスタ）は要件を正確に満たし、既存機能を壊さず、計算ロジック・エッジケース・描画分岐をテストで実質的に検証している。敵対的レビュー合格済み。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 395,
+  "cost": {
+    "builderUsd": 15.982636,
+    "adversaryUsd": 0.133352,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.6128344,
+    "totalUsd": 16.728822
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
