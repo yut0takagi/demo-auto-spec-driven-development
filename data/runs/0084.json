@@ -1,0 +1,41 @@
+{
+  "id": "20260724T011133Z-142",
+  "iteration": 84,
+  "issue": {
+    "number": 142,
+    "title": "Issue Label Signal Mining — Success Rate by Issue Category",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/142-issue-label-signal-mining-success-rate-b",
+  "startedAt": "2026-07-24T01:11:33Z",
+  "finishedAt": "2026-07-24T01:26:19Z",
+  "durationSec": 886,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 145,
+  "adversary": {
+    "approved": true,
+    "summary": "Test improvements add edge case coverage for zero-rate handling and sort stability in issueLabelSuccessRates(). Tests verify the maxRate || 1 safeguard prevents 0-division NaN in bar rendering. All changes are substantive, non-tautological, and align with task requirements."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 36,
+  "cost": {
+    "builderUsd": 3.707863,
+    "adversaryUsd": 0.162206,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.870069
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
