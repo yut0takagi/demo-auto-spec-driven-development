@@ -136,3 +136,41 @@ def test_uses_configured_models_for_each_role():
     builder_cmd, adversary_cmd = runner.calls[0][0], runner.calls[3][0]
     assert builder_cmd[builder_cmd.index("--model") + 1] == "claude-sonnet-5"
     assert adversary_cmd[adversary_cmd.index("--model") + 1] == "claude-haiku-4-5"
+
+
+def test_escalates_builder_model_after_threshold():
+    # ESCALATE_AFTER_CYCLES=1: cycle0 の builder は base、revise(cycle1) は昇格モデルを使う。
+    runner = FakeRunner([
+        agent_out("v1"),                     # builder cycle0 (base)
+        CommandResult(1, "", "err"),         # verify 失敗
+        agent_out("r1"),                     # revise cycle1 (escalated)
+        OK, OK, agent_out(APPROVE),          # verify, e2e, approve
+    ])
+    outcome = run_native_round(
+        task="t", diff_provider=lambda: "d", cwd="/repo",
+        cfg=Config.from_env({"ESCALATE_AFTER_CYCLES": "1"}), runner=runner,
+    )
+    work_cmd = runner.calls[0][0]
+    revise_cmd = runner.calls[2][0]
+    assert work_cmd[work_cmd.index("--model") + 1] == "claude-sonnet-5"
+    assert revise_cmd[revise_cmd.index("--model") + 1] == "claude-opus-4-8"
+    assert outcome.builder_model_used == "claude-opus-4-8"
+
+
+def test_no_escalation_when_green_early_keeps_base_model():
+    runner = FakeRunner([agent_out("v1"), OK, OK, agent_out(APPROVE)])
+    outcome = run_native_round(
+        task="t", diff_provider=lambda: "d", cwd="/repo",
+        cfg=Config.from_env({}), runner=runner,
+    )
+    assert outcome.builder_model_used == "claude-sonnet-5"
+
+
+def test_plan_is_injected_into_builder_prompt():
+    runner = FakeRunner([agent_out("v1"), OK, OK, agent_out(APPROVE)])
+    run_native_round(
+        task="t", diff_provider=lambda: "d", cwd="/repo",
+        cfg=Config.from_env({}), runner=runner, plan="## 設計方針\nルータ導入",
+    )
+    builder_cmd = runner.calls[0][0]
+    assert "ルータ導入" in builder_cmd[2]
