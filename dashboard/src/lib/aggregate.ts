@@ -3784,6 +3784,53 @@ export function abandonedReasonBreakdown(runs: RunRecord[]): GateReasonCategoryS
   return gateReasonBreakdown(runs.filter((r) => r.verdict === 'abandoned'));
 }
 
+/** abandonedSharePct と overallSharePct の差（ポイント）がこの値以上なら偏りありと判定する。 */
+export const ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT = 10;
+
+export interface AbandonedReasonOverrepresentation extends GateReasonCategorySummary {
+  /** このカテゴリが abandoned 内訳全体に占める割合(%) */
+  abandonedSharePct: number;
+  /** このカテゴリが「gateReasonsを持つ全反復」の内訳全体に占める割合(%)。abandonedもこの母集団に含まれる */
+  overallSharePct: number;
+  /** abandonedSharePct - overallSharePct（パーセントポイント） */
+  deltaPct: number;
+  /** deltaPct が閾値を超えて偏っているかどうか */
+  signal: 'overrepresented' | 'underrepresented' | 'neutral';
+}
+
+/**
+ * abandonedReasonBreakdown が「abandonedの中でカテゴリがどう分布しているか」しか
+ * 示さないのに対し、こちらは各カテゴリの abandoned内での占有率を、gateReasons を
+ * 持つ全反復（abandoned以外のfailed/needs-human等も含む母集団）での占有率と比較し、
+ * abandonedで相対的に突出している原因（例: 他の非マージ類型では稀だが abandoned では
+ * 過半数を占める、等）を検出する。「原因カテゴリの分布」自体は abandonedReasonBreakdown
+ * と同じ計算結果を使い、そこに相対比較の軸を1つ足すだけなので、カテゴリの集合・count・
+ * iterations・examples はそのまま引き継ぐ（GateReasonCategorySummary を拡張）。
+ * abandoned が0件なら空配列を返す（abandonedReasonBreakdown が空配列を返すため）。
+ */
+export function abandonedReasonOverrepresentation(runs: RunRecord[]): AbandonedReasonOverrepresentation[] {
+  const abandonedBreakdown = abandonedReasonBreakdown(runs);
+  if (abandonedBreakdown.length === 0) return [];
+
+  const abandonedTotal = abandonedBreakdown.reduce((sum, b) => sum + b.count, 0);
+  const overallBreakdown = gateReasonBreakdown(runs);
+  const overallTotal = overallBreakdown.reduce((sum, b) => sum + b.count, 0);
+  const overallCountByCategory = new Map(overallBreakdown.map((b) => [b.category, b.count]));
+
+  return abandonedBreakdown.map((b) => {
+    const abandonedSharePct = (b.count / abandonedTotal) * 100;
+    const overallSharePct = overallTotal > 0 ? ((overallCountByCategory.get(b.category) ?? 0) / overallTotal) * 100 : 0;
+    const deltaPct = abandonedSharePct - overallSharePct;
+    const signal: AbandonedReasonOverrepresentation['signal'] =
+      deltaPct >= ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT
+        ? 'overrepresented'
+        : deltaPct <= -ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT
+          ? 'underrepresented'
+          : 'neutral';
+    return { ...b, abandonedSharePct, overallSharePct, deltaPct, signal };
+  });
+}
+
 /**
  * types.ts の Verdict コメントの通り、paused は「人間がキルスイッチで止めた」、
  * dry-run は「最初からマージしない設定だった」という別事象。gateReasons はどちらも

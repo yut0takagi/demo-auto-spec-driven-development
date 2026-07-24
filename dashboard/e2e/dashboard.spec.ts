@@ -40,6 +40,7 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   abandonedReasonBreakdown,
+  abandonedReasonOverrepresentation,
   adversaryApprovalByReasonAndModel,
   pausedDryRunSummary,
   pausedDryRunDetails,
@@ -1855,6 +1856,30 @@ test('打ち止め（abandoned）の原因分類パネルが実データから�
     for (const it of b.iterations) {
       expect(nonAbandonedIterations.has(it)).toBe(false);
     }
+  }
+
+  // 各行のoverrepresented/underrepresented/neutralバッジが abandonedReasonOverrepresentation（別の計算経路）と一致する
+  const overrep = abandonedReasonOverrepresentation(runs);
+  const signalLabel = { overrepresented: '全体より突出', underrepresented: '全体より少ない', neutral: '全体と同程度' };
+  for (const o of overrep) {
+    const sign = o.deltaPct >= 0 ? '+' : '';
+    const signalEl = page.getByTestId(`abandoned-reason-signal-${o.category}`);
+    await expect(signalEl).toHaveText(`${signalLabel[o.signal]} (${sign}${o.deltaPct.toFixed(1)}pt)`);
+  }
+
+  // 最も突出したカテゴリが存在する場合、そのカテゴリ名(行に表示されているのと同じラベル文字列)がサマリー文に含まれる
+  const topOverrepresented = overrep.filter((o) => o.signal === 'overrepresented').sort((a, b) => b.deltaPct - a.deltaPct)[0];
+  const summaryEl = page.getByTestId('abandoned-reason-top-overrepresented');
+  if (topOverrepresented) {
+    const topLabel = await page
+      .getByTestId(`abandoned-reason-row-${topOverrepresented.category}`)
+      .locator('span')
+      .first()
+      .textContent();
+    await expect(summaryEl).toBeVisible();
+    await expect(summaryEl).toContainText(topLabel!);
+  } else {
+    await expect(summaryEl).toHaveCount(0);
   }
 
   const body = await bodyTextExcludingFreeform(page);
