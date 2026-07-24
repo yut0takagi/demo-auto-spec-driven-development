@@ -50,9 +50,11 @@ REVISE_PROMPT_TEMPLATE = """\
 _UNREVIEWED = "verify/e2e が未通過のためレビュー未実施"
 
 
-def _builder_model(cycles: int, cfg: Config) -> str:
-    """revise が escalate_after_cycles に達したら上位モデルへ昇格する。"""
-    if cycles >= cfg.escalate_after_cycles:
+def _builder_model(cycles: int, cfg: Config, plan: str) -> str:
+    """revise が escalate_after_cycles に達したら上位モデルへ昇格する。
+    ただし plan フェーズが有効（plan 非空）なときだけ昇格する。plan 無し（現行ライブ経路）は
+    従来どおり builder_model のまま — 無人ループのモデル/コストを不用意に変えない。"""
+    if plan and cycles >= cfg.escalate_after_cycles:
         return cfg.builder_escalation_model
     return cfg.builder_model
 
@@ -120,7 +122,7 @@ def run_native_round(
     builder_cost = 0.0
     adversary_cost = 0.0
 
-    model_used = _builder_model(0, cfg)
+    model_used = _builder_model(0, cfg, plan)
     work = run_agent(
         _builder_prompt(task, plan),
         model=model_used, cwd=cwd, runner=runner,
@@ -161,7 +163,7 @@ def run_native_round(
             verify_ok=verify_ok, verify_res=verify_res,
             e2e_ok=e2e_ok, e2e_res=e2e_res, verdict=verdict,
         )
-        model_used = _builder_model(cycles, cfg)
+        model_used = _builder_model(cycles, cfg, plan)
         revise = run_agent(
             REVISE_PROMPT_TEMPLATE.format(task=task, feedback=feedback),
             model=model_used, cwd=cwd, runner=runner,

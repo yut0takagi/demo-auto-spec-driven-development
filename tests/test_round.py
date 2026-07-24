@@ -149,12 +149,30 @@ def test_escalates_builder_model_after_threshold():
     outcome = run_native_round(
         task="t", diff_provider=lambda: "d", cwd="/repo",
         cfg=Config.from_env({"ESCALATE_AFTER_CYCLES": "1"}), runner=runner,
+        plan="## 設計\nルータ導入",
     )
     work_cmd = runner.calls[0][0]
     revise_cmd = runner.calls[2][0]
     assert work_cmd[work_cmd.index("--model") + 1] == "claude-sonnet-5"
     assert revise_cmd[revise_cmd.index("--model") + 1] == "claude-opus-4-8"
     assert outcome.builder_model_used == "claude-opus-4-8"
+
+
+def test_no_escalation_without_plan_even_after_threshold():
+    # plan 無し（ライブ経路）: 何サイクル revise しても base モデルのまま（昇格しない）。
+    runner = FakeRunner([
+        agent_out("v1"), CommandResult(1, "", "e"),   # cycle0 verify fail
+        agent_out("r1"), CommandResult(1, "", "e"),   # cycle1 verify fail
+        agent_out("r2"), OK, OK, agent_out(APPROVE),  # cycle2 green
+    ])
+    outcome = run_native_round(
+        task="t", diff_provider=lambda: "d", cwd="/repo",
+        cfg=Config.from_env({"ESCALATE_AFTER_CYCLES": "1"}), runner=runner,  # no plan=
+    )
+    # cycle2 >= threshold(1) だが plan 無しなので昇格しない
+    revise2_cmd = runner.calls[4][0]  # r2 の builder 呼び出し
+    assert revise2_cmd[revise2_cmd.index("--model") + 1] == "claude-sonnet-5"
+    assert outcome.builder_model_used == "claude-sonnet-5"
 
 
 def test_no_escalation_when_green_early_keeps_base_model():

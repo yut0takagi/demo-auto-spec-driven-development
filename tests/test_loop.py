@@ -431,6 +431,15 @@ class TestNoChanges:
         assert "open_pr" in gh.actions
 
 
+class TestModelRecording:
+    def test_record_reflects_escalated_builder_model(self, tmp_path):
+        gh = FakeGh()
+        outcome = approved_round(builder_model_used="claude-opus-4-8")
+        run(tmp_path, gh=gh, round_outcome=outcome)
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["models"]["builder"] == "claude-opus-4-8"
+
+
 class TestPlanPhase:
     def test_planner_runs_before_builder_and_plan_reaches_round(self, tmp_path):
         seen = {}

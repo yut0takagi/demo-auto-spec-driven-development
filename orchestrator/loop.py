@@ -194,8 +194,8 @@ def run_iteration(
     # planner 未注入（ライブ loop.yml）なら何もしない＝従来動作を厳密に保つ。
     plan_text = ""
     planner_cost = 0.0
+    _task = f"{issue.title}\n\n(issue #{issue.number})"
     if planner is not None:
-        _task = f"{issue.title}\n\n(issue #{issue.number})"
         for _ in range(cfg.max_plan_cycles + 1):
             p = planner(task=_task, cfg=cfg, cwd=repo_root)
             planner_cost += float(p.get("cost_usd", 0.0))
@@ -211,7 +211,7 @@ def run_iteration(
     gh.create_branch(branch, cfg.base_branch)
 
     outcome = round_runner(
-        task=f"{issue.title}\n\n(issue #{issue.number})",
+        task=_task,
         diff_provider=lambda: gh.diff(cfg.base_branch),
         cwd=repo_root,
         cfg=cfg,
@@ -351,7 +351,7 @@ def _record(
                 planner_usd=planner_cost,
             ),
             models={
-                "builder": cfg.builder_model,
+                "builder": outcome.builder_model_used or cfg.builder_model,
                 "adversary": cfg.adversary_model,
                 "ideation": cfg.ideation_model,
             },
