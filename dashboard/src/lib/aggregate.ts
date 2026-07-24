@@ -3772,6 +3772,19 @@ export function abandonedIterationDetails(runs: RunRecord[]): AbandonedIteration
 }
 
 /**
+ * abandoned（打ち止め）反復だけに絞り込んだゲート不通過理由のカテゴリ内訳。
+ * abandonedSummary.topGateReasonCategory は最多カテゴリ1件しか持たないため、
+ * 「abandonedの中でカテゴリがどう分布しているか」（例: adversary未承認が過半数を
+ * 占めるのか、複数原因に分散しているのか）は表現できない。こちらは
+ * gateReasonBreakdown をabandonedのみに絞ったrun集合へ適用し、全カテゴリの内訳
+ * （count降順、他は評価順で安定）をそのまま返す。gateReasonBreakdown自身が空配列に
+ * 対して空配列を返すため、abandonedが0件でも空配列になる。
+ */
+export function abandonedReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummary[] {
+  return gateReasonBreakdown(runs.filter((r) => r.verdict === 'abandoned'));
+}
+
+/**
  * types.ts の Verdict コメントの通り、paused は「人間がキルスイッチで止めた」、
  * dry-run は「最初からマージしない設定だった」という別事象。gateReasons はどちらも
  * ゲート自体は通過しているため常に空配列で、abandoned のように理由を分類できない。

@@ -66,6 +66,7 @@ import {
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
   abandonedSummary,
+  abandonedReasonBreakdown,
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
@@ -5592,6 +5593,45 @@ describe('abandonedSummary', () => {
     // failed の changedLinesExceeded ではなく abandoned 側の adversaryNotApproved が最多
     expect(s.topGateReasonCategory).toBe('adversaryNotApproved');
     expect(s.topGateReasonCount).toBe(2);
+  });
+});
+
+describe('abandonedReasonBreakdown', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(abandonedReasonBreakdown([])).toEqual([]);
+  });
+
+  it('abandonedが1件も無ければ、他verdictのgateReasonsが存在しても空配列を返す（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      makeRun({ iteration: 2, verdict: 'merged', gateReasons: [] }),
+    ];
+    expect(abandonedReasonBreakdown(runs)).toEqual([]);
+  });
+
+  it('abandoned以外のrunのgateReasonsを混ぜず、abandonedのみをカテゴリ別に件数降順で集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+      }),
+      // failed の gateReasons は abandoned の内訳を汚染してはいけない
+      makeRun({ iteration: 4, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      makeRun({ iteration: 5, verdict: 'merged', gateReasons: [] }),
+    ];
+    const breakdown = abandonedReasonBreakdown(runs);
+
+    expect(breakdown.map((b) => b.category)).toEqual(['adversaryNotApproved', 'changedLinesExceeded']);
+    expect(breakdown.map((b) => b.count)).toEqual([2, 1]);
+
+    const adversaryEntry = breakdown.find((b) => b.category === 'adversaryNotApproved');
+    expect(adversaryEntry?.iterations).toEqual([1, 2]);
+
+    // gateReasonBreakdown(runs) をそのまま使うと failed のカテゴリ(crashed)が混入してしまう
+    expect(breakdown.some((b) => b.category === 'crashed')).toBe(false);
   });
 });
 
