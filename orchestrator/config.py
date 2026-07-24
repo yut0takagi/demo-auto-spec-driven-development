@@ -30,6 +30,14 @@ class Config:
     #: ready がこの件数未満なら反復先頭で ideation を先回り実行して補充する（枯れ防止）。
     #: 大きいほど常時のバックログ在庫が厚くなる（見やすさ・ideation 失敗耐性が上がる）。
     ideation_low_water: int = 6
+    #: planner（自律 spec+plan）が使うモデル。
+    planner_model: str = "claude-sonnet-5"
+    #: revise が escalate_after_cycles に達したら builder を切り替える上位モデル。
+    builder_escalation_model: str = "claude-opus-4-8"
+    #: revise サイクルがこの回数に達したら builder モデルを昇格する。
+    escalate_after_cycles: int = 2
+    #: plan-review 却下からの再計画の上限。
+    max_plan_cycles: int = 2
     builder_model: str = "claude-sonnet-5"
     adversary_model: str = "claude-haiku-4-5"
     ideation_model: str = "claude-haiku-4-5"
@@ -54,6 +62,10 @@ class Config:
             per_iter_cost_budget_usd=float(env.get("PER_ITER_COST_BUDGET_USD", 0.5)),
             ideation_max_issues=int(env.get("IDEATION_MAX_ISSUES", 3)),
             ideation_low_water=int(env.get("IDEATION_LOW_WATER", 6)),
+            planner_model=env.get("PLANNER_MODEL", "claude-sonnet-5"),
+            builder_escalation_model=env.get("BUILDER_ESCALATION_MODEL", "claude-opus-4-8"),
+            escalate_after_cycles=int(env.get("ESCALATE_AFTER_CYCLES", 2)),
+            max_plan_cycles=int(env.get("MAX_PLAN_CYCLES", 2)),
             builder_model=env.get("BUILDER_MODEL", "claude-sonnet-5"),
             adversary_model=env.get("ADVERSARY_MODEL", "claude-haiku-4-5"),
             ideation_model=env.get("IDEATION_MODEL", "claude-haiku-4-5"),
