@@ -95,4 +95,19 @@ describe('IssueLabelSuccessRatePanel', () => {
     expect(parseFloat(barA.style.width)).toBeCloseTo(100, 2);
     expect(parseFloat(barB.style.width)).toBeCloseTo(50, 2);
   });
+
+  it('全labelの成功率が0%のとき、maxRateの0除算(NaN幅)にならずバーが0%幅で描画される', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['stale'] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 2, title: 'b', labels: ['stale'] } }),
+    ];
+    const { container } = render(<IssueLabelSuccessRatePanel runs={runs} />);
+
+    const bar = container.querySelector('[data-testid="issue-label-success-rate-bar-stale"]') as HTMLElement;
+    expect(Number.isNaN(parseFloat(bar.style.width))).toBe(false);
+    expect(parseFloat(bar.style.width)).toBeCloseTo(0, 2);
+
+    const value = container.querySelector('[data-testid="issue-label-success-rate-value-stale"]');
+    expect(value?.textContent).toBe('成功率0.0% (0/2件)');
+  });
 });
