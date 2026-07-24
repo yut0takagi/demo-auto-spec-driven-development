@@ -232,8 +232,10 @@ class TestGateFailures:
         assert "open_pr" not in gh.actions
 
     def test_oversized_diff_is_abandoned(self, tmp_path):
+        # 上限のデフォルト値に依存せず gate 機構を検証するため、明示的に小さい上限を渡す。
+        cfg = Config.from_env({"MAX_CHANGED_LINES": "100"})
         gh = FakeGh(changed_lines=9999)
-        result = run(tmp_path, gh=gh)
+        result = run(tmp_path, gh=gh, cfg=cfg)
         assert result.status == "abandoned"
 
     def test_failed_verify_is_abandoned(self, tmp_path):
@@ -252,8 +254,14 @@ class TestGateFailures:
     def test_blocked_iteration_still_refuels_low_backlog(self, tmp_path):
         # 旧: 失敗反復は follow-up を作らなかった。新設計では給油は gate 結果と独立に反復先頭で
         # 先回りするため、abandon で終わる反復でもバックログは補充される（枯れさせない意図的変更）。
-        gh = FakeGh(changed_lines=9999)  # ready 1 件 < low_water(2) → 冒頭で給油
-        result = run(tmp_path, gh=gh, proposals=("refuel idea",))
+        # abandon 理由は問わない（gate 不通過ならよい）。行数上限に依存しないよう adversary 却下で落とす。
+        gh = FakeGh()  # ready 1 件 < low_water → 冒頭で給油
+        result = run(
+            tmp_path, gh=gh, proposals=("refuel idea",),
+            round_outcome=approved_round(
+                adversary=AdversaryVerdict(approved=False, summary="reject")
+            ),
+        )
         assert result.status == "abandoned"
         assert gh.created_issues == ["refuel idea"]
 
