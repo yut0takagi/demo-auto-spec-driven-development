@@ -1,18 +1,30 @@
-name: loop-v2 (planner 検証)
+name: loop-v2 (planner 本配線)
 
-# dispatch 専用。planner+plan-review が良い計画を出すか安全に検証する（build/merge しない）。
-# cron は付けない — ライブは loop.yml のまま。3ジョブのブックエンド本配線は Phase B2。
+# dispatch 専用。planner を有効化した full-iteration を検証する。
+# dry_run=true(既定): plan→build→verify→e2e→adversary まで通し、マージしない（安全）。
+# dry_run=false: 実際に develop へマージ（計画に沿ったビルドを本番投入）。
+# cron は付けない — ライブ定期実行は loop.yml のまま。
 on:
   workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'true=マージしない(検証) / false=develop へマージ'
+        type: boolean
+        default: true
 
 permissions:
-  contents: read
-  issues: read
+  contents: write
+  pull-requests: write
+  issues: write
+
+concurrency:
+  group: loop-v2
+  cancel-in-progress: false
 
 jobs:
-  plan:
+  iterate:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
         with:
@@ -22,10 +34,20 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '24'
+          cache: npm
+          cache-dependency-path: dashboard/package-lock.json
 
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      - name: Install dashboard deps
+        working-directory: dashboard
+        run: npm ci
+
+      - name: Install Playwright browser
+        working-directory: dashboard
+        run: npx playwright install --with-deps chromium
 
       - name: Install Claude Code CLI
         run: npm install -g @anthropic-ai/claude-code
@@ -35,20 +57,31 @@ jobs:
           git config user.name "loop-bot"
           git config user.email "loop-bot@users.noreply.github.com"
 
-      - name: Run plan phase (計画のみ・build/merge しない)
+      - name: Run planned iteration
         env:
           CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           REPO_ROOT: ${{ github.workspace }}
+          LOOP_PLANNING: '1'
+          LOOP_DRY_RUN: ${{ inputs.dry_run && '1' || '0' }}
+          BUILDER_MODEL: ${{ vars.BUILDER_MODEL || 'claude-sonnet-5' }}
           PLANNER_MODEL: ${{ vars.PLANNER_MODEL || 'claude-sonnet-5' }}
           ADVERSARY_MODEL: ${{ vars.ADVERSARY_MODEL || 'claude-haiku-4-5' }}
           IDEATION_MODEL: ${{ vars.IDEATION_MODEL || 'claude-haiku-4-5' }}
-        run: python -m orchestrator plan
+          DAILY_COST_BUDGET_USD: ${{ vars.DAILY_COST_BUDGET_USD || '100' }}
+        run: python -m orchestrator
 
-      - name: Upload handoff (計画の中身)
+      - name: Record data (検証時も記録を残す)
+        if: always()
+        run: |
+          if [[ -n "$(git status --porcelain data/)" ]]; then
+            git add data/ && git commit -m "chore(loop-v2): record [skip ci]" || true
+          fi
+
+      - name: Upload run record
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: plan-handoff
-          path: data/handoff/iteration.json
+          name: loop-v2-data
+          path: data/
           if-no-files-found: warn
