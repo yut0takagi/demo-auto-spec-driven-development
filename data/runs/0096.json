@@ -1,0 +1,45 @@
+{
+  "id": "20260724T034424Z-153",
+  "iteration": 96,
+  "issue": {
+    "number": 153,
+    "title": "Builder生成量と承認率のカップリング分析",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/153-builder",
+  "startedAt": "2026-07-24T03:44:24Z",
+  "finishedAt": "2026-07-24T04:01:04Z",
+  "durationSec": 1000,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 165,
+  "adversary": {
+    "approved": true,
+    "summary": "Builder生成量と承認率のカップリング分析パネルの追加。ローリング窓での連動判定、Pearson相関係数、方向判定ロジックが仕様通り実装されており、全境界値・異常系をカバーする包括的なテストが実装を検証している。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 462,
+  "cost": {
+    "builderUsd": 5.69577,
+    "adversaryUsd": 0.057411,
+    "ideationUsd": 0.30604275000000003,
+    "totalUsd": 6.059224
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    160,
+    161,
+    162
+  ]
+}
