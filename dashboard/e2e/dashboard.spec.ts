@@ -61,6 +61,7 @@ import {
   reviseCyclesSizeCurve,
   modelEfficiencyByRole,
   issueLabelSuccessRates,
+  modelIssueLabelSuccessMatrix,
   modelSkillStratification,
   approvedButBuilderFailedSummary,
   approvedButBuilderFailedIterations,
@@ -1083,6 +1084,59 @@ test('Adversaryモデル別×Verdict別 見落とし率マトリクスパネル�
   const rowEls = await page.locator('[data-testid^="adversary-model-verdict-miss-row-"]').all();
   const renderedModels = await Promise.all(
     rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-model-verdict-miss-row-', '')),
+  );
+  expect(renderedModels).toEqual(rows.map((r) => r.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('モデル別×Issue課題型別 成功率マトリクスパネルが実データから導出したモデル・label別の成功率を表示する', async ({ page }) => {
+  await page.goto('/model');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = modelIssueLabelSuccessMatrix(runs);
+  expect(
+    rows.length,
+    'data/runs にlabel付きissueを扱った反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-issue-label-success-matrix-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}モデル`);
+
+  // 各モデル行が modelIssueLabelSuccessMatrix()（別の計算経路）と一致する
+  // label付きissue件数・label別の成功率・件数・対象iterationを表示していること
+  for (const row of rows) {
+    const totalEl = page.getByTestId(`model-issue-label-success-total-${row.model}`);
+    await expect(totalEl).toContainText(`ラベル付きissue ${row.totalCount}件`);
+
+    for (const cell of row.cells) {
+      const rateEl = page.getByTestId(`model-issue-label-success-rate-${row.model}-${cell.label}`);
+      await expect(rateEl).toHaveText(`成功率${(cell.successRate * 100).toFixed(1)}% (${cell.mergedCount}/${cell.count})`);
+
+      const cellEl = page.getByTestId(`model-issue-label-success-cell-${row.model}-${cell.label}`);
+      await expect(cellEl).toContainText(`対象iteration: ${cell.iterations.join(', ')}`);
+    }
+
+    // セルは成功率降順で描画されていること（別経路の並び順と一致するはず）
+    const cellEls = await page
+      .locator(`[data-testid^="model-issue-label-success-cell-${row.model}-"]`)
+      .all();
+    const renderedLabels = await Promise.all(
+      cellEls.map(async (c) =>
+        (await c.getAttribute('data-testid'))!.replace(`model-issue-label-success-cell-${row.model}-`, ''),
+      ),
+    );
+    expect(renderedLabels).toEqual(row.cells.map((c) => c.label));
+  }
+
+  // totalCount降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="model-issue-label-success-row-"]').all();
+  const renderedModels = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-issue-label-success-row-', '')),
   );
   expect(renderedModels).toEqual(rows.map((r) => r.model));
 

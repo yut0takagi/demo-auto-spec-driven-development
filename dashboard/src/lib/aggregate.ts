@@ -2408,6 +2408,85 @@ export function issueLabelSuccessRates(runs: RunRecord[]): IssueLabelSuccessRate
     });
 }
 
+export interface ModelIssueLabelSuccessCell {
+  label: string;
+  /** このmodel×labelの組み合わせを扱った反復数 */
+  count: number;
+  mergedCount: number;
+  /** 0..1 */
+  successRate: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+export interface ModelIssueLabelSuccessRow {
+  model: string;
+  /** このmodelがbuilderとして扱った、label付きissueの反復数（cellsのcount合計とは、1反復が複数labelを持てば一致しない） */
+  totalCount: number;
+  /** 実際に出現した(model,label)の組み合わせだけを、成功率降順（同値はlabel名昇順）で持つ */
+  cells: ModelIssueLabelSuccessCell[];
+}
+
+/**
+ * builder モデル × issue label の2次元クロス集計。modelEffectiveness が builder モデル別、
+ * issueLabelSuccessRates が issue label 別と、それぞれ1次元でしか見ていなかった成功率
+ * （developへのマージ率）を掛け合わせ、「どのモデルが、どの課題型（label）で強い/弱いか」を
+ * 一望できるようにする。issueLabelSuccessRates と同じ理由で、labelが空配列の反復
+ * （例外でissueを特定できなかった反復。data/runs/0018.json等）はどの(model,label)セルにも
+ * 属さない。この関数ではさらにmodel行自体からも除外する。もし含めてしまうと、その反復が
+ * どのcellにも現れないのにtotalCountだけ加算され、「内訳(cells)の合計と行全体の総数が
+ * 食い違う行」に見えてしまうため。
+ * 行はtotalCount降順（同値はmodel名昇順）。各行内のセルは成功率降順（同値はlabel名昇順）で、
+ * issueLabelSuccessRatesと同じ並び方を踏襲する。
+ */
+export function modelIssueLabelSuccessMatrix(runs: RunRecord[]): ModelIssueLabelSuccessRow[] {
+  const byModel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (run.issue.labels.length === 0) continue;
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const byLabel = new Map<string, RunRecord[]>();
+      for (const run of modelRuns) {
+        for (const label of run.issue.labels) {
+          const list = byLabel.get(label);
+          if (list) {
+            list.push(run);
+          } else {
+            byLabel.set(label, [run]);
+          }
+        }
+      }
+
+      const cells: ModelIssueLabelSuccessCell[] = [...byLabel.entries()]
+        .map(([label, labelRuns]) => {
+          const mergedCount = labelRuns.filter((r) => r.verdict === 'merged').length;
+          return {
+            label,
+            count: labelRuns.length,
+            mergedCount,
+            successRate: mergedCount / labelRuns.length,
+            iterations: labelRuns.map((r) => r.iteration),
+          };
+        })
+        .sort((a, b) =>
+          b.successRate !== a.successRate ? b.successRate - a.successRate : a.label.localeCompare(b.label),
+        );
+
+      return { model, totalCount: modelRuns.length, cells };
+    })
+    .sort((a, b) => (b.totalCount !== a.totalCount ? b.totalCount - a.totalCount : a.model.localeCompare(b.model)));
+}
+
 export interface ModelConfidenceWeightedScore {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */

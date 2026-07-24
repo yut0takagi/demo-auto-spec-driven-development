@@ -9,6 +9,7 @@ import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPane
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratificationPanel';
 import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
+import { ModelIssueLabelSuccessMatrixPanel } from '@/components/ModelIssueLabelSuccessMatrixPanel';
 
 export default function ModelPage() {
   const { runs } = loadRuns();
@@ -33,6 +34,7 @@ export default function ModelPage() {
         <ModelApprovalRateTrendPanel runs={runs} />
         <ModelSkillStratificationPanel runs={runs} />
         <ModelPairCompatibilityDivergencePanel runs={runs} />
+        <ModelIssueLabelSuccessMatrixPanel runs={runs} />
       </div>
     </main>
   );
