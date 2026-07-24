@@ -105,7 +105,7 @@ export function IdeationConfidenceTrendPanel({ runs }: { runs: RunRecord[] }) {
 
       <p className="mt-3 text-[10px] opacity-50">
         信頼度 = count / (count + 事前重み)。着手issueが積み上がるほど1に近づく。重み付き成功率は生の成功率を
-        全体平均側にベイズ平均で縮約した値。
+        全run（ideation発の着手issueに限らない）のマージ率側にベイズ平均で縮約した値。
       </p>
     </div>
   );

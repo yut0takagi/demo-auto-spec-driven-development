@@ -6164,22 +6164,36 @@ describe('ideationConfidenceTrend', () => {
 
   it('priorWeightを明示指定した際のconfidence/weightedScoreが手計算値と一致する', () => {
     const runs = [
-      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3] }),
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3], verdict: 'failed' }),
       makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
       makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'failed' }),
     ];
     const trend = ideationConfidenceTrend(runs, 2);
-    // globalMeanSuccessRate = 1/2 = 0.5 (最終時点: merged 1件 / 着手2件)
+    // globalMeanSuccessRate は着手issue自身の最終成功率ではなく全run(3件)のマージ率 = 1/3 (mergedはrunsのうちiteration2のみ)
     expect(trend).toHaveLength(2);
     expect(trend[0]).toEqual({
       iteration: 2, issueNumber: 2, successCount: 1, totalCount: 1,
-      rawSuccessRate: 1, confidence: 1 / 3, weightedScore: (1 * 1 + 2 * 0.5) / 3,
+      rawSuccessRate: 1, confidence: 1 / 3, weightedScore: (1 * 1 + 2 * (1 / 3)) / 3,
     });
     // 2点目: successCount=1(failedは加算しない), totalCount=2
     expect(trend[1]).toEqual({
       iteration: 3, issueNumber: 3, successCount: 1, totalCount: 2,
-      rawSuccessRate: 0.5, confidence: 0.5, weightedScore: 0.5,
+      rawSuccessRate: 0.5, confidence: 0.5, weightedScore: (2 * 0.5 + 2 * (1 / 3)) / 4,
     });
+  });
+
+  it('weightedScoreは最終点でもrawSuccessRateに一致しない（母集団を着手issue自身の最終値にすると priorWeight に関わらず縮約が消える回帰の防止）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3, 4], verdict: 'failed' }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 4, issue: { number: 4, title: 'c3', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    const latest = trend[trend.length - 1];
+    // 着手issueだけで見た成功率は 2/3 だが、全run(4件のうちmergedは2件 = 0.5)側に縮約されるため一致しない
+    expect(latest.rawSuccessRate).toBeCloseTo(2 / 3, 10);
+    expect(latest.weightedScore).not.toBeCloseTo(latest.rawSuccessRate, 10);
   });
 
   it('着手順(提案順ではなくstartIteration昇順)で累積を計算する', () => {
@@ -6195,6 +6209,34 @@ describe('ideationConfidenceTrend', () => {
     expect(trend.map((p) => p.iteration)).toEqual([3, 4]);
     expect(trend[0].totalCount).toBe(1);
     expect(trend[1].totalCount).toBe(2);
+  });
+
+  it.each<Verdict>(['failed', 'paused', 'dry-run', 'needs-human', 'abandoned'])(
+    'merged以外のverdict(%s)はsuccessCountに加算されない（着手判定はされる）',
+    (verdict) => {
+      const runs = [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] }),
+        makeRun({ iteration: 2, issue: { number: 2, title: 'child', labels: [] }, verdict }),
+      ];
+      const trend = ideationConfidenceTrend(runs);
+      expect(trend).toHaveLength(1);
+      expect(trend[0].successCount).toBe(0);
+      expect(trend[0].rawSuccessRate).toBe(0);
+    },
+  );
+
+  it('同一issue番号が複数回dispatchされても、最初の着手だけを1件として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'failed' }),
+      // 誤って再dispatchされた2回目。重複カウントされてはいけない
+      makeRun({ iteration: 3, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(1);
+    expect(trend[0].iteration).toBe(2);
+    expect(trend[0].successCount).toBe(0);
+    expect(trend[0].totalCount).toBe(1);
   });
 
   it('サンプル数が増えるほどconfidenceは1に漸近する', () => {
