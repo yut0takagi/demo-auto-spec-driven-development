@@ -74,6 +74,15 @@ def test_dry_run_is_a_valid_verdict():
     assert payload["verdict"] == "dry-run"
 
 
+def test_total_usd_includes_planner():
+    from orchestrator.models import CostBreakdown
+
+    c = CostBreakdown(builder_usd=0.1, adversary_usd=0.02, ideation_usd=0.01, planner_usd=0.05)
+    assert c.total_usd == 0.18
+    assert c.to_dict()["plannerUsd"] == 0.05
+    assert c.to_dict()["totalUsd"] == 0.18
+
+
 def test_loop_status_serialises_camel_case():
     status = LoopStatus(
         state="HALTED",
