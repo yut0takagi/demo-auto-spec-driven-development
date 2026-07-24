@@ -141,4 +141,42 @@ describe('CostEfficiencyPanel', () => {
     const { container } = render(<CostEfficiencyPanel runs={runs} />);
     expect(container.querySelector('[data-testid="cost-efficiency-total"]')?.textContent).toContain('承認PR 1件');
   });
+
+  it('窓内に早期の大コスト点があっても最終バーは不可視にならない最小高さを確保する（回帰: e2e toBeVisible）', () => {
+    // 最初の承認PRだけ大コスト($100)、以降は~$0。累計コスト/累計承認 は 100/n と急減し、
+    // 窓内 max=100 に対し最終点(iter30)=3.33 → 素朴な (value/max)*100 では高さ約3%となり、
+    // サブピクセルで不可視化して Playwright の toBeVisible が落ちる（CI で実際に発生）。
+    const runs = Array.from({ length: 30 }, (_, i) =>
+      makeRun({
+        iteration: i + 1,
+        prNumber: 100 + i,
+        adversary: { approved: true, summary: '' },
+        cost: {
+          builderUsd: i === 0 ? 100 : 0,
+          adversaryUsd: 0,
+          ideationUsd: 0,
+          totalUsd: i === 0 ? 100 : 0,
+        },
+      }),
+    );
+    const { container } = render(<CostEfficiencyPanel runs={runs} />);
+    const lastBar = container.querySelector('[data-testid="cost-efficiency-bar-30"]') as HTMLElement;
+    expect(lastBar).not.toBeNull();
+    const heightPct = parseFloat(lastBar.style.height);
+    // 素朴計算なら約3.33%。正の値のバーは可視を保証する最小高さ(>=4%)を下回らないこと。
+    expect(heightPct).toBeGreaterThanOrEqual(4);
+  });
+
+  it('値が0のバーは高さ0のまま（正の値だけ最小高さを与え、幻のバーを作らない）', () => {
+    // 最初の承認PRのコストが$0なら usdPerApprovedPr=0 → データなし経路に落ちるため、
+    // ここでは「正の値には最小高さ、実質ゼロには与えない」ことを最大値との比で確認する。
+    const runs = [
+      makeRun({ iteration: 1, prNumber: 201, cost: { builderUsd: 100, adversaryUsd: 0, ideationUsd: 0, totalUsd: 100 } }),
+      makeRun({ iteration: 2, prNumber: 202, cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 } }),
+    ];
+    const { container } = render(<CostEfficiencyPanel runs={runs} />);
+    // iter1=100/1=100(最大), iter2=100/2=50 → 50%。最小フロア(4%)以上で素の比率を保つ。
+    const bar2 = container.querySelector('[data-testid="cost-efficiency-bar-2"]') as HTMLElement;
+    expect(parseFloat(bar2.style.height)).toBeCloseTo(50, 1);
+  });
 });
