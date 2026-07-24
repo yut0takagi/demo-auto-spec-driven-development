@@ -897,6 +897,10 @@ Phase A が develop で緑に稼働したら、別計画で:
 ### Phase B の必須前提（Phase A レビューで判明した積み残し）
 - **planner コストの総額反映:** Task 6 では `CostBreakdown.planner_usd` を追加したが、`total_usd`/`to_dict()` には未反映（JSON 契約と既存テストを保つための意図的な範囲限定）。Phase A では planner が休眠のため無害だが、**Phase B で planner を実稼働させる前に** `planner_usd` を `total_usd` と `to_dict()`（＝run JSON / dashboard 型）に組み込むこと。さもないと**日次予算ブレーカが planner+plan-review 分だけ過少計上**する。対応時は該当の厳密キー JSON 契約テスト（`tests/test_models.py`）も併せて更新する。
 - **planner フック実体の adapter:** `orchestrator/plan.py::propose_plan` は `PlanResult` を返すが、`run_iteration` の `planner` フックは dict `{trivial, plan_text, cost_usd}` を期待する。Phase B の `_run_plan_phase` 配線時に薄い adapter（`PlanResult` → dict）を噛ませる。
+- **h5i 経路の plan 破棄:** `run_h5i_round` は `plan=` を受けるが無視する。`ORCHESTRATOR=h5i` で planner を有効化する場合、Phase B で h5i round に plan を実際に使わせる（現状はネイティブ経路のみ plan を消費）。
+- **JSON 抽出の重複整理（任意）:** fenced/bare JSON 抽出ロジックが `plan.py`／`review.py`／`ideation.py` に3重複している（object 形と array 形）。将来の分岐を防ぐため共有ヘルパ（例 `orchestrator/_jsonx.py`）への集約を検討。現状は既存規約に沿った許容範囲の重複。
+
+**昇格のライブ有効化について:** Phase A では builder モデル昇格を **plan 有効時のみ**に限定した（plan 無しの現行ライブループは従来どおり base モデル＝挙動・コスト不変）。昇格を planner 抜きでもライブ全体に効かせたい場合は、`_builder_model` の `if plan and ...` 条件を緩めるか config フラグ化する（人間判断で切替）。
 
 ## Self-Review（計画者による点検）
 
