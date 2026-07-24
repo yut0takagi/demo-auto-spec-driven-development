@@ -53,6 +53,7 @@ import {
   reviseCyclesSizeCurve,
   modelEfficiencyByRole,
   issueLabelSuccessRates,
+  modelSkillStratification,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -2001,4 +2002,52 @@ test('Issueラベル別 成功率パネルが実データから導出したlabel
   const body6 = await bodyTextExcludingFreeform(page);
   expect(body6).not.toContain('NaN');
   expect(body6).not.toContain('undefined');
+});
+
+test('Modelスキル階層分析パネルが実データから導出したbucket別成功率・pressure判定を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stratification = modelSkillStratification(runs);
+  expect(
+    stratification.length,
+    'data/runs に verify到達済みのrunが1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-skill-stratification-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${stratification.length}モデル`);
+
+  const verdictLabels: Record<string, string> = {
+    degrades: '負荷に弱い',
+    improves: '負荷でむしろ改善',
+    resilient: '負荷耐性あり',
+    'insufficient-data': 'データ不足',
+  };
+
+  // 各モデル行が modelSkillStratification()（別の計算経路）と一致する判定・pt値・bucket別成功率を表示していること
+  for (const s of stratification) {
+    const ptSuffix =
+      s.pressureDeltaPct === null ? '' : ` (${s.pressureDeltaPct >= 0 ? '+' : ''}${s.pressureDeltaPct.toFixed(1)}pt)`;
+    await expect(page.getByTestId(`model-skill-stratification-verdict-${s.model}`)).toHaveText(
+      `${verdictLabels[s.verdict]}${ptSuffix}`,
+    );
+    for (const cell of s.cells) {
+      await expect(page.getByTestId(`model-skill-stratification-rate-${s.model}-${cell.bucket}`)).toHaveText(
+        `${(cell.mergeRate * 100).toFixed(0)}% (${cell.mergedCount}/${cell.count}件)`,
+      );
+    }
+  }
+
+  // totalCount降順で描画されていること
+  const modelEls = await page.locator('[data-testid^="model-skill-stratification-model-"]').all();
+  const renderedModels = await Promise.all(
+    modelEls.map(async (m) => (await m.getAttribute('data-testid'))!.replace('model-skill-stratification-model-', '')),
+  );
+  expect(renderedModels).toEqual(stratification.map((s) => s.model));
+
+  const body7 = await bodyTextExcludingFreeform(page);
+  expect(body7).not.toContain('NaN');
+  expect(body7).not.toContain('undefined');
 });

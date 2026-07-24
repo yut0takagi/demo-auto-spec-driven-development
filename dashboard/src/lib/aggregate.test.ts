@@ -95,6 +95,8 @@ import {
   reviseCyclesSizeCurve,
   REVISE_SIZE_CURVE_MIN_SAMPLES,
   REVISE_SIZE_CURVE_FLAT_THRESHOLD,
+  modelSkillStratification,
+  MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -5882,5 +5884,73 @@ describe('reviseCyclesSizeCurve', () => {
     expect(signal.mediumToLargeDelta).toBeCloseTo(0.5, 5);
     expect(signal.accelerationDelta).toBeCloseTo(REVISE_SIZE_CURVE_FLAT_THRESHOLD, 5);
     expect(signal.shape).toBe('convex');
+  });
+});
+
+describe('modelSkillStratification', () => {
+  it('run が0件、またはfailed run（verify未到達）しかなければ空配列を返す', () => {
+    expect(modelSkillStratification([])).toEqual([]);
+    expect(modelSkillStratification([makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 99 })])).toEqual([]);
+  });
+
+  it('モデル別に bucket(0/1/2/3+。境界値: reviseCycles=2は"2"、3は"3+")ごとの成功率とpressureDeltaPctを正確に算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0 }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0 }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 3 }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 3 }),
+    ];
+    const result = modelSkillStratification(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].model).toBe('claude-sonnet-5');
+    expect(result[0].totalCount).toBe(4);
+    expect(result[0].cells).toEqual([
+      { bucket: '0', count: 2, mergedCount: 2, mergeRate: 1, iterations: [1, 2] },
+      { bucket: '3+', count: 2, mergedCount: 1, mergeRate: 0.5, iterations: [3, 4] },
+    ]);
+    // 0回帯100% → 3+帯50% なので pressureDeltaPct = (0.5 - 1) * 100 = -50
+    expect(result[0].pressureDeltaPct).toBeCloseTo(-50, 5);
+    expect(result[0].verdict).toBe('degrades');
+  });
+
+  it(`verdict判定はbucket間の変化幅(MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT=${MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT}pt)を境に resilient/degrades/improves に分岐する`, () => {
+    const stratifyPair = (lowVerdict: Verdict, highVerdict: Verdict) =>
+      modelSkillStratification([
+        makeRun({ iteration: 1, verdict: lowVerdict, reviseCycles: 0 }),
+        makeRun({ iteration: 2, verdict: highVerdict, reviseCycles: 4 }),
+      ])[0];
+
+    const flat = stratifyPair('merged', 'merged');
+    expect(flat.pressureDeltaPct).toBeCloseTo(0, 5);
+    expect(flat.verdict).toBe('resilient');
+
+    const declining = stratifyPair('merged', 'abandoned');
+    expect(declining.pressureDeltaPct).toBeCloseTo(-100, 5);
+    expect(declining.verdict).toBe('degrades');
+
+    const rising = stratifyPair('abandoned', 'merged');
+    expect(rising.pressureDeltaPct).toBeCloseTo(100, 5);
+    expect(rising.verdict).toBe('improves');
+  });
+
+  it('観測できた bucket が1種類だけなら pressureDeltaPct は null、verdict は insufficient-data', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0 }),
+      makeRun({ iteration: 2, verdict: 'abandoned', reviseCycles: 0 }),
+    ];
+    const result = modelSkillStratification(runs);
+    expect(result[0].pressureDeltaPct).toBeNull();
+    expect(result[0].verdict).toBe('insufficient-data');
+  });
+
+  it('モデルを totalCount 降順、同数はモデル名昇順で並べる', () => {
+    const models = (n: string) => ({ builder: n, adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' });
+    const runs = [
+      makeRun({ iteration: 1, models: models('b-model') }),
+      makeRun({ iteration: 2, models: models('a-model') }),
+      makeRun({ iteration: 3, models: models('a-model') }),
+    ];
+    const result = modelSkillStratification(runs);
+    expect(result.map((r) => r.model)).toEqual(['a-model', 'b-model']);
   });
 });
