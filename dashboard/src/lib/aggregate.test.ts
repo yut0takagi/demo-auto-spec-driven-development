@@ -29,6 +29,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   reviseCyclesByModel,
+  reviseStopPatternByModel,
   reviseCyclesByVerdict,
   reviseVerdictMatrix,
   reviseCycleCostRecovery,
@@ -2831,6 +2832,139 @@ describe('reviseCyclesByModel', () => {
       }),
     ];
     const result = reviseCyclesByModel(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('reviseStopPatternByModel', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseStopPatternByModel([])).toEqual([]);
+  });
+
+  it('failed run（verifyに未到達）は打ち止めパターンが定義できないため母集団から除外する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 99,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    expect(reviseStopPatternByModel(runs)).toEqual([]);
+  });
+
+  it('adversary.approved を境に early-exit（承認されて打ち止め）と枯渇（上限まで承認されず打ち止め）に分類する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 0,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result).toEqual([
+      {
+        model: 'claude-sonnet-5',
+        count: 3,
+        earlyExitCount: 2,
+        exhaustedCount: 1,
+        exhaustionRate: 1 / 3,
+        earlyExitMeanReviseCycles: 0.5,
+        exhaustedMeanReviseCycles: 3,
+        iterations: [1, 2, 3],
+      },
+    ]);
+  });
+
+  it('枯渇率(exhaustionRate)の降順で、モデル間の打ち止めパターンの違いを比較できる', () => {
+    const runs = [
+      // claude-sonnet-5: 2件中2件が early-exit → exhaustionRate 0
+      makeRun({
+        iteration: 1,
+        reviseCycles: 0,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      // claude-opus-4-8: 2件中2件が枯渇 → exhaustionRate 1
+      makeRun({
+        iteration: 3,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 4,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result.map((r) => r.model)).toEqual(['claude-opus-4-8', 'claude-sonnet-5']);
+    expect(result[0].exhaustionRate).toBe(1);
+    expect(result[1].exhaustionRate).toBe(0);
+  });
+
+  it('枯渇率が同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'zeta-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'alpha-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({
+        iteration: 3,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 1,
+        reviseCycles: 2,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
     expect(result[0].iterations).toEqual([1, 3]);
   });
 });

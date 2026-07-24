@@ -1,6 +1,7 @@
 import { loadRuns } from '@/lib/loadData';
 import { ReviseCyclesChart } from '@/components/ReviseCyclesChart';
 import { ReviseCyclesByModelPanel } from '@/components/ReviseCyclesByModelPanel';
+import { ReviseStopPatternByModelPanel } from '@/components/ReviseStopPatternByModelPanel';
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { ReviseCycleCostRecoveryPanel } from '@/components/ReviseCycleCostRecoveryPanel';
@@ -27,6 +28,7 @@ export default function RevisePage() {
       <div className="space-y-6">
         <ReviseCyclesChart runs={runs} />
         <ReviseCyclesByModelPanel runs={runs} />
+        <ReviseStopPatternByModelPanel runs={runs} />
         <ReviseCyclesByVerdictPanel runs={runs} />
         <ReviseVerdictMatrixPanel runs={runs} />
         <ReviseCycleCostRecoveryPanel runs={runs} />
