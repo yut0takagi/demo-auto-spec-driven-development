@@ -21,6 +21,7 @@ import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { PlannerActivityPanel } from '@/components/PlannerActivityPanel';
 import { CostQualityElasticityTrendPanel } from '@/components/CostQualityElasticityTrendPanel';
+import { TokenEfficiencyTrendPanel } from '@/components/TokenEfficiencyTrendPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
 import { MergedStreakPanel } from '@/components/MergedStreakPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
@@ -84,7 +85,10 @@ export default function Home() {
           <CostEfficiencyPanel runs={runs} />
         </div>
         <PlannerActivityPanel runs={runs} />
-        <CostQualityElasticityTrendPanel runs={runs} />
+        <div className="grid gap-6 lg:grid-cols-2">
+          <CostQualityElasticityTrendPanel runs={runs} />
+          <TokenEfficiencyTrendPanel runs={runs} />
+        </div>
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>
