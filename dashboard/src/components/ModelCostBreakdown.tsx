@@ -5,12 +5,14 @@ const ROLE_LABELS: Record<CostRole, string> = {
   builder: 'Builder',
   adversary: 'Adversary',
   ideation: 'Ideation',
+  planner: 'Planner',
 };
 
 const ROLE_COLORS: Record<CostRole, string> = {
   builder: 'bg-sky-400',
   adversary: 'bg-rose-400',
   ideation: 'bg-amber-400',
+  planner: 'bg-violet-400',
 };
 
 export function ModelCostBreakdown({ runs }: { runs: RunRecord[] }) {
