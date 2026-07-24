@@ -5,6 +5,8 @@ const ROLE_LABELS: Record<CostRole, string> = {
   builder: 'Builder',
   adversary: 'Adversary',
   ideation: 'Ideation',
+  // planner は modelEfficiencyByRole の対象外（モデル未記録）だが、CostRole の網羅のため定義する。
+  planner: 'Planner',
 };
 
 export function ModelEfficiencyPanel({ runs }: { runs: RunRecord[] }) {

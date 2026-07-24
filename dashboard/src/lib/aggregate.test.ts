@@ -967,10 +967,10 @@ describe('e2eFailureRateTrend', () => {
 });
 
 describe('costBreakdown', () => {
-  it('空配列では totalUsd=0、byRole は3ロール分すべて0、byModel は空配列を返す（NaN を出さない）', () => {
+  it('空配列では totalUsd=0、byRole は4ロール分すべて0、byModel は空配列を返す（NaN を出さない）', () => {
     const b = costBreakdown([]);
     expect(b.totalUsd).toBe(0);
-    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
     for (const r of b.byRole) {
       expect(r.totalUsd).toBe(0);
       expect(r.pct).toBe(0);
@@ -988,7 +988,7 @@ describe('costBreakdown', () => {
     ];
     const b = costBreakdown(runs);
     expect(b.totalUsd).toBeCloseTo(1.0);
-    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
     expect(b.byRole[0].totalUsd).toBeCloseTo(0.6);
     expect(b.byRole[0].pct).toBeCloseTo(60);
     expect(b.byRole[1].totalUsd).toBeCloseTo(0.3);
@@ -997,6 +997,54 @@ describe('costBreakdown', () => {
     expect(b.byRole[2].pct).toBeCloseTo(10);
     // 内訳の合計は totalUsd の100%と一致するはず
     expect(b.byRole.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100);
+  });
+
+  it('plannerUsd を byRole の planner 役割に反映し、pct 合計は planner 込みで 100% になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, plannerUsd: 0.2, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    const planner = b.byRole.find((r) => r.role === 'planner');
+    expect(planner).toBeDefined();
+    expect(planner!.totalUsd).toBeCloseTo(0.2);
+    expect(planner!.pct).toBeCloseTo(20);
+    // planner を含めて4役割の pct 合計が 100% になる（planner を取りこぼしていない証拠）
+    expect(b.byRole.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100);
+  });
+
+  it('plannerUsd 未記録（旧レコード）でも planner 役割は 0 で存在し、NaN やクラッシュを出さない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.6, adversaryUsd: 0.3, ideationUsd: 0.1, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    const planner = b.byRole.find((r) => r.role === 'planner');
+    expect(planner).toBeDefined();
+    expect(planner!.totalUsd).toBe(0);
+    expect(planner!.pct).toBe(0);
+  });
+
+  it('planner はモデル名が記録されないため byModel（モデル別）には含めない（undefined モデル行を作らない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.4, adversaryUsd: 0.2, ideationUsd: 0.1, plannerUsd: 0.3, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-a', ideation: 'model-a' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    // byModel はモデル帰属可能な役割（builder/adversary/ideation）のみ = 0.7。planner の 0.3 は含まない。
+    expect(b.byModel.map((m) => m.model)).toEqual(['model-a']);
+    expect(b.byModel[0].totalUsd).toBeCloseTo(0.7);
+    // undefined をキーにした行が混入していないこと
+    expect(b.byModel.some((m) => m.model === undefined || m.model === 'undefined')).toBe(false);
   });
 
   it('同じモデルが複数ロール（adversary と ideation）で使われている場合は合算する', () => {

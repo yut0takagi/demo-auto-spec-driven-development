@@ -1878,9 +1878,21 @@ export function gateReasonSeveritySpectrum(runs: RunRecord[]): GateReasonSeverit
     });
 }
 
-export type CostRole = 'builder' | 'adversary' | 'ideation';
+export type CostRole = 'builder' | 'adversary' | 'ideation' | 'planner';
 
-const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
+const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation', 'planner'];
+
+/**
+ * byModel（モデル別内訳）に含める役割。planner はコストは記録されるが、どのモデルが
+ * 計画したかを RunRecord.models に持たない（models は builder/adversary/ideation の固定キー）。
+ * そのため byModel はモデル帰属可能なこの3役割のみを対象にする（byRole には planner も含む）。
+ * 将来 models に planner を記録したら、ここに planner を足すだけで byModel も点灯する。
+ */
+const MODEL_ATTRIBUTED_ROLES: readonly Exclude<CostRole, 'planner'>[] = [
+  'builder',
+  'adversary',
+  'ideation',
+];
 
 export interface RoleCostBreakdown {
   role: CostRole;
@@ -1898,7 +1910,7 @@ export interface ModelCostEntry {
 
 export interface CostBreakdown {
   totalUsd: number;
-  /** builder → adversary → ideation の固定順。Summary.totalCostUsd と一致する合計の内訳。 */
+  /** builder → adversary → ideation → planner の固定順。Summary.totalCostUsd と一致する合計の内訳。 */
   byRole: RoleCostBreakdown[];
   /** モデル名でまとめた内訳。同じモデルが複数の役割（例: adversary と ideation）で
    *  使われている場合は合算する。totalUsd 降順。 */
@@ -1913,7 +1925,7 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
   const totalUsd = runs.reduce((sum, r) => sum + r.cost.totalUsd, 0);
   const pctOf = (value: number) => (totalUsd === 0 ? 0 : (value / totalUsd) * 100);
 
-  const roleTotals: Record<CostRole, number> = { builder: 0, adversary: 0, ideation: 0 };
+  const roleTotals: Record<CostRole, number> = { builder: 0, adversary: 0, ideation: 0, planner: 0 };
   const modelTotals = new Map<string, number>();
 
   for (const r of runs) {
@@ -1921,9 +1933,14 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
       builder: r.cost.builderUsd,
       adversary: r.cost.adversaryUsd,
       ideation: r.cost.ideationUsd,
+      // plannerUsd は任意フィールド（planner 休眠時の旧レコードには無い）。?? 0 で NaN を防ぐ。
+      planner: r.cost.plannerUsd ?? 0,
     };
     for (const role of COST_ROLES) {
       roleTotals[role] += roleCost[role];
+    }
+    // byModel はモデル名が記録されている役割のみ。planner は models に対応キーが無いため除外。
+    for (const role of MODEL_ATTRIBUTED_ROLES) {
       const model = r.models[role];
       modelTotals.set(model, (modelTotals.get(model) ?? 0) + roleCost[role]);
     }
@@ -2934,6 +2951,8 @@ function roleCostOf(run: RunRecord, role: CostRole): number {
       return run.cost.adversaryUsd;
     case 'ideation':
       return run.cost.ideationUsd;
+    case 'planner':
+      return run.cost.plannerUsd ?? 0;
   }
 }
 
@@ -2954,7 +2973,9 @@ export function modelEfficiencyByRole(runs: RunRecord[]): ModelEfficiencyByRole[
 
   const sorted = byIterationAsc(runs);
 
-  return COST_ROLES.map((role) => {
+  // モデル別（run.models[role]）に集計するため、モデル名が記録されている役割のみ対象。
+  // planner は models に対応キーを持たないので含めない（byRole 総額には costBreakdown で計上済み）。
+  return MODEL_ATTRIBUTED_ROLES.map((role) => {
     const byModel = new Map<
       string,
       { count: number; mergedCount: number; costUsd: number; iterations: number[] }
