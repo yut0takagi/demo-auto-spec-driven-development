@@ -42,6 +42,8 @@ import {
   adversaryApprovalByReasonAndModel,
   pausedDryRunSummary,
   pausedDryRunDetails,
+  gatePauseSummary,
+  gatePauseClassifications,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -1766,6 +1768,85 @@ test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実デ�
     .map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(otherVerdictIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Gate通過後Pauseパターン分類・離脱検知パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = gatePauseSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に paused な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-pause-abandonment-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは gatePauseSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('gate-pause-count')).toHaveText(`${summary.count}件`);
+
+  // pattern別の行は該当件数がある pattern だけ存在し、件数が一致するはず
+  const allPatterns = ['clean-pause', 'contested-pause'] as const;
+  for (const pattern of allPatterns) {
+    const found = summary.patterns.find((p) => p.pattern === pattern);
+    const row = page.getByTestId(`gate-pause-pattern-${pattern}`);
+    if (found) {
+      await expect(row).toContainText(`${found.count}件`);
+    } else {
+      await expect(row).toHaveCount(0);
+    }
+  }
+
+  // abandonmentStatus別の行も同様
+  const allStatuses = ['reattempted', 'stalled', 'pending'] as const;
+  for (const status of allStatuses) {
+    const found = summary.abandonment.find((a) => a.status === status);
+    const row = page.getByTestId(`gate-pause-status-${status}`);
+    if (found) {
+      await expect(row).toContainText(`${found.count}件`);
+    } else {
+      await expect(row).toHaveCount(0);
+    }
+  }
+
+  if (summary.mostAtRisk) {
+    const mostAtRisk = page.getByTestId('gate-pause-most-at-risk');
+    await expect(mostAtRisk).toContainText(`issue #${summary.mostAtRisk.issueNumber}`);
+    await expect(mostAtRisk).toContainText(`${summary.mostAtRisk.survivalIterations}反復経過`);
+  } else {
+    await expect(page.getByTestId('gate-pause-most-at-risk')).toHaveCount(0);
+  }
+
+  // 一覧は gatePauseClassifications()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = gatePauseClassifications(runs);
+  const rows = page.locator('[data-testid^="gate-pause-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`gate-pause-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+    await expect(row).toContainText(d.prNumber !== null ? `PR #${d.prNumber}` : 'PRなし');
+    await expect(row).toContainText(`${d.survivalIterations}反復経過`);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('gate-pause-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: paused 以外の verdict はこの一覧に現れてはいけない
+  const nonPausedIterations = runs.filter((r) => r.verdict !== 'paused').map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(nonPausedIterations).not.toContain(it);
   }
 
   const body = await bodyTextExcludingFreeform(page);
