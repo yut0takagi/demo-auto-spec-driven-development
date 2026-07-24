@@ -49,6 +49,10 @@ import {
   timeToFirstPrTrendSignal,
   TIME_TO_FIRST_PR_TREND_WINDOW,
   TIME_TO_FIRST_PR_TREND_FLAT_THRESHOLD_PCT,
+  leadTimeInversions,
+  LEAD_TIME_INVERSION_THRESHOLD_PCT,
+  builderUtilizationDeclineSignal,
+  BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD,
   adversarySummaryLengthTrend,
   adversaryCommentTrendSignal,
   ADVERSARY_COMMENT_TREND_WINDOW,
@@ -3756,6 +3760,143 @@ describe('timeToFirstPrTrendSignal', () => {
     const signal = timeToFirstPrTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+describe('leadTimeInversions', () => {
+  it('空配列で空配列を返す', () => {
+    expect(leadTimeInversions([])).toEqual([]);
+  });
+
+  it('PR作成反復が1件だけなら比較ペアが無く空配列', () => {
+    const runs = [makeRun({ iteration: 1, durationSec: 100, prNumber: 1 })];
+    expect(leadTimeInversions(runs)).toEqual([]);
+  });
+
+  it('単調に短縮している場合は逆転なし', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 300, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 200, prNumber: 2 }),
+      makeRun({ iteration: 3, durationSec: 100, prNumber: 3 }),
+    ];
+    expect(leadTimeInversions(runs)).toEqual([]);
+  });
+
+  it('閾値(LEAD_TIME_INVERSION_THRESHOLD_PCT)以上長くなった隣接ペアだけを逆転として抽出する', () => {
+    expect(LEAD_TIME_INVERSION_THRESHOLD_PCT).toBe(5);
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      // +4% は閾値未満なのでノイズ扱い（逆転として数えない）
+      makeRun({ iteration: 2, durationSec: 104, prNumber: 2 }),
+      // 直前(104)から+50%は明確な逆転
+      makeRun({ iteration: 3, durationSec: 156, prNumber: 3 }),
+    ];
+    const result = leadTimeInversions(runs);
+    expect(result).toEqual([
+      { iteration: 3, previousIteration: 2, value: 156, previousValue: 104, deltaSec: 52, deltaPct: 50 },
+    ]);
+  });
+
+  it('直前値が0(境界値)でも増加していれば逆転として扱い、deltaPctはnull（ゼロ除算回避）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 30, prNumber: 2 }),
+    ];
+    expect(leadTimeInversions(runs)).toEqual([
+      { iteration: 2, previousIteration: 1, value: 30, previousValue: 0, deltaSec: 30, deltaPct: null },
+    ]);
+  });
+
+  it('直前値が0で値も変わらない(0のまま)場合は逆転にならない', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 0, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 0, prNumber: 2 }),
+    ];
+    expect(leadTimeInversions(runs)).toEqual([]);
+  });
+
+  it('PR未作成の反復(prNumber: null)は母集団から除外され、隣接比較にも登場しない', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 99999, prNumber: null, verdict: 'failed' }),
+      makeRun({ iteration: 3, durationSec: 100, prNumber: 3 }),
+    ];
+    // iteration 2 が母集団に含まれていれば 1→2 も 2→3 も巨大な逆転/改善になるはずだが、
+    // 実際は 1(100) と 3(100) の隣接比較(差0)のみが行われ、逆転は検出されない。
+    expect(leadTimeInversions(runs)).toEqual([]);
+  });
+});
+
+describe('builderUtilizationDeclineSignal', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(builderUtilizationDeclineSignal([])).toBeNull();
+  });
+
+  it('PR作成反復が1件だけなら null（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, durationSec: 100, prNumber: 1 })];
+    expect(builderUtilizationDeclineSignal(runs)).toBeNull();
+  });
+
+  it('BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD は既定で2', () => {
+    expect(BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD).toBe(2);
+  });
+
+  it('逆転が1回だけなら streak=1 で未発報（閾値2に届かない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 300, prNumber: 2 }),
+    ];
+    const signal = builderUtilizationDeclineSignal(runs);
+    expect(signal!.streak).toBe(1);
+    expect(signal!.triggered).toBe(false);
+    expect(signal!.totalInversions).toBe(1);
+    expect(signal!.totalComparisons).toBe(1);
+    expect(signal!.inversionRatePct).toBeCloseTo(100, 10);
+    expect(signal!.streakInversions.map((i) => i.iteration)).toEqual([2]);
+  });
+
+  it('データ終端まで2回連続で逆転すると発報し、連続分の逆転記録をstreakInversionsに含める', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 200, prNumber: 2 }),
+      makeRun({ iteration: 3, durationSec: 400, prNumber: 3 }),
+    ];
+    const signal = builderUtilizationDeclineSignal(runs);
+    expect(signal!.streak).toBe(2);
+    expect(signal!.triggered).toBe(true);
+    expect(signal!.totalInversions).toBe(2);
+    expect(signal!.totalComparisons).toBe(2);
+    expect(signal!.inversionRatePct).toBeCloseTo(100, 10);
+    expect(signal!.streakInversions.map((i) => i.iteration)).toEqual([2, 3]);
+  });
+
+  it('過去に逆転があってもデータ終端が改善していればstreakは0に戻り未発報（トレイリング判定）', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 300, prNumber: 2 }),
+      makeRun({ iteration: 3, durationSec: 600, prNumber: 3 }),
+      makeRun({ iteration: 4, durationSec: 60, prNumber: 4 }),
+    ];
+    const signal = builderUtilizationDeclineSignal(runs);
+    expect(signal!.streak).toBe(0);
+    expect(signal!.triggered).toBe(false);
+    expect(signal!.streakInversions).toEqual([]);
+    // 総逆転数は過去分を含めて2件のまま保持される（トレンドの記録自体は消えない）
+    expect(signal!.totalInversions).toBe(2);
+    expect(signal!.totalComparisons).toBe(3);
+  });
+
+  it('ノイズレベルの変化（閾値未満）は逆転として数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, durationSec: 100, prNumber: 1 }),
+      makeRun({ iteration: 2, durationSec: 101, prNumber: 2 }),
+      makeRun({ iteration: 3, durationSec: 102, prNumber: 3 }),
+    ];
+    const signal = builderUtilizationDeclineSignal(runs);
+    expect(signal!.streak).toBe(0);
+    expect(signal!.triggered).toBe(false);
+    expect(signal!.totalInversions).toBe(0);
+    expect(signal!.inversionRatePct).toBe(0);
   });
 });
 
