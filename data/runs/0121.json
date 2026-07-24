@@ -1,0 +1,46 @@
+{
+  "id": "20260724T091811Z-194",
+  "iteration": 121,
+  "issue": {
+    "number": 194,
+    "title": "E2E失敗との相関を Builder 稼働量と分離する追加軸パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/194-e2e-builder",
+  "startedAt": "2026-07-24T09:18:11Z",
+  "finishedAt": "2026-07-24T09:41:10Z",
+  "durationSec": 1379,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 216,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク#194の要件（E2E失敗とBuilder稼働量の相関分離パネル）を正確に実装・検証。統計手法は手計算検算済み、境界値テスト充実、既存挙動に影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 372,
+  "cost": {
+    "builderUsd": 8.181811,
+    "adversaryUsd": 0.074648,
+    "ideationUsd": 0.1125959,
+    "plannerUsd": 0.0,
+    "totalUsd": 8.369055
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    212,
+    213,
+    214
+  ]
+}
