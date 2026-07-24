@@ -1,0 +1,42 @@
+{
+  "id": "20260724T160106Z-0",
+  "iteration": 147,
+  "issue": {
+    "number": 0,
+    "title": "(不明: 例外発生時点で issue を特定できなかった)",
+    "labels": []
+  },
+  "branch": "unknown",
+  "startedAt": "2026-07-24T16:01:06Z",
+  "finishedAt": "2026-07-24T16:01:06Z",
+  "durationSec": 0,
+  "reviseCycles": 0,
+  "verdict": "failed",
+  "gateReasons": [
+    "反復が例外で異常終了した: GitHubError(\"gh issue create --title Adversary のレビューサイクル遅延と再試行コストの可視化 --body 背景：adversary.summary（レビューコメント）の文字数は監視しているが、そのレビューに到達するまでの待ち時間（builder が revise をサブミットしてから adversary が応答するまでの時刻差）と、再試行によるコストスパイクを見ていない。builder が fast/slow な判定に左右される傾向、revise 再試行が何回繰り返されるまでに adversary が finally approve するかという「修正収束度」が観測できない。\\n\\n受け入れ条件：\\n- 反復内の各 revise cycle について「revise submit → adversary review」の応答時間(分)を計測\\n- adversary が finally approve するまでに何回の revise が必要だったか（平均・中央値・最長）を役割別・モデル別に集計\\n- 「revise回数が多い反復に限定した」adversary 承認率・レビューコメント文字数を、「revise が少ない反復」との比較で表示\\n- テスト：mock revise cycles で応答時間を検証、合計 revise 回数が reviseCycles フィールドと一致することを機械判定 --label loop:ready failed: HTTP 504: We couldn't respond to your request in time. Sorry about that. Please try resubmitting your request and contact us if the problem persists. (https://api.github.com/graphql)\")"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "例外により審査に到達しなかった"
+  },
+  "verify": {
+    "unitPassed": false,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.0,
+    "adversaryUsd": 0.0,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 0.0
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
