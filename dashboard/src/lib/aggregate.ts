@@ -3738,3 +3738,116 @@ export function dropoutStreaks(runs: RunRecord[]): DropoutStreak[] {
 
   return streaks;
 }
+
+/** モデルの成功率が「pressure(revise回数)が増えても崩れない」とみなす、bucket間の変化幅(pt)の下限。 */
+export const MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT = 5;
+
+/**
+ * degrades:          revise 0回帯から観測できる最も高い pressure 帯にかけて成功率が
+ *                     MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT(pt) 以上下落した
+ *                     （負荷がかかるほど成功率が崩れる＝pressure耐性が低い）
+ * improves:           逆に同じ幅以上で上昇した（少数サンプルでの偶然の可能性もある）
+ * resilient:          変化幅が閾値未満（pressureが増えても成功率がほぼ保たれている）
+ * insufficient-data:  revise 0回帯とそれより高い帯の両方に、比較できるだけのデータが無い
+ */
+export type ModelSkillPressureVerdict = 'degrades' | 'improves' | 'resilient' | 'insufficient-data';
+
+export interface ModelSkillPressureCell {
+  bucket: ReviseVerdictBucketLabel;
+  count: number;
+  mergedCount: number;
+  /** count===0のとき0 */
+  mergeRate: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+export interface ModelSkillStratification {
+  model: string;
+  /** データに実際に出現した bucket のみ、0 → 1 → 2 → 3+ の順 */
+  cells: ModelSkillPressureCell[];
+  totalCount: number;
+  /**
+   * 観測できた最も高い pressure 帯の mergeRate - 最も低い pressure 帯の mergeRate（pt）。
+   * 負の値ほど「revise回数が増えるほど成功率が下がる」ことを示す。
+   * 比較できる bucket が2つ未満（1種類の pressure 帯しかデータが無い）場合は null。
+   */
+  pressureDeltaPct: number | null;
+  verdict: ModelSkillPressureVerdict;
+}
+
+function modelSkillPressureVerdict(deltaPct: number | null): ModelSkillPressureVerdict {
+  if (deltaPct === null) return 'insufficient-data';
+  if (deltaPct <= -MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT) return 'degrades';
+  if (deltaPct >= MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT) return 'improves';
+  return 'resilient';
+}
+
+/**
+ * builder モデル別に、revise回数(pressure)の bucket(0/1/2/3+。reviseVerdictMatrix と同じ区分)
+ * ごとの成功率(mergeRate)を集計する。reviseCyclesByModel(モデル別revise回数分布)と
+ * reviseVerdictMatrix(全モデル合算のbucket別verdict分布)を掛け合わせ、「同じモデルでも
+ * revise(adversaryの棄却によるやり直し)を重ねるほど成功率がどう変化するか」という
+ * モデル別のpressure耐性を見せる（＝ Revise-Cycle Pressure Analysis）。
+ * approvalRateTrendByModel と同じ reachedVerify で failed run を除外する: failed run の
+ * reviseCycles は「クラッシュするまでの値」で、他の run と同じ意味の bucket にならない。
+ * モデルは totalCount 降順（データが豊富な順）、同数はモデル名昇順で並べる。
+ */
+export function modelSkillStratification(runs: RunRecord[]): ModelSkillStratification[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+
+  const byModel = new Map<string, RunRecord[]>();
+  for (const run of completed) {
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const byBucket = new Map<ReviseVerdictBucketLabel, { count: number; mergedCount: number; iterations: number[] }>();
+      for (const run of modelRuns) {
+        const bucket = reviseVerdictBucket(run.reviseCycles);
+        let entry = byBucket.get(bucket);
+        if (!entry) {
+          entry = { count: 0, mergedCount: 0, iterations: [] };
+          byBucket.set(bucket, entry);
+        }
+        entry.count++;
+        if (run.verdict === 'merged') entry.mergedCount++;
+        entry.iterations.push(run.iteration);
+      }
+
+      const cells: ModelSkillPressureCell[] = REVISE_VERDICT_BUCKET_ORDER.filter((b) => byBucket.has(b)).map(
+        (bucket) => {
+          const entry = byBucket.get(bucket)!;
+          return {
+            bucket,
+            count: entry.count,
+            mergedCount: entry.mergedCount,
+            mergeRate: entry.count === 0 ? 0 : entry.mergedCount / entry.count,
+            iterations: entry.iterations,
+          };
+        },
+      );
+
+      const pressureDeltaPct =
+        cells.length < 2 ? null : (cells[cells.length - 1].mergeRate - cells[0].mergeRate) * 100;
+
+      return {
+        model,
+        cells,
+        totalCount: modelRuns.length,
+        pressureDeltaPct,
+        verdict: modelSkillPressureVerdict(pressureDeltaPct),
+      };
+    })
+    .sort((a, b) => {
+      if (b.totalCount !== a.totalCount) return b.totalCount - a.totalCount;
+      return a.model.localeCompare(b.model);
+    });
+}
