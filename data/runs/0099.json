@@ -1,0 +1,41 @@
+{
+  "id": "20260724T042811Z-162",
+  "iteration": 99,
+  "issue": {
+    "number": 162,
+    "title": "Ideation 提案品質の着手・ドロップ関連分析パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/162-ideation",
+  "startedAt": "2026-07-24T04:28:11Z",
+  "finishedAt": "2026-07-24T04:48:52Z",
+  "durationSec": 1241,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 171,
+  "adversary": {
+    "approved": true,
+    "summary": "Changes correctly implement Ideation proposal quality drop correlation analysis. Component displays per-batch metrics and calculated correlations with proper edge case handling. Tests comprehensively validate formatting, null states, and correlation calculation. No existing behavior is broken."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 391,
+  "cost": {
+    "builderUsd": 8.065227,
+    "adversaryUsd": 0.168336,
+    "ideationUsd": 0.0,
+    "totalUsd": 8.233563
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
