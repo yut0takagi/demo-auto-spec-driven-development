@@ -2035,9 +2035,11 @@ export interface ModelReviseStopPatternSummary {
   count: number;
   /** adversary が approve し、revise 上限を使い切る前に打ち止めた件数（early-exit） */
   earlyExitCount: number;
-  /** revise 上限まで使い切っても承認されないまま打ち止めた件数（枯渇） */
+  /** 内容を読んだ上で承認されないまま revise 上限を使い切って打ち止めた件数（枯渇） */
   exhaustedCount: number;
-  /** exhaustedCount / count。0件のときは0 */
+  /** adversary 出力が解釈できず安全側で棄却された件数。内容に基づく枯渇ではないため exhaustedCount から分離する */
+  unparseableCount: number;
+  /** exhaustedCount / count。0件のときは0（unparseableCount は分子に含めない） */
   exhaustionRate: number;
   /** early-exit した反復の平均revise回数 */
   earlyExitMeanReviseCycles: number;
@@ -2054,22 +2056,33 @@ export interface ModelReviseStopPatternSummary {
  * `adversary.approved` の真偽だけで「早期に承認されて止まった(early-exit)」か
  * 「承認されないまま上限を使い切って止まった(枯渇)」かを一意に判定できる
  * （reachedVerify を通した母集団のみ。failed run は打ち止め理由が「途中クラッシュ」で
- * 意味が異なるため除外する）。枯渇率(exhaustionRate)の降順で、粘っても承認されにくい
- * モデルから並べる。
+ * 意味が異なるため除外する）。
+ * ただし `adversary.approved === false` は「内容を読んで却下した」場合と「出力を解釈できず
+ * 安全側で棄却した」場合の両方で起こり得る（classifyGateReason の adversaryNotApproved /
+ * adversaryUnparseable の区別と同じ）。後者はモデルの再現性の問題ではなく orchestrator 側の
+ * パース失敗なので、`isAdversaryParseFailureSummary` で判定し unparseableCount として
+ * exhaustedCount から分離する。両者を混ぜると exhaustionRate が「粘っても承認されにくい
+ * モデル」ではなく「パース事故に当たりやすいモデル」を表してしまう。
+ * 枯渇率(exhaustionRate)の降順で、粘っても承認されにくいモデルから並べる。
  */
 export function reviseStopPatternByModel(runs: RunRecord[]): ModelReviseStopPatternSummary[] {
   const completed = byIterationAsc(runs).filter(reachedVerify);
-  const byModel = new Map<string, { early: number[]; exhausted: number[]; iterations: number[] }>();
+  const byModel = new Map<
+    string,
+    { early: number[]; exhausted: number[]; unparseable: number[]; iterations: number[] }
+  >();
 
   for (const run of completed) {
     const model = run.models.builder;
     let entry = byModel.get(model);
     if (!entry) {
-      entry = { early: [], exhausted: [], iterations: [] };
+      entry = { early: [], exhausted: [], unparseable: [], iterations: [] };
       byModel.set(model, entry);
     }
     if (run.adversary.approved) {
       entry.early.push(run.reviseCycles);
+    } else if (isAdversaryParseFailureSummary(run.adversary.summary)) {
+      entry.unparseable.push(run.reviseCycles);
     } else {
       entry.exhausted.push(run.reviseCycles);
     }
@@ -2078,12 +2091,13 @@ export function reviseStopPatternByModel(runs: RunRecord[]): ModelReviseStopPatt
 
   return [...byModel.entries()]
     .map(([model, entry]) => {
-      const count = entry.early.length + entry.exhausted.length;
+      const count = entry.early.length + entry.exhausted.length + entry.unparseable.length;
       return {
         model,
         count,
         earlyExitCount: entry.early.length,
         exhaustedCount: entry.exhausted.length,
+        unparseableCount: entry.unparseable.length,
         exhaustionRate: count === 0 ? 0 : entry.exhausted.length / count,
         earlyExitMeanReviseCycles: mean(entry.early),
         exhaustedMeanReviseCycles: mean(entry.exhausted),

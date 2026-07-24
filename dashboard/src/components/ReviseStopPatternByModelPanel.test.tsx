@@ -78,10 +78,10 @@ describe('ReviseStopPatternByModelPanel', () => {
     expect(rows[1].getAttribute('data-testid')).toBe('revise-stop-pattern-row-claude-sonnet-5');
 
     const sonnetStats = container.querySelector('[data-testid="revise-stop-pattern-stats-claude-sonnet-5"]');
-    expect(sonnetStats?.textContent).toBe('early-exit 2件 / 枯渇 1件 (枯渇率33.3%, 3件中)');
+    expect(sonnetStats?.textContent).toBe('early-exit 2件 / 枯渇 1件 / 解釈不能 0件 (枯渇率33.3%, 3件中)');
 
     const opusStats = container.querySelector('[data-testid="revise-stop-pattern-stats-claude-opus-4-8"]');
-    expect(opusStats?.textContent).toBe('early-exit 0件 / 枯渇 1件 (枯渇率100.0%, 1件中)');
+    expect(opusStats?.textContent).toBe('early-exit 0件 / 枯渇 1件 / 解釈不能 0件 (枯渇率100.0%, 1件中)');
 
     const sonnetMean = container.querySelector('[data-testid="revise-stop-pattern-mean-claude-sonnet-5"]');
     expect(sonnetMean?.textContent).toBe('平均revise回数: early-exit 0.5回 / 枯渇 3.0回');
@@ -125,5 +125,32 @@ describe('ReviseStopPatternByModelPanel', () => {
     // 4件中 early-exit 2件・枯渇 2件 → 50% / 50%
     expect(parseFloat(earlyBar.style.width)).toBeCloseTo(50, 2);
     expect(parseFloat(exhaustedBar.style.width)).toBeCloseTo(50, 2);
+  });
+
+  it('adversary出力が解釈できず棄却された反復は「解釈不能」として枯渇と区別して表示する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '実装が要件を満たしていない' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const { container } = render(<ReviseStopPatternByModelPanel runs={runs} />);
+
+    const stats = container.querySelector('[data-testid="revise-stop-pattern-stats-claude-opus-4-8"]');
+    // 2件中 枯渇1件・解釈不能1件 → 枯渇率は分子から解釈不能を除いた 1/2 = 50.0%
+    expect(stats?.textContent).toBe('early-exit 0件 / 枯渇 1件 / 解釈不能 1件 (枯渇率50.0%, 2件中)');
+
+    const unparseableBar = container.querySelector(
+      '[data-testid="revise-stop-pattern-unparseable-bar-claude-opus-4-8"]',
+    ) as HTMLElement;
+    expect(parseFloat(unparseableBar.style.width)).toBeCloseTo(50, 2);
   });
 });
