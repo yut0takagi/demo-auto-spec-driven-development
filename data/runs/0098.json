@@ -1,0 +1,41 @@
+{
+  "id": "20260724T041051Z-161",
+  "iteration": 98,
+  "issue": {
+    "number": 161,
+    "title": "Revise 打ち止めの原因分類パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/161-revise",
+  "startedAt": "2026-07-24T04:10:51Z",
+  "finishedAt": "2026-07-24T04:28:10Z",
+  "durationSec": 1039,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 169,
+  "adversary": {
+    "approved": true,
+    "summary": "This change correctly implements a new panel for analyzing abandoned iteration reasons with proper data filtering, categorization, and overrepresentation detection. Tests validate the implementation against boundary cases and exact calculations. No existing behavior is broken, and the new component integrates cleanly into the dashboard."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 250,
+  "cost": {
+    "builderUsd": 5.492488,
+    "adversaryUsd": 0.133823,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.626311
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
