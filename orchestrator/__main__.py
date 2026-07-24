@@ -49,9 +49,47 @@ def main() -> int:
 
 
 def _run_plan_phase() -> int:
-    """PLAN ジョブのエントリ(cross-process 配線は Phase B)。"""
-    print(json.dumps({"status": "not-implemented", "phase": "plan",
-                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    """PLAN ジョブのエントリ: 計画専用（build/merge しない）。plan_phase を実走し、
+    handoff（data/handoff/iteration.json）に書き出して次ジョブ(BUILD)へ渡す。"""
+    repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
+    cfg = Config.from_env(os.environ)
+    gh = GitHubOps(cwd=str(repo_root))
+
+    def kill_switch_reader() -> bool:
+        return read_kill_switch(env=os.environ, control=_read_control(repo_root)).enabled
+
+    from orchestrator.loop import plan_phase
+    from orchestrator.plan import propose_plan, plan_dict_from_result
+    from orchestrator.review import review_plan
+
+    def planner(*, task, cfg, cwd):
+        return plan_dict_from_result(propose_plan(task=task, cfg=cfg, cwd=cwd))
+
+    res = plan_phase(
+        gh=gh, cfg=cfg, repo_root=str(repo_root),
+        kill_switch_reader=kill_switch_reader, ideation_runner=_ideate,
+        planner=planner, plan_reviewer=review_plan,
+    )
+
+    from orchestrator.handoff import Handoff, write_handoff
+    handoff = Handoff(
+        status="ok" if res.status == "ok" else "no-work",
+        issue_number=(res.issue.number if res.issue else None),
+        issue_title=(res.issue.title if res.issue else ""),
+        branch=res.branch,
+        plan=res.plan_text,
+        trivial=(res.status == "ok" and not res.plan_text),
+        planner_cost_usd=res.planner_cost,
+        ideation_cost_usd=res.ideation_cost,
+        next_issues=list(res.next_issues),
+    )
+    write_handoff(repo_root / "data" / "handoff" / "iteration.json", handoff)
+
+    print(json.dumps({
+        "status": res.status,
+        "issue": (res.issue.number if res.issue else None),
+        "plan_preview": res.plan_text[:400],
+    }, ensure_ascii=False))
     return 0
 
 

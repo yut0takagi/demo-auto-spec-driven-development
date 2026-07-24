@@ -1,0 +1,54 @@
+name: loop-v2 (planner 検証)
+
+# dispatch 専用。planner+plan-review が良い計画を出すか安全に検証する（build/merge しない）。
+# cron は付けない — ライブは loop.yml のまま。3ジョブのブックエンド本配線は Phase B2。
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  issues: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: develop
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install Claude Code CLI
+        run: npm install -g @anthropic-ai/claude-code
+
+      - name: Configure git identity
+        run: |
+          git config user.name "loop-bot"
+          git config user.email "loop-bot@users.noreply.github.com"
+
+      - name: Run plan phase (計画のみ・build/merge しない)
+        env:
+          CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO_ROOT: ${{ github.workspace }}
+          PLANNER_MODEL: ${{ vars.PLANNER_MODEL || 'claude-sonnet-5' }}
+          ADVERSARY_MODEL: ${{ vars.ADVERSARY_MODEL || 'claude-haiku-4-5' }}
+          IDEATION_MODEL: ${{ vars.IDEATION_MODEL || 'claude-haiku-4-5' }}
+        run: python -m orchestrator plan
+
+      - name: Upload handoff (計画の中身)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: plan-handoff
+          path: data/handoff/iteration.json
+          if-no-files-found: warn

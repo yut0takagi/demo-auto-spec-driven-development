@@ -77,6 +77,7 @@ export interface RunRecord {
     builderUsd: number;
     adversaryUsd: number;
     ideationUsd: number;
+    plannerUsd?: number;
     totalUsd: number;
   };
   models: {

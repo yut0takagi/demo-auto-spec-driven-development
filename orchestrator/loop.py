@@ -121,6 +121,26 @@ def _abandon_comment(reasons: tuple[str, ...] | list[str], cycles: int) -> str:
     return "\n".join(lines)
 
 
+def _run_planner(*, issue, cfg, repo_root, planner, plan_reviewer) -> tuple[str, float]:
+    """planner→plan-review を最大 max_plan_cycles+1 回。 (plan_text, planner_cost) を返す。
+    planner が None なら ("", 0.0)。trivial は plan_text="" にして計画をスキップさせる。"""
+    if planner is None:
+        return "", 0.0
+    task = f"{issue.title}\n\n(issue #{issue.number})"
+    plan_text, cost = "", 0.0
+    for _ in range(cfg.max_plan_cycles + 1):
+        p = planner(task=task, cfg=cfg, cwd=repo_root)
+        cost += float(p.get("cost_usd", 0.0))
+        plan_text = "" if p.get("trivial") else str(p.get("plan_text", ""))
+        if plan_reviewer is None or not plan_text:
+            break
+        verdict, review_cost = plan_reviewer(task=task, plan=plan_text, cfg=cfg, cwd=repo_root)
+        cost += float(review_cost)
+        if verdict.approved:
+            break
+    return plan_text, cost
+
+
 def _abandon(
     gh: GhLike, *, data_dir, iteration, issue, branch, outcome, changed_lines,
     reasons: tuple[str, ...], cfg: Config, started_at: str, clock: Callable[[], str],
@@ -147,6 +167,49 @@ def _abandon(
         status="abandoned", iteration=iteration,
         issue_number=issue.number, reasons=tuple(reasons),
     )
+
+
+@dataclass(frozen=True)
+class PlanPhaseResult:
+    status: str            # "ok" | "no-work" | "skipped-disabled"
+    issue: Issue | None = None
+    branch: str = ""
+    plan_text: str = ""
+    planner_cost: float = 0.0
+    ideation_cost: float = 0.0
+    next_issues: tuple[int, ...] = ()
+
+
+def plan_phase(
+    *,
+    gh: GhLike,
+    cfg: Config,
+    repo_root: str,
+    kill_switch_reader: Callable[[], bool],
+    ideation_runner: Callable[..., tuple[list[dict], float]],
+    planner: Callable[..., dict] | None,
+    plan_reviewer: Callable[..., tuple[Any, float]] | None,
+) -> PlanPhaseResult:
+    """PLAN フェーズ単体: kill-switch→refuel→FIFO pick→planner+plan-review。build/merge はしない。"""
+    if not kill_switch_reader():
+        return PlanPhaseResult(status="skipped-disabled")
+    ready = gh.list_ready_issues(cfg.ready_label)
+    ideation_cost, next_issues = _refuel_backlog(
+        gh=gh, cfg=cfg, repo_root=repo_root, ready=ready, ideation_runner=ideation_runner
+    )
+    if next_issues:
+        ready = gh.list_ready_issues(cfg.ready_label)
+    if not ready:
+        return PlanPhaseResult(status="no-work", ideation_cost=ideation_cost,
+                                next_issues=tuple(next_issues))
+    issue = min(ready, key=lambda i: i.number)
+    branch = f"loop/{issue.number}-{slugify(issue.title)}"
+    plan_text, planner_cost = _run_planner(
+        issue=issue, cfg=cfg, repo_root=repo_root, planner=planner, plan_reviewer=plan_reviewer
+    )
+    return PlanPhaseResult(status="ok", issue=issue, branch=branch, plan_text=plan_text,
+                            planner_cost=planner_cost, ideation_cost=ideation_cost,
+                            next_issues=tuple(next_issues))
 
 
 def run_iteration(
@@ -192,20 +255,11 @@ def run_iteration(
 
     # --- PLAN フェーズ: 自律 spec+plan → plan-review（build 前に筋を検証）。
     # planner 未注入（ライブ loop.yml）なら何もしない＝従来動作を厳密に保つ。
-    plan_text = ""
-    planner_cost = 0.0
+    plan_text, planner_cost = _run_planner(
+        issue=issue, cfg=cfg, repo_root=repo_root,
+        planner=planner, plan_reviewer=plan_reviewer,
+    )
     _task = f"{issue.title}\n\n(issue #{issue.number})"
-    if planner is not None:
-        for _ in range(cfg.max_plan_cycles + 1):
-            p = planner(task=_task, cfg=cfg, cwd=repo_root)
-            planner_cost += float(p.get("cost_usd", 0.0))
-            plan_text = "" if p.get("trivial") else str(p.get("plan_text", ""))
-            if plan_reviewer is None or not plan_text:
-                break
-            verdict, review_cost = plan_reviewer(task=_task, plan=plan_text, cfg=cfg, cwd=repo_root)
-            planner_cost += float(review_cost)
-            if verdict.approved:
-                break
 
     branch = f"loop/{issue.number}-{slugify(issue.title)}"
     gh.create_branch(branch, cfg.base_branch)

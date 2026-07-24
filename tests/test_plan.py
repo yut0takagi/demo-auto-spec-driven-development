@@ -62,3 +62,9 @@ def test_string_false_is_not_treated_as_trivial():
 def test_only_real_json_true_is_trivial():
     res = parse_plan('```json\n{"trivial": true, "design": "", "tasks": [], "acceptance": []}\n```', cost=0.0)
     assert res.trivial is True
+
+
+def test_plan_dict_adapter_shapes_planresult():
+    from orchestrator.plan import plan_dict_from_result, PlanResult
+    d = plan_dict_from_result(PlanResult(trivial=False, plan_text="P", cost_usd=0.05))
+    assert d == {"trivial": False, "plan_text": "P", "cost_usd": 0.05}

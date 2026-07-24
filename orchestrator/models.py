@@ -56,13 +56,14 @@ class CostBreakdown:
 
     @property
     def total_usd(self) -> float:
-        return round(self.builder_usd + self.adversary_usd + self.ideation_usd, 6)
+        return round(self.builder_usd + self.adversary_usd + self.ideation_usd + self.planner_usd, 6)
 
     def to_dict(self) -> dict:
         return {
             "builderUsd": self.builder_usd,
             "adversaryUsd": self.adversary_usd,
             "ideationUsd": self.ideation_usd,
+            "plannerUsd": self.planner_usd,
             "totalUsd": self.total_usd,
         }
 
