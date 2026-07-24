@@ -1,0 +1,41 @@
+{
+  "id": "20260724T053607Z-172",
+  "iteration": 102,
+  "issue": {
+    "number": 172,
+    "title": "モデル別・Issue課題型別成功率マトリクス",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/172-issue",
+  "startedAt": "2026-07-24T05:36:07Z",
+  "finishedAt": "2026-07-24T05:52:45Z",
+  "durationSec": 998,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 184,
+  "adversary": {
+    "approved": true,
+    "summary": "モデル別・Issue課題型別成功率マトリクスを要件通り実装。集計ロジック・UI・テスト（ユニット・コンポーネント・E2E）すべて正確で、エッジケースと並び順を網羅。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 449,
+  "cost": {
+    "builderUsd": 6.961217,
+    "adversaryUsd": 0.060762,
+    "ideationUsd": 0.0,
+    "totalUsd": 7.021979
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
