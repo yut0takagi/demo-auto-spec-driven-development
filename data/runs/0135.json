@@ -1,0 +1,42 @@
+{
+  "id": "20260724T130152Z-222",
+  "iteration": 135,
+  "issue": {
+    "number": 222,
+    "title": "Cost bias per model role: 建築家 vs 破壊者の実コスト偏差検出パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/222-cost-bias-per-model-role-vs",
+  "startedAt": "2026-07-24T13:01:52Z",
+  "finishedAt": "2026-07-24T13:17:19Z",
+  "durationSec": 927,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 239,
+  "adversary": {
+    "approved": true,
+    "summary": "Cost bias per model role パネル実装は要件を正確に満たしており、包括的なテスト（集計ロジック・UI・エッジケース）で検証されている。既存コードに影響なく、行数制限内。本体とコンポーネントの分離も適切。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 392,
+  "cost": {
+    "builderUsd": 3.100943,
+    "adversaryUsd": 0.112291,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.5235299,
+    "totalUsd": 3.736764
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
