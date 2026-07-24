@@ -51,6 +51,7 @@ import {
   dropoutStreaks,
   reviseCyclesSizeCurve,
   modelEfficiencyByRole,
+  issueLabelSuccessRates,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1918,4 +1919,41 @@ test('信頼度加重スコアパネルが実データから導出した加重�
   const body5 = await bodyTextExcludingFreeform(page);
   expect(body5).not.toContain('NaN');
   expect(body5).not.toContain('undefined');
+});
+
+test('Issueラベル別 成功率パネルが実データから導出したlabel別のマージ件数・成功率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rates = issueLabelSuccessRates(runs);
+  expect(
+    rates.length,
+    'data/runs に label 付きの run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('issue-label-success-rate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rates.length}ラベル`);
+
+  // 各label行が issueLabelSuccessRates()（別の計算経路）と一致する成功率・
+  // マージ件数・件数・対象iterationを表示していること
+  for (const r of rates) {
+    const valueEl = page.getByTestId(`issue-label-success-rate-value-${r.label}`);
+    await expect(valueEl).toHaveText(`成功率${(r.successRate * 100).toFixed(1)}% (${r.mergedCount}/${r.count}件)`);
+
+    const row = page.getByTestId(`issue-label-success-rate-row-${r.label}`);
+    await expect(row).toContainText(`対象iteration: ${r.iterations.join(', ')}`);
+  }
+
+  // 成功率降順で描画されていること
+  const rows = await page.locator('[data-testid^="issue-label-success-rate-row-"]').all();
+  const renderedLabels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('issue-label-success-rate-row-', '')),
+  );
+  expect(renderedLabels).toEqual(rates.map((r) => r.label));
+
+  const body6 = await bodyTextExcludingFreeform(page);
+  expect(body6).not.toContain('NaN');
+  expect(body6).not.toContain('undefined');
 });
