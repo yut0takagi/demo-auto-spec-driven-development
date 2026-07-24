@@ -8,6 +8,8 @@ name: release
 # マージ**すれば本番反映。マージ判断は人間に残す＝最後の砦は維持。
 
 on:
+  push:
+    branches: [develop]       # develop が進んだ瞬間に常設 PR を即最新化（schedule 遅延の空白を埋める）
   schedule:
     - cron: '*/30 * * * *'   # 30 分ごと（best-effort）に常設 PR の存在を保証・件数を更新
   workflow_dispatch:
