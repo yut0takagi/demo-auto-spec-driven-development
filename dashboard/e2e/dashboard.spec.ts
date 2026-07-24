@@ -77,6 +77,7 @@ import {
   backlogLowWaterEta,
   backlogFlowByIteration,
   ideationQualityDegradationSignal,
+  ideationExecutionConsumptionGapSignal,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1815,6 +1816,39 @@ test('反復ごとのバックログ増減フローパネルが実データか�
 
   // 反復ごとのバーが1本ずつ、過不足なく描画されているはず
   await expect(page.locator('[data-testid^="backlog-flow-bar-"]')).toHaveCount(points.length);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation実行と消費のタイミングのズレ検知パネルが実データから導出した実行/着手間隔・比率・方向を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationExecutionConsumptionGapSignal(runs);
+  expect(signal, '実行・着手がそれぞれ2件以上ある前提が崩れている').not.toBeNull();
+
+  const panel = page.getByTestId('ideation-execution-consumption-gap-panel');
+  await expect(panel).toBeVisible();
+
+  await expect(page.getByTestId('ideation-execution-consumption-gap-counts')).toHaveText(
+    `実行 ${signal!.executionCount}件 / 着手 ${signal!.consumptionCount}件`,
+  );
+  await expect(page.getByTestId('ideation-execution-consumption-gap-execution-interval')).toHaveText(
+    `${signal!.avgExecutionIntervalIterations.toFixed(1)}反復`,
+  );
+  await expect(page.getByTestId('ideation-execution-consumption-gap-consumption-interval')).toHaveText(
+    `${signal!.avgConsumptionIntervalIterations.toFixed(1)}反復`,
+  );
+  await expect(page.getByTestId('ideation-execution-consumption-gap-ratio')).toHaveText(`${signal!.ratio.toFixed(2)}倍`);
+
+  const signalBlock = page.getByTestId('ideation-execution-consumption-gap-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+  await expect(signalBlock).toHaveAttribute('data-triggered', String(signal!.triggered));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
