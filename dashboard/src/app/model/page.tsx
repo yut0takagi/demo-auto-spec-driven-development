@@ -11,6 +11,7 @@ import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratifica
 import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
 import { ModelIssueLabelSuccessMatrixPanel } from '@/components/ModelIssueLabelSuccessMatrixPanel';
 import { BuilderModelGateReasonCorrelationPanel } from '@/components/BuilderModelGateReasonCorrelationPanel';
+import { ModelCostRoleBiasPanel } from '@/components/ModelCostRoleBiasPanel';
 
 export default function ModelPage() {
   const { runs } = loadRuns();
@@ -37,6 +38,7 @@ export default function ModelPage() {
         <ModelPairCompatibilityDivergencePanel runs={runs} />
         <ModelIssueLabelSuccessMatrixPanel runs={runs} />
         <BuilderModelGateReasonCorrelationPanel runs={runs} />
+        <ModelCostRoleBiasPanel runs={runs} />
       </div>
     </main>
   );

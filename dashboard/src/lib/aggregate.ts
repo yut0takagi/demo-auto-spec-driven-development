@@ -3091,6 +3091,99 @@ export function modelEfficiencyByRole(runs: RunRecord[]): ModelEfficiencyByRole[
   });
 }
 
+export type CostRoleBiasLevel = 'high' | 'moderate' | 'none';
+
+export interface ModelCostRoleBiasEntry {
+  model: string;
+  /** builder役でこのmodelが使われた反復数 */
+  builderCount: number;
+  /** builder役での平均コスト(USD)。builderCount===0のときは0 */
+  builderAvgUsd: number;
+  /** adversary役でこのmodelが使われた反復数 */
+  adversaryCount: number;
+  /** adversary役での平均コスト(USD)。adversaryCount===0のときは0 */
+  adversaryAvgUsd: number;
+  /** builderAvgUsd - adversaryAvgUsd */
+  deltaUsd: number;
+  /** 大きい方÷小さい方。両役割とも1件以上でなければ比較不能として null */
+  ratio: number | null;
+  /** 平均コストが高い側の役割。ratioがnullなら null */
+  biasedRole: 'builder' | 'adversary' | null;
+  level: CostRoleBiasLevel;
+}
+
+/**
+ * 同一モデルが builder 役と adversary 役の両方で使われた実績を突き合わせ、
+ * 役割間で実コストに偏りが無いかを検出する。片方の役割でしか登場しないモデルは
+ * 比較不能として ratio=null, level='none' で返す（データが無いことを「偏りなし」と
+ * 混同しないよう biasedRole も null にする）。
+ * 閾値: ratio>=1.5 で 'high'、>=1.2 で 'moderate'、それ未満は 'none'。
+ * runs が空なら空配列を返す。結果は |deltaUsd| 降順（同値はモデル名昇順）。
+ */
+export function modelCostRoleBias(runs: RunRecord[]): ModelCostRoleBiasEntry[] {
+  if (runs.length === 0) return [];
+
+  const byModel = new Map<
+    string,
+    { builderCount: number; builderCostUsd: number; adversaryCount: number; adversaryCostUsd: number }
+  >();
+
+  const getEntry = (model: string) => {
+    let entry = byModel.get(model);
+    if (!entry) {
+      entry = { builderCount: 0, builderCostUsd: 0, adversaryCount: 0, adversaryCostUsd: 0 };
+      byModel.set(model, entry);
+    }
+    return entry;
+  };
+
+  for (const run of runs) {
+    const builderEntry = getEntry(run.models.builder);
+    builderEntry.builderCount++;
+    builderEntry.builderCostUsd += run.cost.builderUsd;
+
+    const adversaryEntry = getEntry(run.models.adversary);
+    adversaryEntry.adversaryCount++;
+    adversaryEntry.adversaryCostUsd += run.cost.adversaryUsd;
+  }
+
+  const result: ModelCostRoleBiasEntry[] = [...byModel.entries()].map(([model, e]) => {
+    const builderAvgUsd = e.builderCount === 0 ? 0 : e.builderCostUsd / e.builderCount;
+    const adversaryAvgUsd = e.adversaryCount === 0 ? 0 : e.adversaryCostUsd / e.adversaryCount;
+
+    let ratio: number | null = null;
+    let biasedRole: 'builder' | 'adversary' | null = null;
+    if (e.builderCount > 0 && e.adversaryCount > 0) {
+      const hi = Math.max(builderAvgUsd, adversaryAvgUsd);
+      const lo = Math.min(builderAvgUsd, adversaryAvgUsd);
+      ratio = lo === 0 ? null : hi / lo;
+      if (builderAvgUsd !== adversaryAvgUsd) {
+        biasedRole = builderAvgUsd > adversaryAvgUsd ? 'builder' : 'adversary';
+      }
+    }
+
+    const level: CostRoleBiasLevel = ratio === null ? 'none' : ratio >= 1.5 ? 'high' : ratio >= 1.2 ? 'moderate' : 'none';
+
+    return {
+      model,
+      builderCount: e.builderCount,
+      builderAvgUsd,
+      adversaryCount: e.adversaryCount,
+      adversaryAvgUsd,
+      deltaUsd: builderAvgUsd - adversaryAvgUsd,
+      ratio,
+      biasedRole,
+      level,
+    };
+  });
+
+  return result.sort((a, b) => {
+    const diff = Math.abs(b.deltaUsd) - Math.abs(a.deltaUsd);
+    if (diff !== 0) return diff;
+    return a.model.localeCompare(b.model);
+  });
+}
+
 export interface BuilderModelSwitchSegment {
   model: string;
   /** この区間の最初の反復番号 */
