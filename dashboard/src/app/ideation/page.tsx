@@ -8,6 +8,7 @@ import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
 import { IdeationProposalQualityDropPanel } from '@/components/IdeationProposalQualityDropPanel';
 import { IdeationEarlyAbandonmentPanel } from '@/components/IdeationEarlyAbandonmentPanel';
 import { IdeationQualityDegradationPanel } from '@/components/IdeationQualityDegradationPanel';
+import { IdeationConfidenceTrendPanel } from '@/components/IdeationConfidenceTrendPanel';
 import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 import { BacklogFlowPanel } from '@/components/BacklogFlowPanel';
 import { BacklogGenerationRatePanel } from '@/components/BacklogGenerationRatePanel';
@@ -27,6 +28,7 @@ export default function IdeationPage() {
 
       <div className="space-y-6">
         <IdeationQualityDegradationPanel runs={runs} />
+        <IdeationConfidenceTrendPanel runs={runs} />
         <IdeationFailurePanel runs={runs} />
         <IdeationCostQualityPanel runs={runs} />
         <IdeationProposalConsumptionPanel runs={runs} />

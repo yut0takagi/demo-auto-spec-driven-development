@@ -3914,6 +3914,75 @@ export function ideationProposalConsumption(runs: RunRecord[]): IdeationProposal
   };
 }
 
+export interface IdeationConfidenceTrendPoint {
+  iteration: number;
+  issueNumber: number;
+  successCount: number;
+  totalCount: number;
+  /** 生の成功率 0..1 = successCount / totalCount */
+  rawSuccessRate: number;
+  /** modelConfidenceWeightedScores と同じ定義: totalCount / (totalCount + priorWeight) */
+  confidence: number;
+  /** ベイズ平均後の成功率 0..1 = (totalCount*rawSuccessRate + priorWeight*globalMeanSuccessRate) / (totalCount+priorWeight) */
+  weightedScore: number;
+}
+
+/**
+ * modelConfidenceWeightedScores(builderモデル別マージ率のベイズ縮約)と同じ考え方を、
+ * Ideationの提案(nextIssues)が着手されmergedに至ったかという成功率に適用する。
+ * 提案・着手の判定は ideationProposalConsumption と同一。着手済みissueを
+ * startIteration 昇順に並べ、逐次的な累積 successCount/totalCount から各点を計算する
+ * (globalMeanSuccessRateは着手済み全件の最終成功率)。着手済みが0件なら空配列。
+ */
+export function ideationConfidenceTrend(
+  runs: RunRecord[],
+  priorWeight: number = CONFIDENCE_PRIOR_WEIGHT,
+): IdeationConfidenceTrendPoint[] {
+  const sorted = byIterationAsc(runs);
+
+  const proposedBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    if (r.cost.ideationUsd <= 0 || r.nextIssues.length === 0) continue;
+    for (const issueNumber of r.nextIssues) {
+      if (!proposedBy.has(issueNumber)) proposedBy.set(issueNumber, r);
+    }
+  }
+
+  const startedBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    const proposer = proposedBy.get(r.issue.number);
+    if (!proposer || proposer.iteration >= r.iteration) continue;
+    if (!startedBy.has(r.issue.number)) startedBy.set(r.issue.number, r);
+  }
+
+  const started = [...startedBy.entries()]
+    .map(([issueNumber, run]) => ({ issueNumber, run }))
+    .sort((a, b) => a.run.iteration - b.run.iteration);
+
+  if (started.length === 0) return [];
+
+  const globalSuccessCount = started.filter((s) => s.run.verdict === 'merged').length;
+  const globalMeanSuccessRate = globalSuccessCount / started.length;
+
+  let successCount = 0;
+  return started.map(({ issueNumber, run }, idx) => {
+    if (run.verdict === 'merged') successCount += 1;
+    const totalCount = idx + 1;
+    const rawSuccessRate = successCount / totalCount;
+    const weightedScore =
+      (totalCount * rawSuccessRate + priorWeight * globalMeanSuccessRate) / (totalCount + priorWeight);
+    return {
+      iteration: run.iteration,
+      issueNumber,
+      successCount,
+      totalCount,
+      rawSuccessRate,
+      confidence: totalCount / (totalCount + priorWeight),
+      weightedScore,
+    };
+  });
+}
+
 export interface IdeationToStartLeadTimePoint {
   issueNumber: number;
   /** issue を提案した(nextIssuesに含めた)反復番号 */

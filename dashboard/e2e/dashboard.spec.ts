@@ -79,6 +79,7 @@ import {
   backlogGenerationRateSignal,
   ideationQualityDegradationSignal,
   ideationExecutionConsumptionGapSignal,
+  ideationConfidenceTrend,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1601,6 +1602,42 @@ test('Ideation提案品質低下の多面的早期検知パネルが実データ
   } else {
     expect(signal!.level).toBe('normal');
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation提案消費成功率の信頼度トレンドパネルが実データから導出した信頼度・サンプル数・重み付き成功率の最新値を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = ideationConfidenceTrend(runs);
+  expect(
+    trend.length,
+    'data/runs に ideation の提案issueが実際に着手された反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-confidence-trend-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${trend.length}件`);
+
+  // 凡例の最新値は ideationConfidenceTrend()（別の計算経路）の最終点と一致するはず
+  const latest = trend[trend.length - 1];
+  await expect(page.getByTestId('ideation-confidence-trend-latest-confidence')).toHaveText(
+    `最新${(latest.confidence * 100).toFixed(1)}% (サンプル${latest.totalCount}件)`,
+  );
+  await expect(page.getByTestId('ideation-confidence-trend-latest-weighted')).toHaveText(
+    `最新${(latest.weightedScore * 100).toFixed(1)}%`,
+  );
+
+  // 2点以上なら折れ線(path)、1点だけなら単一点(circle)として描画される
+  const lineCount = await page.getByTestId('ideation-confidence-trend-line-confidence').count();
+  const pointCount = await page.getByTestId('ideation-confidence-trend-point-confidence').count();
+  expect(lineCount + pointCount).toBe(1);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

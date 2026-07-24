@@ -73,6 +73,7 @@ import {
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
   ideationProposalConsumption,
+  ideationConfidenceTrend,
   abandonedSummary,
   abandonedReasonBreakdown,
   abandonedReasonOverrepresentation,
@@ -6139,6 +6140,79 @@ describe('ideationProposalConsumption', () => {
     expect(result.actualConsumedTotalUsd).toBeCloseTo(0.45, 10);
     // 倍率は着手済み(issue2)の提案コスト0.01のみを分母にする: 0.45 / 0.01 = 45
     expect(result.consumptionRatio).toBeCloseTo(45, 10);
+  });
+});
+
+describe('ideationConfidenceTrend', () => {
+  it('着手済みissueが0件なら空配列（境界値）', () => {
+    expect(ideationConfidenceTrend([])).toEqual([]);
+    const noStart = [makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] })];
+    expect(ideationConfidenceTrend(noStart)).toEqual([]);
+  });
+
+  it('未着手issueと自己参照issueは分母から除外される', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10, 11, 12] }),
+      makeRun({ iteration: 2, issue: { number: 11, title: 'child', labels: [] }, verdict: 'merged' }),
+      // issue 12 は未着手のまま
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(1);
+    expect(trend[0].issueNumber).toBe(11);
+    expect(trend[0].totalCount).toBe(1);
+  });
+
+  it('priorWeightを明示指定した際のconfidence/weightedScoreが手計算値と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs, 2);
+    // globalMeanSuccessRate = 1/2 = 0.5 (最終時点: merged 1件 / 着手2件)
+    expect(trend).toHaveLength(2);
+    expect(trend[0]).toEqual({
+      iteration: 2, issueNumber: 2, successCount: 1, totalCount: 1,
+      rawSuccessRate: 1, confidence: 1 / 3, weightedScore: (1 * 1 + 2 * 0.5) / 3,
+    });
+    // 2点目: successCount=1(failedは加算しない), totalCount=2
+    expect(trend[1]).toEqual({
+      iteration: 3, issueNumber: 3, successCount: 1, totalCount: 2,
+      rawSuccessRate: 0.5, confidence: 0.5, weightedScore: 0.5,
+    });
+  });
+
+  it('着手順(提案順ではなくstartIteration昇順)で累積を計算する', () => {
+    const runs = [
+      // issue 3 を先に提案するが、着手(issue.numberとして現れる)のは issue 2 より後
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [3] }),
+      makeRun({ iteration: 2, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] }),
+      makeRun({ iteration: 3, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 4, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend.map((p) => p.issueNumber)).toEqual([2, 3]);
+    expect(trend.map((p) => p.iteration)).toEqual([3, 4]);
+    expect(trend[0].totalCount).toBe(1);
+    expect(trend[1].totalCount).toBe(2);
+  });
+
+  it('サンプル数が増えるほどconfidenceは1に漸近する', () => {
+    const runs: RunRecord[] = [];
+    const n = 20;
+    for (let i = 0; i < n; i++) {
+      runs.push(makeRun({ iteration: i * 2 + 1, issue: { number: 1000 + i, title: 'p', labels: [] }, nextIssues: [2000 + i] }));
+      runs.push(
+        makeRun({ iteration: i * 2 + 2, issue: { number: 2000 + i, title: 'c', labels: [] }, verdict: i % 2 === 0 ? 'merged' : 'failed' }),
+      );
+    }
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(n);
+    // priorWeight=5(デフォルト)のとき totalCount=20 の confidence = 20/25 = 0.8
+    expect(trend[trend.length - 1].confidence).toBeCloseTo(20 / 25, 10);
+    for (let i = 1; i < trend.length; i++) {
+      expect(trend[i].confidence).toBeGreaterThan(trend[i - 1].confidence);
+    }
   });
 });
 
