@@ -60,6 +60,7 @@ import {
   modelSkillStratification,
   approvedButBuilderFailedSummary,
   approvedButBuilderFailedIterations,
+  reviseCycleCostRecovery,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -585,6 +586,57 @@ test('ゲート失敗別 revise実質コストパネルが実データから導�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-cost-row-', '')),
   );
   expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('Reviseサイクル別 APIコスト分布と回収効率パネルが実データから導出したbucket統計・回収率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const buckets = reviseCycleCostRecovery(runs);
+  expect(
+    buckets.length,
+    'data/runs から revise サイクル bucket が1件も導出できず、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('revise-cycle-cost-recovery-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${buckets.length}区分`);
+
+  // bucket は常に 0→1→2→3+ の順で描画される（出現したものだけ）
+  const rows = await page.locator('[data-testid^="revise-cost-recovery-row-"]').all();
+  const renderedBuckets = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('revise-cost-recovery-row-', '')),
+  );
+  expect(renderedBuckets).toEqual(buckets.map((b) => b.bucket));
+
+  // 各 bucket 行が reviseCycleCostRecovery()（別の計算経路）と一致するコスト統計・回収率・
+  // merge到達1件あたりコストを表示する
+  const maxMeanCostUsd = Math.max(...buckets.map((b) => b.meanCostUsd)) || 1;
+  for (const b of buckets) {
+    const statsEl = page.getByTestId(`revise-cost-recovery-stats-${b.bucket}`);
+    await expect(statsEl).toHaveText(
+      `平均$${b.meanCostUsd.toFixed(2)} / 中央値$${b.medianCostUsd.toFixed(2)} / p90 $${b.p90CostUsd.toFixed(2)}（${b.count}件）`,
+    );
+
+    const rateEl = page.getByTestId(`revise-cost-recovery-rate-${b.bucket}`);
+    await expect(rateEl).toHaveText(`回収${(b.recoveryRate * 100).toFixed(0)}%（${b.mergedCount}/${b.count}）`);
+
+    const perMergeEl = page.getByTestId(`revise-cost-recovery-per-merge-${b.bucket}`);
+    const expectedPerMerge =
+      b.usdPerMergedIteration === null ? '回収実績なし' : `$${b.usdPerMergedIteration.toFixed(2)}`;
+    await expect(perMergeEl).toHaveText(`merge到達1件あたり: ${expectedPerMerge}`);
+
+    const costBar = page.getByTestId(`revise-cost-recovery-cost-bar-${b.bucket}`);
+    const expectedCostBarPct = (b.meanCostUsd / maxMeanCostUsd) * 100;
+    const actualWidthStyle = await costBar.evaluate((el) => (el as HTMLElement).style.width);
+    expect(parseFloat(actualWidthStyle)).toBeCloseTo(expectedCostBarPct, 1);
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
