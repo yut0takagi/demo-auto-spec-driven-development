@@ -1,0 +1,42 @@
+{
+  "id": "20260724T103841Z-205",
+  "iteration": 127,
+  "issue": {
+    "number": 205,
+    "title": "Ideation実行と消費タイミングのズレ検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/205-ideation",
+  "startedAt": "2026-07-24T10:38:41Z",
+  "finishedAt": "2026-07-24T11:17:41Z",
+  "durationSec": 2340,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 227,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation実行と消費タイミングのズレを正確に検知する新機能。ビジネスロジック・UI・テストが一貫性をもち、データ契約も安全。既存機能への悪影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 435,
+  "cost": {
+    "builderUsd": 15.313297,
+    "adversaryUsd": 0.111895,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 15.425192
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

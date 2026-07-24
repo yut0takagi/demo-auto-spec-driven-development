@@ -28,12 +28,14 @@ import {
   gateReasonSeveritySpectrum,
   costEfficiency,
   costPerApprovedPrTrend,
+  COST_PER_APPROVED_PR_TREND_LIMIT,
   reviseCyclesByModel,
   reviseStopPatternByModel,
   reviseCyclesByVerdict,
   reviseVerdictMatrix,
   reviseCycleCostRecovery,
   durationByVerdict,
+  mergePathLengthByVerdict,
   breakerRunway,
   mergedStreak,
   modelEffectiveness,
@@ -139,6 +141,12 @@ import {
   IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
   IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
   backlogFlowByIteration,
+  ideationExecutionConsumptionGapSignal,
+  IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD,
+  backlogGenerationRateSignal,
+  GENERATION_RATE_WINDOW,
+  GENERATION_RATE_SUSTAINABLE,
+  GENERATION_RATE_ALERT_STREAK,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -2791,6 +2799,26 @@ describe('costPerApprovedPrTrend', () => {
       { iteration: 2, value: 0.3 },
     ]);
   });
+
+  it('点数がCOST_PER_APPROVED_PR_TREND_LIMITを超える場合は直近の点だけに絞る（棒グラフの1本あたり幅が潰れるのを防ぐ）', () => {
+    const runCount = COST_PER_APPROVED_PR_TREND_LIMIT + 10;
+    const runs = Array.from({ length: runCount }, (_, i) =>
+      makeRun({
+        iteration: i + 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        prNumber: 100 + i,
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+    );
+
+    const trend = costPerApprovedPrTrend(runs);
+
+    expect(trend).toHaveLength(COST_PER_APPROVED_PR_TREND_LIMIT);
+    // 末尾は必ず最新iteration。先頭は「最新から数えてLIMIT件前」まで切り詰められている。
+    expect(trend[trend.length - 1].iteration).toBe(runCount);
+    expect(trend[0].iteration).toBe(runCount - COST_PER_APPROVED_PR_TREND_LIMIT + 1);
+  });
 });
 
 describe('reviseCyclesByModel', () => {
@@ -3350,6 +3378,95 @@ describe('durationByVerdict', () => {
     ];
     const result = durationByVerdict(runs);
     expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('mergePathLengthByVerdict', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(mergePathLengthByVerdict([])).toEqual([]);
+  });
+
+  it('merged だけの場合は経路長という概念が適用されないため空配列を返す', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([]);
+  });
+
+  it('後続に merged が一度も現れない反復（データ終端）は経路長を計算できないため対象外', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'abandoned' }), makeRun({ iteration: 2, verdict: 'failed' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([]);
+  });
+
+  it('直後の反復が merged なら経路長は1になる', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'abandoned' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([
+      { verdict: 'abandoned', count: 1, mean: 1, median: 1, min: 1, max: 1, iterations: [1] },
+    ]);
+  });
+
+  it('複数反復先で merged に至った場合、間の反復数を経路長として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result).toEqual([
+      { verdict: 'failed', count: 2, mean: 1.5, median: 1.5, min: 1, max: 2, iterations: [1, 2] },
+    ]);
+  });
+
+  it('verdict ごとにグループ化し、平均経路長の降順（mergeから遠い順）で並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }), // 経路長 3
+      makeRun({ iteration: 2, verdict: 'abandoned' }), // 経路長 2
+      makeRun({ iteration: 3, verdict: 'abandoned' }), // 経路長 1
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['failed', 'abandoned']);
+    expect(result[0]).toEqual({ verdict: 'failed', count: 1, mean: 3, median: 3, min: 3, max: 3, iterations: [1] });
+    expect(result[1]).toEqual({
+      verdict: 'abandoned',
+      count: 2,
+      mean: 1.5,
+      median: 1.5,
+      min: 1,
+      max: 2,
+      iterations: [2, 3],
+    });
+  });
+
+  it('平均経路長が同値のときは深刻度順（failed > abandoned > needs-human > paused > dry-run）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned' }), // 経路長 1（次のiteration 2がmerged）
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }), // 経路長 1（次のiteration 4がmerged）
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['failed', 'abandoned']);
+  });
+
+  it('merged 自身は結果に含まれない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.some((r) => r.verdict === 'merged')).toBe(false);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持し、直後のmergedを正しく探す', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 1, verdict: 'abandoned' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result).toEqual([
+      { verdict: 'abandoned', count: 2, mean: 1.5, median: 1.5, min: 1, max: 2, iterations: [1, 2] },
+    ]);
   });
 });
 
@@ -8957,5 +9074,179 @@ describe('backlogFlowByIteration', () => {
     expect(points[0]).toMatchObject({ inflow: 2, outflow: 1, net: 1, balance: IDEATION_LOW_WATER + 1 });
     expect(points[1]).toMatchObject({ inflow: 1, outflow: 1, net: 0, balance: IDEATION_LOW_WATER + 1 });
     expect(points[2]).toMatchObject({ inflow: 0, outflow: 1, net: -1, balance: IDEATION_LOW_WATER });
+  });
+});
+
+describe('backlogGenerationRateSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(backlogGenerationRateSignal([])).toBeNull();
+  });
+
+  it('1件、生成0件なら平均レートは0で持続不可、生成不足streakは1（発報はまだ）', () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, 1));
+    expect(s).not.toBeNull();
+    expect(s!.windowSize).toBe(1);
+    expect(s!.recentAverageRate).toBe(0);
+    expect(s!.overallAverageRate).toBe(0);
+    expect(s!.belowSustainableRate).toBe(true);
+    expect(s!.lowRateStreak).toBe(1);
+    expect(s!.triggered).toBe(false);
+    expect(s!.iterations).toEqual([1]);
+    expect(s!.points).toEqual([{ iteration: 1, generated: 0 }]);
+  });
+
+  it('1件、生成1件はちょうど持続可能レート（境界値）なので不足streakは0で持続可能', () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, 1, 1));
+    expect(s!.recentAverageRate).toBe(GENERATION_RATE_SUSTAINABLE);
+    expect(s!.belowSustainableRate).toBe(false);
+    expect(s!.lowRateStreak).toBe(0);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it(`生成不足が${GENERATION_RATE_ALERT_STREAK}反復連続すると発報する（境界値ちょうど）`, () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, GENERATION_RATE_ALERT_STREAK));
+    expect(s!.lowRateStreak).toBe(GENERATION_RATE_ALERT_STREAK);
+    expect(s!.triggered).toBe(true);
+  });
+
+  it(`生成不足が${GENERATION_RATE_ALERT_STREAK - 1}反復連続では未発報（閾値未満）`, () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, GENERATION_RATE_ALERT_STREAK - 1));
+    expect(s!.lowRateStreak).toBe(GENERATION_RATE_ALERT_STREAK - 1);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it('直近が生成ありで途切れれば、それ以前に不足が続いていてもstreakは0にリセットされる', () => {
+    const runs = [...makeRunRange(1, 3), makeRun({ iteration: 4, nextIssues: [401] })];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.lowRateStreak).toBe(0);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it(`直近${GENERATION_RATE_WINDOW}反復だけを平均レートに使い、全体平均とは別集計になる`, () => {
+    // 前半5反復は生成3件(平均3)、後半(window分)5反復は生成0件(平均0)。
+    // overallAverageRate は全10反復の平均、recentAverageRate は直近5反復のみ。
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 10)];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.windowSize).toBe(GENERATION_RATE_WINDOW);
+    expect(s!.iterations).toEqual([6, 7, 8, 9, 10]);
+    expect(s!.recentAverageRate).toBe(0);
+    expect(s!.overallAverageRate).toBe(1.5);
+    expect(s!.belowSustainableRate).toBe(true);
+    expect(s!.lowRateStreak).toBe(5);
+    expect(s!.triggered).toBe(true);
+  });
+
+  it('iteration降順など入力順に依存せず、iteration昇順に整列して集計する', () => {
+    const runs = [
+      makeRun({ iteration: 3, nextIssues: [] }),
+      makeRun({ iteration: 1, nextIssues: [101, 102] }),
+      makeRun({ iteration: 2, nextIssues: [] }),
+    ];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.points).toEqual([
+      { iteration: 1, generated: 2 },
+      { iteration: 2, generated: 0 },
+      { iteration: 3, generated: 0 },
+    ]);
+    expect(s!.lowRateStreak).toBe(2);
+  });
+});
+
+describe('ideationExecutionConsumptionGapSignal', () => {
+  it.each([
+    { label: 'runsが空（境界値）', runs: [] as RunRecord[] },
+    {
+      label: '実行(提案)反復が1件以下',
+      runs: [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [101] }),
+        makeRun({ iteration: 2, issue: { number: 101, title: 'x', labels: [] } }),
+        makeRun({ iteration: 3, issue: { number: 3, title: 'y', labels: [] } }),
+      ],
+    },
+    {
+      label: '着手(消費)反復が1件以下',
+      runs: [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [101] }),
+        makeRun({ iteration: 2, issue: { number: 2, title: 'gen', labels: [] }, nextIssues: [102] }),
+        makeRun({ iteration: 3, issue: { number: 101, title: 'x', labels: [] } }),
+      ],
+    },
+    {
+      label: 'nextIssuesがあってもcost.ideationUsdが0以下の反復は実行とみなさない(実質1件しか無い)',
+      runs: [
+        makeRun({
+          iteration: 1,
+          issue: { number: 1, title: 'gen', labels: [] },
+          nextIssues: [101],
+          cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 },
+        }),
+        makeRun({ iteration: 2, issue: { number: 2, title: 'gen', labels: [] }, nextIssues: [102] }),
+        makeRun({ iteration: 3, issue: { number: 101, title: 'x', labels: [] } }),
+        makeRun({ iteration: 4, issue: { number: 102, title: 'y', labels: [] } }),
+      ],
+    },
+  ])('$label だと間隔を算出できずnull', ({ runs }) => {
+    expect(ideationExecutionConsumptionGapSignal(runs)).toBeNull();
+  });
+
+  it('実行間隔と消費間隔が等しければ ratio=1 で aligned（未発報）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [101] }),
+      makeRun({ iteration: 2, issue: { number: 101, title: 'x', labels: [] } }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'gen', labels: [] }, nextIssues: [102] }),
+      makeRun({ iteration: 4, issue: { number: 102, title: 'y', labels: [] } }),
+      makeRun({ iteration: 5, issue: { number: 5, title: 'gen', labels: [] }, nextIssues: [103] }),
+      makeRun({ iteration: 6, issue: { number: 103, title: 'z', labels: [] } }),
+    ];
+    const signal = ideationExecutionConsumptionGapSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.executionCount).toBe(3);
+    expect(signal!.consumptionCount).toBe(3);
+    expect(signal!.executionIterations).toEqual([1, 3, 5]);
+    expect(signal!.consumptionIterations).toEqual([2, 4, 6]);
+    expect(signal!.avgExecutionIntervalIterations).toBeCloseTo(2, 10);
+    expect(signal!.avgConsumptionIntervalIterations).toBeCloseTo(2, 10);
+    expect(signal!.ratio).toBeCloseTo(1, 10);
+    expect(signal!.direction).toBe('aligned');
+    expect(signal!.triggered).toBe(false);
+  });
+
+  it('ratioが閾値(IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD)ちょうどでも execution-ahead として発報する（境界値、閾値を含む）', () => {
+    expect(IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD).toBe(2);
+    const runs = [
+      // 実行間隔=1
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [101] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen', labels: [] }, nextIssues: [102] }),
+      // 着手間隔=2 → ratio = 2/1 = 2（閾値ちょうど）
+      makeRun({ iteration: 4, issue: { number: 101, title: 'x', labels: [] } }),
+      makeRun({ iteration: 6, issue: { number: 102, title: 'y', labels: [] } }),
+    ];
+    const signal = ideationExecutionConsumptionGapSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.avgExecutionIntervalIterations).toBeCloseTo(1, 10);
+    expect(signal!.avgConsumptionIntervalIterations).toBeCloseTo(2, 10);
+    expect(signal!.ratio).toBeCloseTo(2, 10);
+    expect(signal!.direction).toBe('execution-ahead');
+    expect(signal!.triggered).toBe(true);
+  });
+
+  it('実行間隔が消費間隔よりIDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD倍以上長いと consumption-ahead（発報）', () => {
+    const runs = [
+      // 実行は反復1と31（間隔30）とまばら
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [201] }),
+      makeRun({ iteration: 31, issue: { number: 31, title: 'gen', labels: [] }, nextIssues: [202] }),
+      makeRun({ iteration: 61, issue: { number: 61, title: 'gen', labels: [] }, nextIssues: [203] }),
+      // 着手は反復59,60,62（間隔1と2、平均1.5）と密集
+      makeRun({ iteration: 59, issue: { number: 201, title: 'a', labels: [] } }),
+      makeRun({ iteration: 60, issue: { number: 202, title: 'b', labels: [] } }),
+      makeRun({ iteration: 62, issue: { number: 203, title: 'c', labels: [] } }),
+    ];
+    const signal = ideationExecutionConsumptionGapSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.avgExecutionIntervalIterations).toBeCloseTo(30, 10);
+    expect(signal!.avgConsumptionIntervalIterations).toBeCloseTo(1.5, 10);
+    expect(signal!.ratio).toBeCloseTo(0.05, 10);
+    expect(signal!.direction).toBe('consumption-ahead');
+    expect(signal!.triggered).toBe(true);
   });
 });

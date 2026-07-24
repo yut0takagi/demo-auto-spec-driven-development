@@ -10,6 +10,8 @@ import { IdeationEarlyAbandonmentPanel } from '@/components/IdeationEarlyAbandon
 import { IdeationQualityDegradationPanel } from '@/components/IdeationQualityDegradationPanel';
 import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 import { BacklogFlowPanel } from '@/components/BacklogFlowPanel';
+import { BacklogGenerationRatePanel } from '@/components/BacklogGenerationRatePanel';
+import { IdeationExecutionConsumptionGapPanel } from '@/components/IdeationExecutionConsumptionGapPanel';
 
 export default function IdeationPage() {
   const { runs } = loadRuns();
@@ -35,6 +37,8 @@ export default function IdeationPage() {
         <IdeationEarlyAbandonmentPanel runs={runs} />
         <BacklogLowWaterEtaPanel runs={runs} />
         <BacklogFlowPanel runs={runs} />
+        <BacklogGenerationRatePanel runs={runs} />
+        <IdeationExecutionConsumptionGapPanel runs={runs} />
       </div>
     </main>
   );

@@ -8,6 +8,7 @@ import { ReviseCycleCostRecoveryPanel } from '@/components/ReviseCycleCostRecove
 import { ReviseSizeSuccessPatternPanel } from '@/components/ReviseSizeSuccessPatternPanel';
 import { RevisionSizeCurvePanel } from '@/components/RevisionSizeCurvePanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
+import { MergePathLengthByVerdictPanel } from '@/components/MergePathLengthByVerdictPanel';
 import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { VerdictTransitionRootCausePanel } from '@/components/VerdictTransitionRootCausePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
@@ -37,6 +38,7 @@ export default function RevisePage() {
         <ReviseSizeSuccessPatternPanel runs={runs} />
         <RevisionSizeCurvePanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
+        <MergePathLengthByVerdictPanel runs={runs} />
         <VerdictTransitionPanel runs={runs} />
         <VerdictTransitionRootCausePanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />

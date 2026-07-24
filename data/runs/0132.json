@@ -1,0 +1,44 @@
+{
+  "id": "20260724T115644Z-213",
+  "iteration": 132,
+  "issue": {
+    "number": 213,
+    "title": "Verdict別マージまでの経路長パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/213-verdict",
+  "startedAt": "2026-07-24T11:56:44Z",
+  "finishedAt": "2026-07-24T12:04:33Z",
+  "durationSec": 469,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Verdict別マージまでの経路長パネルの新規実装。経路長計算（merged前方参照・インデックス差）、verdict別グルーピング＋統計、UI表示、型安全性、テスト（14項目・実質検証）すべて正確。要件充足・既存破壊なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.182589,
+    "adversaryUsd": 0.120522,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 1.303111
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

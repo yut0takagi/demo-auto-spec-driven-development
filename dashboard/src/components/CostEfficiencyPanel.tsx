@@ -14,7 +14,16 @@ export function CostEfficiencyPanel({ runs }: { runs: RunRecord[] }) {
   }
 
   const trend = costPerApprovedPrTrend(runs);
-  const maxValue = Math.max(...trend.map((p) => p.value));
+  const finiteValues = trend.map((p) => p.value).filter((v) => Number.isFinite(v));
+  const maxValue = finiteValues.length > 0 ? Math.max(...finiteValues) : 0;
+  // 正の値のバーは必ず視認できる最小高さを確保する。窓内に早期の大コスト点があると
+  // running average が急減し (value/max)*100 がサブピクセルまで潰れて不可視になり、
+  // Playwright の toBeVisible が落ちる（CI で実際に発生）。非有限値は 0 に倒す。
+  const MIN_BAR_HEIGHT_PCT = 8;
+  const barHeightPct = (value: number) => {
+    if (!Number.isFinite(value) || value <= 0 || maxValue <= 0) return 0;
+    return Math.max((value / maxValue) * 100, MIN_BAR_HEIGHT_PCT);
+  };
 
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-5" data-testid="cost-efficiency-panel">
@@ -41,7 +50,7 @@ export function CostEfficiencyPanel({ runs }: { runs: RunRecord[] }) {
             key={p.iteration}
             data-testid={`cost-efficiency-bar-${p.iteration}`}
             className="flex-1 rounded-t bg-sky-400"
-            style={{ height: `${maxValue === 0 ? 0 : (p.value / maxValue) * 100}%` }}
+            style={{ height: `${barHeightPct(p.value)}%` }}
             title={`iteration ${p.iteration}: $${p.value.toFixed(2)}`}
           />
         ))}

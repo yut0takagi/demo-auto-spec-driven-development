@@ -2580,6 +2580,84 @@ export function durationByVerdict(runs: RunRecord[]): VerdictDurationSummary[] {
     });
 }
 
+export interface VerdictMergePathLengthSummary {
+  verdict: Verdict;
+  /** この verdict に該当し、かつ後続に merged 反復が存在した(経路長を計算できた)反復数 */
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/** 平均経路長が同値のときの表示順（VERDICT_REVISE_ORDER と同じ深刻度順に合わせる）。 */
+const VERDICT_MERGE_PATH_LENGTH_ORDER: readonly Verdict[] = [
+  'failed',
+  'abandoned',
+  'needs-human',
+  'paused',
+  'dry-run',
+  'merged',
+];
+
+/**
+ * merged 以外の verdict で終わった反復から、次に merged が現れる反復まで何反復かかったか
+ * （＝「マージまでの経路長」）を、その反復自身の verdict別に集計する。durationByVerdict/
+ * reviseCyclesByVerdict が「その反復自身の実測値」をverdict別に比較するのに対し、
+ * こちらは「そこからどれだけ経路を辿れば merge に辿り着くか」という前方参照の指標であり、
+ * まだ merged に至っていない末尾の反復（このデータの範囲内に後続の merged が一つも
+ * 存在しない反復）は経路長を計算できないため対象外とする（gateReasonRecoverySteps の
+ * recovered=false と同じ理由: 結末がまだ分からないものを混ぜると平均が意味を持たない）。
+ * merged 自身は既に merge 済みであり経路長という概念が適用されないため、集計対象にも
+ * 結果にも現れない。
+ * 経路長は iteration 番号の差ではなく sorted 配列上の位置の差で数える。これにより
+ * 不正レコードの読み飛ばし等で iteration 番号に欠番があっても実際に挟まった反復数と
+ * 一致する。平均経路長が長い（＝mergeから遠い）verdictほど上に表示される。
+ */
+export function mergePathLengthByVerdict(runs: RunRecord[]): VerdictMergePathLengthSummary[] {
+  const sorted = byIterationAsc(runs);
+  const byVerdict = new Map<Verdict, { values: number[]; iterations: number[] }>();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const run = sorted[i];
+    if (run.verdict === 'merged') continue;
+
+    let nextMergedIdx = -1;
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (sorted[j].verdict === 'merged') {
+        nextMergedIdx = j;
+        break;
+      }
+    }
+    if (nextMergedIdx === -1) continue;
+
+    let entry = byVerdict.get(run.verdict);
+    if (!entry) {
+      entry = { values: [], iterations: [] };
+      byVerdict.set(run.verdict, entry);
+    }
+    entry.values.push(nextMergedIdx - i);
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byVerdict.entries()]
+    .map(([verdict, entry]) => ({
+      verdict,
+      count: entry.values.length,
+      mean: mean(entry.values),
+      median: median(entry.values),
+      min: Math.min(...entry.values),
+      max: Math.max(...entry.values),
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => {
+      if (b.mean !== a.mean) return b.mean - a.mean;
+      return VERDICT_MERGE_PATH_LENGTH_ORDER.indexOf(a.verdict) - VERDICT_MERGE_PATH_LENGTH_ORDER.indexOf(b.verdict);
+    });
+}
+
 export interface ModelEffectivenessSummary {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */
@@ -3613,10 +3691,21 @@ export function recentAdversaryComments(runs: RunRecord[]): AdversaryCommentDige
 }
 
 /**
+ * costPerApprovedPrTrend が返す点数の上限。CostEfficiencyPanel は各点を
+ * flex-1 + gap-1 の棒として描画するため、run数が増えるほど棒1本あたりの
+ * 幅が縮み、run数が数十〜百件規模になると隙間(gap)の合計だけでパネル幅を
+ * 超えてしまい、末尾の棒の実描画幅が0になって非表示扱いになる
+ * （e2e『Cost効率パネル』テストが最終点の棒を検出できなくなる）。
+ * 直近 COST_PER_APPROVED_PR_TREND_LIMIT 件に絞ることで棒の最小幅を確保する。
+ */
+export const COST_PER_APPROVED_PR_TREND_LIMIT = 30;
+
+/**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は
  * 分母が0で無意味なため、最初の承認PRが出た iteration 以降だけ点を持つ
- * （costTrend が全run区間で点を持つのとは異なる）。
+ * （costTrend が全run区間で点を持つのとは異なる）。点数は直近
+ * COST_PER_APPROVED_PR_TREND_LIMIT 件までに絞る（理由は同定数のコメント参照）。
  */
 export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
   let cumulativeCost = 0;
@@ -3631,7 +3720,7 @@ export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
       points.push({ iteration: r.iteration, value });
     }
   }
-  return points;
+  return points.slice(-COST_PER_APPROVED_PR_TREND_LIMIT);
 }
 
 export interface IdeationBatchQuality {
@@ -4613,6 +4702,78 @@ export function ideationToStartBottlenecks(runs: RunRecord[]): IdeationToStartBo
   }
 
   return bottlenecks.sort((a, b) => a.proposedIteration - b.proposedIteration);
+}
+
+/** execution/consumption のどちらかの間隔がもう一方の何倍以上離れたら「ズレ」と判定するか。 */
+export const IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD = 2;
+
+/** execution-ahead: 生産過多(バックログ増加方向)。consumption-ahead: 消費過多(在庫枯渇方向)。 */
+export type IdeationExecutionConsumptionGapDirection = 'execution-ahead' | 'consumption-ahead' | 'aligned';
+
+export interface IdeationExecutionConsumptionGapSignal {
+  /** Ideationが1件以上issueを提案した(実行した)反復数 */
+  executionCount: number;
+  /** いずれかの提案issueが着手された反復数（ideationToStartLeadTimesの母集団と同じ） */
+  consumptionCount: number;
+  /** 実行反復どうしの反復番号の差の平均 */
+  avgExecutionIntervalIterations: number;
+  /** 着手反復どうしの反復番号の差の平均 */
+  avgConsumptionIntervalIterations: number;
+  /** avgConsumptionIntervalIterations / avgExecutionIntervalIterations。1に近いほどペースが一致 */
+  ratio: number;
+  direction: IdeationExecutionConsumptionGapDirection;
+  /** direction が 'aligned' 以外 */
+  triggered: boolean;
+  /** 実行があった反復番号(昇順) */
+  executionIterations: number[];
+  /** 着手があった反復番号(昇順) */
+  consumptionIterations: number[];
+}
+
+function averageConsecutiveInterval(sortedValues: number[]): number {
+  const diffs: number[] = [];
+  for (let i = 1; i < sortedValues.length; i++) diffs.push(sortedValues[i] - sortedValues[i - 1]);
+  return mean(diffs);
+}
+
+/**
+ * Ideationの「実行」（提案した反復。判定は ideationProposalConsumption と同じ）間隔と、
+ * 提案issueの「消費」（ideationToStartLeadTimes と同じ着手判定）間隔を比較し、issue単位の
+ * リードタイムではなく両イベントの発生リズムのズレを検知する。いずれかが2件未満ならnull。
+ */
+export function ideationExecutionConsumptionGapSignal(runs: RunRecord[]): IdeationExecutionConsumptionGapSignal | null {
+  const sorted = byIterationAsc(runs);
+
+  const executionIterations = sorted
+    .filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0)
+    .map((r) => r.iteration);
+
+  const consumptionIterations = ideationToStartLeadTimes(runs).map((p) => p.startIteration);
+
+  if (executionIterations.length < 2 || consumptionIterations.length < 2) return null;
+
+  const avgExecutionIntervalIterations = averageConsecutiveInterval(executionIterations);
+  const avgConsumptionIntervalIterations = averageConsecutiveInterval(consumptionIterations);
+  const ratio = avgConsumptionIntervalIterations / avgExecutionIntervalIterations;
+
+  const direction: IdeationExecutionConsumptionGapDirection =
+    ratio >= IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD
+      ? 'execution-ahead'
+      : ratio <= 1 / IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD
+        ? 'consumption-ahead'
+        : 'aligned';
+
+  return {
+    executionCount: executionIterations.length,
+    consumptionCount: consumptionIterations.length,
+    avgExecutionIntervalIterations,
+    avgConsumptionIntervalIterations,
+    ratio,
+    direction,
+    triggered: direction !== 'aligned',
+    executionIterations,
+    consumptionIterations,
+  };
 }
 
 /**
@@ -5933,4 +6094,80 @@ export function backlogFlowByIteration(runs: RunRecord[]): BacklogFlowPoint[] {
     balance += net;
     return { iteration: run.iteration, inflow, outflow, net, balance };
   });
+}
+
+/** 生成レートの移動平均に使う直近反復数。 */
+export const GENERATION_RATE_WINDOW = 5;
+
+/** 1反復あたり必ず1件消費されるため、生成レートがこれを下回ると持続不可能（先細り）。 */
+export const GENERATION_RATE_SUSTAINABLE = 1;
+
+/** 生成不足（1件未満）が何反復連続したら発報するか。 */
+export const GENERATION_RATE_ALERT_STREAK = 3;
+
+export interface BacklogGenerationRatePoint {
+  iteration: number;
+  /** その反復が ideation で生成した issue 数（nextIssues.length）。 */
+  generated: number;
+}
+
+export interface BacklogGenerationRateSignal {
+  /** recentAverageRate の算出に使った反復数（GENERATION_RATE_WINDOW を上限にruns件数で制限）。 */
+  windowSize: number;
+  /** 直近windowSize反復の平均生成数。 */
+  recentAverageRate: number;
+  /** 全反復を通した平均生成数（比較用のベースライン）。 */
+  overallAverageRate: number;
+  /** recentAverageRate が GENERATION_RATE_SUSTAINABLE を下回っている。 */
+  belowSustainableRate: boolean;
+  /** 直近から遡って、生成数が持続可能レート未満の反復が連続している数。 */
+  lowRateStreak: number;
+  /** lowRateStreak が GENERATION_RATE_ALERT_STREAK 以上（発報）。 */
+  triggered: boolean;
+  /** 全反復の生成点列（古い→新しい順）。 */
+  points: BacklogGenerationRatePoint[];
+  /** recentAverageRate の対象iteration（古い→新しい順）。 */
+  iterations: number[];
+}
+
+/**
+ * バックログ生成レート監視: 直近の生成数(nextIssues.length)平均が、1反復あたり
+ * 必ず1件消費される持続可能レートを下回っていないかを監視する。balance/ETA系の既存
+ * パネルとは異なり、生成数そのものの推移と不足streakを追跡する。runsが空ならnull。
+ */
+export function backlogGenerationRateSignal(runs: RunRecord[]): BacklogGenerationRateSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const points: BacklogGenerationRatePoint[] = sorted.map((run) => ({
+    iteration: run.iteration,
+    generated: run.nextIssues.length,
+  }));
+
+  const windowSize = Math.min(GENERATION_RATE_WINDOW, points.length);
+  const windowPoints = points.slice(points.length - windowSize);
+  const recentAverageRate = windowPoints.reduce((sum, p) => sum + p.generated, 0) / windowSize;
+  const overallAverageRate = points.reduce((sum, p) => sum + p.generated, 0) / points.length;
+  const belowSustainableRate = recentAverageRate < GENERATION_RATE_SUSTAINABLE;
+
+  let lowRateStreak = 0;
+  for (let i = points.length - 1; i >= 0; i--) {
+    if (points[i].generated < GENERATION_RATE_SUSTAINABLE) {
+      lowRateStreak += 1;
+    } else {
+      break;
+    }
+  }
+  const triggered = lowRateStreak >= GENERATION_RATE_ALERT_STREAK;
+
+  return {
+    windowSize,
+    recentAverageRate,
+    overallAverageRate,
+    belowSustainableRate,
+    lowRateStreak,
+    triggered,
+    points,
+    iterations: windowPoints.map((p) => p.iteration),
+  };
 }
