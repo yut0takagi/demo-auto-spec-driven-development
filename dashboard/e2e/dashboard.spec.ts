@@ -49,6 +49,7 @@ import {
   verdictTransitionSummary,
   dropoutStreaks,
   reviseCyclesSizeCurve,
+  modelEfficiencyByRole,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1814,4 +1815,56 @@ test('変更規模と修正サイクルの非線形カーブパネルが実デ�
   const body3 = await bodyTextExcludingFreeform(page);
   expect(body3).not.toContain('NaN');
   expect(body3).not.toContain('undefined');
+});
+
+test('Model効率分析パネルが実データから導出した役割別・モデル別のマージ率とコストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+
+  const roles = modelEfficiencyByRole(runs);
+  expect(roles.length, 'run が1件以上あれば builder/adversary/ideation の3役割が必ず返るはず').toBe(3);
+
+  const panel = page.getByTestId('model-efficiency-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${roles.length}役割`);
+
+  // 各role×modelの行が modelEfficiencyByRole()（別の計算経路）と一致する
+  // マージ率・件数・コスト・マージ1件あたりコストを表示していること
+  for (const role of roles) {
+    const roleEl = page.getByTestId(`model-efficiency-role-${role.role}`);
+    await expect(roleEl).toBeVisible();
+
+    for (const e of role.entries) {
+      const mergeEl = page.getByTestId(`model-efficiency-merge-${role.role}-${e.model}`);
+      await expect(mergeEl).toHaveText(`マージ率${(e.mergeRate * 100).toFixed(1)}% (${e.count}件)`);
+
+      const statsEl = page.getByTestId(`model-efficiency-stats-${role.role}-${e.model}`);
+      const expectedPerMerged =
+        e.costPerMergedRunUsd === null ? '算出不可（マージ0件）' : `$${e.costPerMergedRunUsd.toFixed(2)}`;
+      await expect(statsEl).toHaveText(
+        `コスト$${e.totalCostUsd.toFixed(2)}（平均$${e.avgCostUsd.toFixed(2)}/件）/ マージ1件あたり${expectedPerMerged}`,
+      );
+
+      const entryEl = page.getByTestId(`model-efficiency-entry-${role.role}-${e.model}`);
+      await expect(entryEl).toContainText(`対象iteration: ${e.iterations.join(', ')}`);
+    }
+
+    // role内はmergeRate降順で描画されていること
+    const entryEls = await page
+      .locator(`[data-testid^="model-efficiency-entry-${role.role}-"]`)
+      .all();
+    const renderedModels = await Promise.all(
+      entryEls.map(async (el) => (await el.getAttribute('data-testid'))!.replace(
+        `model-efficiency-entry-${role.role}-`,
+        '',
+      )),
+    );
+    expect(renderedModels).toEqual(role.entries.map((e) => e.model));
+  }
+
+  const body4 = await bodyTextExcludingFreeform(page);
+  expect(body4).not.toContain('NaN');
+  expect(body4).not.toContain('undefined');
 });

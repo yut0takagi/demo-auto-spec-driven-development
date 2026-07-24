@@ -33,6 +33,7 @@ import {
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
+  modelEfficiencyByRole,
   builderModelSwitchComparisons,
   approvalRateTrendByModel,
   ideationFailureSummary,
@@ -2496,6 +2497,89 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('modelEfficiencyByRole', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(modelEfficiencyByRole([])).toEqual([]);
+  });
+
+  it('role は builder→adversary→ideation の固定順で3件返す', () => {
+    const result = modelEfficiencyByRole([makeRun({ iteration: 1 })]);
+    expect(result.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+  });
+
+  it('role×modelでコストを分離集計し、mergeRate降順で並べ、costPerMergedRunUsdは0除算を避けてnullにする', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        cost: { builderUsd: 1, adversaryUsd: 0.1, ideationUsd: 0.05, totalUsd: 1.15 },
+        models: { builder: 'sonnet', adversary: 'haiku', ideation: 'haiku' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'needs-human',
+        cost: { builderUsd: 2, adversaryUsd: 0.2, ideationUsd: 0.3, totalUsd: 2.5 },
+        models: { builder: 'sonnet', adversary: 'haiku', ideation: 'opus' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        cost: { builderUsd: 0.5, adversaryUsd: 0.4, ideationUsd: 0.1, totalUsd: 1.0 },
+        models: { builder: 'haiku', adversary: 'sonnet', ideation: 'haiku' },
+      }),
+    ];
+
+    const result = modelEfficiencyByRole(runs);
+    const byRole = Object.fromEntries(result.map((r) => [r.role, r.entries]));
+
+    // builder: haiku(mergeRate=1) が sonnet(mergeRate=0.5) より先。同モデルでも role をまたいでコストを合算しない。
+    expect(byRole.builder.map((e) => e.model)).toEqual(['haiku', 'sonnet']);
+    const builderHaiku = byRole.builder[0];
+    expect(builderHaiku.count).toBe(1);
+    expect(builderHaiku.mergeRate).toBe(1);
+    expect(builderHaiku.totalCostUsd).toBeCloseTo(0.5, 10);
+    expect(builderHaiku.avgCostUsd).toBeCloseTo(0.5, 10);
+    expect(builderHaiku.costPerMergedRunUsd).toBeCloseTo(0.5, 10);
+    expect(builderHaiku.iterations).toEqual([3]);
+
+    const builderSonnet = byRole.builder[1];
+    expect(builderSonnet.count).toBe(2);
+    expect(builderSonnet.mergeRate).toBeCloseTo(0.5, 10);
+    expect(builderSonnet.totalCostUsd).toBeCloseTo(3, 10);
+    expect(builderSonnet.avgCostUsd).toBeCloseTo(1.5, 10);
+    expect(builderSonnet.costPerMergedRunUsd).toBeCloseTo(3, 10);
+    expect(builderSonnet.iterations).toEqual([1, 2]);
+
+    // adversary: sonnet(mergeRate=1) が haiku(mergeRate=0.5) より先。builderのコストとは別集計。
+    expect(byRole.adversary.map((e) => e.model)).toEqual(['sonnet', 'haiku']);
+    expect(byRole.adversary[0].totalCostUsd).toBeCloseTo(0.4, 10);
+    expect(byRole.adversary[1].totalCostUsd).toBeCloseTo(0.3, 10);
+
+    // ideation: haiku(mergeRate=1, 2件とも merged) が opus(mergeRate=0) より先。
+    // opus はマージ0件なので costPerMergedRunUsd は0除算を避けて null。
+    expect(byRole.ideation.map((e) => e.model)).toEqual(['haiku', 'opus']);
+    const ideationHaiku = byRole.ideation[0];
+    expect(ideationHaiku.count).toBe(2);
+    expect(ideationHaiku.mergeRate).toBe(1);
+    expect(ideationHaiku.totalCostUsd).toBeCloseTo(0.15, 10);
+    expect(ideationHaiku.costPerMergedRunUsd).toBeCloseTo(0.075, 10);
+
+    const ideationOpus = byRole.ideation[1];
+    expect(ideationOpus.mergeRate).toBe(0);
+    expect(ideationOpus.costPerMergedRunUsd).toBeNull();
+  });
+
+  it('mergeRateが同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', models: { builder: 'zeta', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 2, verdict: 'merged', models: { builder: 'alpha', adversary: 'x', ideation: 'x' } }),
+    ];
+    const result = modelEfficiencyByRole(runs);
+    const builder = result.find((r) => r.role === 'builder')!;
+    expect(builder.entries.map((e) => e.model)).toEqual(['alpha', 'zeta']);
   });
 });
 

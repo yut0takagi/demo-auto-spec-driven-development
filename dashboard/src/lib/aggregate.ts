@@ -1996,6 +1996,97 @@ export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary
     });
 }
 
+export interface ModelEfficiencyEntry {
+  model: string;
+  /** この role でこの model が使われた反復数（verdict に関係なく全件） */
+  count: number;
+  /** develop にマージされた割合 0..1。全 role 共通で verdict === 'merged' の定義を使うため role 間で横並び比較できる */
+  mergeRate: number;
+  /**
+   * この role・この model が実際に消費したコスト(USD)合計。costBreakdown.byModel は
+   * 役割をまたいで同じモデルのコストを合算するが、こちらは role 単体のコストのみを見る
+   * （同じモデルが builder と adversary の両方で使われていても混ぜない）。
+   */
+  totalCostUsd: number;
+  /** totalCostUsd / count */
+  avgCostUsd: number;
+  /** totalCostUsd / マージ件数。マージ件数が0のときは0除算を避けて null */
+  costPerMergedRunUsd: number | null;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+export interface ModelEfficiencyByRole {
+  role: CostRole;
+  entries: ModelEfficiencyEntry[];
+}
+
+function roleCostOf(run: RunRecord, role: CostRole): number {
+  switch (role) {
+    case 'builder':
+      return run.cost.builderUsd;
+    case 'adversary':
+      return run.cost.adversaryUsd;
+    case 'ideation':
+      return run.cost.ideationUsd;
+  }
+}
+
+/**
+ * モデルの「コスト」と「成功率」を role(builder/adversary/ideation) × model という
+ * 2軸で分解する。costBreakdown.byModel は役割をまたいで同じモデル名のコストを合算して
+ * しまい、modelEffectiveness は builder 役割の反復しか見ない。この2つの隙間を埋め、
+ * 「その role でその model が使われた反復のうちどれだけ merged に到達したか(成功率)」と
+ * 「その role が実際に消費したコスト(役割別。他roleと合算しない)」を role ごとに分解して
+ * 並べる。mergeRate は全 role で同じ verdict 定義を使うため role 間でも横並び比較できる
+ * （builder の成功=直接コード生成の成否、adversary/ideation の成功=そのモデルが関わった
+ * 反復が結果的に merged まで到達した割合、という間接指標になる）。
+ * runs が空なら空配列を返す（role を3件返しても中身が空で無意味なため）。
+ * role ごとの entries は mergeRate 降順・同値はモデル名昇順。
+ */
+export function modelEfficiencyByRole(runs: RunRecord[]): ModelEfficiencyByRole[] {
+  if (runs.length === 0) return [];
+
+  const sorted = byIterationAsc(runs);
+
+  return COST_ROLES.map((role) => {
+    const byModel = new Map<
+      string,
+      { count: number; mergedCount: number; costUsd: number; iterations: number[] }
+    >();
+
+    for (const run of sorted) {
+      const model = run.models[role];
+      let entry = byModel.get(model);
+      if (!entry) {
+        entry = { count: 0, mergedCount: 0, costUsd: 0, iterations: [] };
+        byModel.set(model, entry);
+      }
+      entry.count++;
+      if (run.verdict === 'merged') entry.mergedCount++;
+      entry.costUsd += roleCostOf(run, role);
+      entry.iterations.push(run.iteration);
+    }
+
+    const entries: ModelEfficiencyEntry[] = [...byModel.entries()]
+      .map(([model, e]) => ({
+        model,
+        count: e.count,
+        mergeRate: e.mergedCount / e.count,
+        totalCostUsd: e.costUsd,
+        avgCostUsd: e.costUsd / e.count,
+        costPerMergedRunUsd: e.mergedCount === 0 ? null : e.costUsd / e.mergedCount,
+        iterations: e.iterations,
+      }))
+      .sort((a, b) => {
+        if (b.mergeRate !== a.mergeRate) return b.mergeRate - a.mergeRate;
+        return a.model.localeCompare(b.model);
+      });
+
+    return { role, entries };
+  });
+}
+
 export interface BuilderModelSwitchSegment {
   model: string;
   /** この区間の最初の反復番号 */
