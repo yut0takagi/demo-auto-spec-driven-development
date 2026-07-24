@@ -2580,6 +2580,84 @@ export function durationByVerdict(runs: RunRecord[]): VerdictDurationSummary[] {
     });
 }
 
+export interface VerdictMergePathLengthSummary {
+  verdict: Verdict;
+  /** この verdict に該当し、かつ後続に merged 反復が存在した(経路長を計算できた)反復数 */
+  count: number;
+  mean: number;
+  median: number;
+  min: number;
+  max: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/** 平均経路長が同値のときの表示順（VERDICT_REVISE_ORDER と同じ深刻度順に合わせる）。 */
+const VERDICT_MERGE_PATH_LENGTH_ORDER: readonly Verdict[] = [
+  'failed',
+  'abandoned',
+  'needs-human',
+  'paused',
+  'dry-run',
+  'merged',
+];
+
+/**
+ * merged 以外の verdict で終わった反復から、次に merged が現れる反復まで何反復かかったか
+ * （＝「マージまでの経路長」）を、その反復自身の verdict別に集計する。durationByVerdict/
+ * reviseCyclesByVerdict が「その反復自身の実測値」をverdict別に比較するのに対し、
+ * こちらは「そこからどれだけ経路を辿れば merge に辿り着くか」という前方参照の指標であり、
+ * まだ merged に至っていない末尾の反復（このデータの範囲内に後続の merged が一つも
+ * 存在しない反復）は経路長を計算できないため対象外とする（gateReasonRecoverySteps の
+ * recovered=false と同じ理由: 結末がまだ分からないものを混ぜると平均が意味を持たない）。
+ * merged 自身は既に merge 済みであり経路長という概念が適用されないため、集計対象にも
+ * 結果にも現れない。
+ * 経路長は iteration 番号の差ではなく sorted 配列上の位置の差で数える。これにより
+ * 不正レコードの読み飛ばし等で iteration 番号に欠番があっても実際に挟まった反復数と
+ * 一致する。平均経路長が長い（＝mergeから遠い）verdictほど上に表示される。
+ */
+export function mergePathLengthByVerdict(runs: RunRecord[]): VerdictMergePathLengthSummary[] {
+  const sorted = byIterationAsc(runs);
+  const byVerdict = new Map<Verdict, { values: number[]; iterations: number[] }>();
+
+  for (let i = 0; i < sorted.length; i++) {
+    const run = sorted[i];
+    if (run.verdict === 'merged') continue;
+
+    let nextMergedIdx = -1;
+    for (let j = i + 1; j < sorted.length; j++) {
+      if (sorted[j].verdict === 'merged') {
+        nextMergedIdx = j;
+        break;
+      }
+    }
+    if (nextMergedIdx === -1) continue;
+
+    let entry = byVerdict.get(run.verdict);
+    if (!entry) {
+      entry = { values: [], iterations: [] };
+      byVerdict.set(run.verdict, entry);
+    }
+    entry.values.push(nextMergedIdx - i);
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byVerdict.entries()]
+    .map(([verdict, entry]) => ({
+      verdict,
+      count: entry.values.length,
+      mean: mean(entry.values),
+      median: median(entry.values),
+      min: Math.min(...entry.values),
+      max: Math.max(...entry.values),
+      iterations: entry.iterations,
+    }))
+    .sort((a, b) => {
+      if (b.mean !== a.mean) return b.mean - a.mean;
+      return VERDICT_MERGE_PATH_LENGTH_ORDER.indexOf(a.verdict) - VERDICT_MERGE_PATH_LENGTH_ORDER.indexOf(b.verdict);
+    });
+}
+
 export interface ModelEffectivenessSummary {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */

@@ -35,6 +35,7 @@ import {
   reviseVerdictMatrix,
   reviseCycleCostRecovery,
   durationByVerdict,
+  mergePathLengthByVerdict,
   breakerRunway,
   mergedStreak,
   modelEffectiveness,
@@ -3377,6 +3378,95 @@ describe('durationByVerdict', () => {
     ];
     const result = durationByVerdict(runs);
     expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
+describe('mergePathLengthByVerdict', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(mergePathLengthByVerdict([])).toEqual([]);
+  });
+
+  it('merged だけの場合は経路長という概念が適用されないため空配列を返す', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([]);
+  });
+
+  it('後続に merged が一度も現れない反復（データ終端）は経路長を計算できないため対象外', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'abandoned' }), makeRun({ iteration: 2, verdict: 'failed' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([]);
+  });
+
+  it('直後の反復が merged なら経路長は1になる', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'abandoned' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(mergePathLengthByVerdict(runs)).toEqual([
+      { verdict: 'abandoned', count: 1, mean: 1, median: 1, min: 1, max: 1, iterations: [1] },
+    ]);
+  });
+
+  it('複数反復先で merged に至った場合、間の反復数を経路長として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result).toEqual([
+      { verdict: 'failed', count: 2, mean: 1.5, median: 1.5, min: 1, max: 2, iterations: [1, 2] },
+    ]);
+  });
+
+  it('verdict ごとにグループ化し、平均経路長の降順（mergeから遠い順）で並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }), // 経路長 3
+      makeRun({ iteration: 2, verdict: 'abandoned' }), // 経路長 2
+      makeRun({ iteration: 3, verdict: 'abandoned' }), // 経路長 1
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['failed', 'abandoned']);
+    expect(result[0]).toEqual({ verdict: 'failed', count: 1, mean: 3, median: 3, min: 3, max: 3, iterations: [1] });
+    expect(result[1]).toEqual({
+      verdict: 'abandoned',
+      count: 2,
+      mean: 1.5,
+      median: 1.5,
+      min: 1,
+      max: 2,
+      iterations: [2, 3],
+    });
+  });
+
+  it('平均経路長が同値のときは深刻度順（failed > abandoned > needs-human > paused > dry-run）で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned' }), // 経路長 1（次のiteration 2がmerged）
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }), // 経路長 1（次のiteration 4がmerged）
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.map((r) => r.verdict)).toEqual(['failed', 'abandoned']);
+  });
+
+  it('merged 自身は結果に含まれない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result.some((r) => r.verdict === 'merged')).toBe(false);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持し、直後のmergedを正しく探す', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 1, verdict: 'abandoned' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+    ];
+    const result = mergePathLengthByVerdict(runs);
+    expect(result).toEqual([
+      { verdict: 'abandoned', count: 2, mean: 1.5, median: 1.5, min: 1, max: 2, iterations: [1, 2] },
+    ]);
   });
 });
 
