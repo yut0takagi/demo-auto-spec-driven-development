@@ -1,0 +1,45 @@
+{
+  "id": "20260724T044854Z-160",
+  "iteration": 100,
+  "issue": {
+    "number": 160,
+    "title": "Model ペア相性の乖離検知パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/160-model",
+  "startedAt": "2026-07-24T04:48:54Z",
+  "finishedAt": "2026-07-24T05:13:34Z",
+  "durationSec": 1480,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 178,
+  "adversary": {
+    "approved": true,
+    "summary": "Model ペア相性の乖離検知パネルが要件通りに実装されています。二元配置加法モデルで期待値を計算し、identifiable かつサンプル数・乖離幅の閾値を満たすペアを検知する。テストは空データ・交絡・乖離検知・サンプル不足の各ケースを実質的に検証し、統合も正確です。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 600,
+  "cost": {
+    "builderUsd": 8.561073,
+    "adversaryUsd": 0.094416,
+    "ideationUsd": 0.32542875,
+    "totalUsd": 8.980918
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    172,
+    173,
+    174
+  ]
+}
