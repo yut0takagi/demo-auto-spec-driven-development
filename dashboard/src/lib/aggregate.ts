@@ -1511,6 +1511,152 @@ export function gateReasonChains(runs: RunRecord[]): GateReasonChain[] {
     .reverse();
 }
 
+export interface GateReasonCooccurrencePair {
+  categories: [GateReasonCategory, GateReasonCategory];
+  /** 同一run内でこの2カテゴリが同時出現した回数（run単位。1runにつき最大1カウント） */
+  count: number;
+  /** 該当した反復番号（重複なし・昇順） */
+  iterations: number[];
+}
+
+/** これ未満の共起回数のペアはノイズとみなしクラスタリングの辺として採用しない。 */
+export const GATE_REASON_COOCCURRENCE_MIN_COUNT = 2;
+
+/**
+ * run単位でgateReasonsを分類・重複排除し（gateReasonChainsと同じ手順）、集合内の
+ * 全2要素組み合わせについて同時出現回数を集計する。ペアキーはGATE_REASON_CATEGORY_ORDER
+ * 順に正規化しているため、A-BとB-Aは同一ペアとして扱われる。count降順、同数は
+ * GATE_REASON_CATEGORY_ORDER準拠で安定ソートして返す。
+ */
+export function gateReasonCooccurrencePairs(runs: RunRecord[]): GateReasonCooccurrencePair[] {
+  const byPairKey = new Map<
+    string,
+    { categories: [GateReasonCategory, GateReasonCategory]; count: number; iterations: Set<number> }
+  >();
+
+  for (const run of byIterationAsc(runs)) {
+    const seen = new Set<GateReasonCategory>();
+    for (const reason of run.gateReasons) {
+      seen.add(classifyGateReason(reason, run.adversary.summary));
+    }
+    const categories = [...seen].sort(
+      (a, b) => GATE_REASON_CATEGORY_ORDER.indexOf(a) - GATE_REASON_CATEGORY_ORDER.indexOf(b),
+    );
+
+    for (let i = 0; i < categories.length; i++) {
+      for (let j = i + 1; j < categories.length; j++) {
+        const pair: [GateReasonCategory, GateReasonCategory] = [categories[i], categories[j]];
+        const key = pair.join('|');
+        let entry = byPairKey.get(key);
+        if (!entry) {
+          entry = { categories: pair, count: 0, iterations: new Set() };
+          byPairKey.set(key, entry);
+        }
+        entry.count++;
+        entry.iterations.add(run.iteration);
+      }
+    }
+  }
+
+  return [...byPairKey.values()]
+    .map((entry) => ({
+      categories: entry.categories,
+      count: entry.count,
+      iterations: [...entry.iterations].sort((a, b) => a - b),
+    }))
+    .sort((a, b) => {
+      if (b.count !== a.count) return b.count - a.count;
+      const aIdx = GATE_REASON_CATEGORY_ORDER.indexOf(a.categories[0]);
+      const bIdx = GATE_REASON_CATEGORY_ORDER.indexOf(b.categories[0]);
+      if (aIdx !== bIdx) return aIdx - bIdx;
+      return (
+        GATE_REASON_CATEGORY_ORDER.indexOf(a.categories[1]) - GATE_REASON_CATEGORY_ORDER.indexOf(b.categories[1])
+      );
+    });
+}
+
+export interface GateReasonCooccurrenceCluster {
+  /** クラスタに属するカテゴリ（GATE_REASON_CATEGORY_ORDER順、2件以上） */
+  categories: GateReasonCategory[];
+  /** クラスタ内訳。count降順、同数はGATE_REASON_CATEGORY_ORDER順で安定ソート */
+  pairs: GateReasonCooccurrencePair[];
+  /** pairsのcount合計 */
+  totalCooccurrences: number;
+  /** クラスタ内のいずれかのペアが関与した反復番号（重複なし・昇順） */
+  iterations: number[];
+}
+
+/**
+ * gateReasonCooccurrencePairsのうちcount >= minCountの辺だけをUnion-Findで連結し、
+ * 推移的に共起するカテゴリ群を1クラスタにまとめる。2カテゴリ未満（孤立カテゴリ）の
+ * クラスタは出力しない。totalCooccurrences降順、同数は先頭カテゴリのGATE_REASON_CATEGORY_ORDER
+ * 順で安定ソートして返す。
+ */
+export function gateReasonCooccurrenceClusters(
+  runs: RunRecord[],
+  minCount: number = GATE_REASON_COOCCURRENCE_MIN_COUNT,
+): GateReasonCooccurrenceCluster[] {
+  const pairs = gateReasonCooccurrencePairs(runs).filter((p) => p.count >= minCount);
+
+  const parent = new Map<GateReasonCategory, GateReasonCategory>();
+  function find(x: GateReasonCategory): GateReasonCategory {
+    if (!parent.has(x)) parent.set(x, x);
+    let root = x;
+    while (parent.get(root) !== root) root = parent.get(root)!;
+    let cur = x;
+    while (parent.get(cur) !== cur) {
+      const next = parent.get(cur)!;
+      parent.set(cur, root);
+      cur = next;
+    }
+    return root;
+  }
+  function union(a: GateReasonCategory, b: GateReasonCategory) {
+    const rootA = find(a);
+    const rootB = find(b);
+    if (rootA !== rootB) parent.set(rootA, rootB);
+  }
+
+  for (const pair of pairs) {
+    union(pair.categories[0], pair.categories[1]);
+  }
+
+  const groups = new Map<GateReasonCategory, GateReasonCategory[]>();
+  for (const category of parent.keys()) {
+    const root = find(category);
+    let group = groups.get(root);
+    if (!group) {
+      group = [];
+      groups.set(root, group);
+    }
+    group.push(category);
+  }
+
+  const clusters: GateReasonCooccurrenceCluster[] = [];
+  for (const members of groups.values()) {
+    if (members.length < 2) continue;
+    const memberSet = new Set(members);
+    const clusterPairs = pairs.filter((p) => memberSet.has(p.categories[0]) && memberSet.has(p.categories[1]));
+    const iterations = new Set<number>();
+    for (const p of clusterPairs) {
+      for (const it of p.iterations) iterations.add(it);
+    }
+    clusters.push({
+      categories: members.sort(
+        (a, b) => GATE_REASON_CATEGORY_ORDER.indexOf(a) - GATE_REASON_CATEGORY_ORDER.indexOf(b),
+      ),
+      pairs: clusterPairs,
+      totalCooccurrences: clusterPairs.reduce((sum, p) => sum + p.count, 0),
+      iterations: [...iterations].sort((a, b) => a - b),
+    });
+  }
+
+  return clusters.sort((a, b) => {
+    if (b.totalCooccurrences !== a.totalCooccurrences) return b.totalCooccurrences - a.totalCooccurrences;
+    return GATE_REASON_CATEGORY_ORDER.indexOf(a.categories[0]) - GATE_REASON_CATEGORY_ORDER.indexOf(b.categories[0]);
+  });
+}
+
 /** これ未満のstreak（gateReasonsを持つ反復の連続）は「連続」とみなさない（DROPOUT_STREAK_MIN_LENGTHと同じ2）。 */
 export const GATE_REASON_CHAOS_STREAK_MIN_LENGTH = 2;
 
