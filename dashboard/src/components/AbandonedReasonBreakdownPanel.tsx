@@ -1,5 +1,5 @@
 import type { RunRecord } from '@/lib/types';
-import { abandonedReasonBreakdown, type GateReasonCategory } from '@/lib/aggregate';
+import { abandonedReasonOverrepresentation, type GateReasonCategory } from '@/lib/aggregate';
 
 // GateReasonsPanel と同じラベル/色集合（打ち止め=abandonedに絞り込んだ内訳表示にのみ使う）。
 const CATEGORY_LABELS: Record<GateReasonCategory, string> = {
@@ -26,8 +26,25 @@ const CATEGORY_COLORS: Record<GateReasonCategory, string> = {
   other: 'bg-emerald-400',
 };
 
+const SIGNAL_LABELS: Record<'overrepresented' | 'underrepresented' | 'neutral', string> = {
+  overrepresented: '全体より突出',
+  underrepresented: '全体より少ない',
+  neutral: '全体と同程度',
+};
+
+const SIGNAL_BADGE_COLORS: Record<'overrepresented' | 'underrepresented' | 'neutral', string> = {
+  overrepresented: 'bg-rose-500/20 text-rose-300',
+  underrepresented: 'bg-sky-500/20 text-sky-300',
+  neutral: 'bg-white/10 text-white/50',
+};
+
+function formatDeltaPct(deltaPct: number): string {
+  const sign = deltaPct >= 0 ? '+' : '';
+  return `${sign}${deltaPct.toFixed(1)}pt`;
+}
+
 export function AbandonedReasonBreakdownPanel({ runs }: { runs: RunRecord[] }) {
-  const breakdown = abandonedReasonBreakdown(runs);
+  const breakdown = abandonedReasonOverrepresentation(runs);
   const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
 
   if (breakdown.length === 0) {
@@ -39,12 +56,23 @@ export function AbandonedReasonBreakdownPanel({ runs }: { runs: RunRecord[] }) {
     );
   }
 
+  const topOverrepresented = breakdown
+    .filter((b) => b.signal === 'overrepresented')
+    .sort((a, b) => b.deltaPct - a.deltaPct)[0];
+
   return (
     <div className="rounded-xl border border-white/10 bg-white/5 p-5" data-testid="abandoned-reason-breakdown-panel">
       <div className="flex items-baseline justify-between">
         <span className="text-xs uppercase tracking-wider opacity-60">打ち止め（abandoned）の原因分類</span>
         <span className="text-sm tabular-nums opacity-80">{totalCount}件</span>
       </div>
+
+      {topOverrepresented && (
+        <p data-testid="abandoned-reason-top-overrepresented" className="mt-2 text-xs text-rose-300">
+          ゲート不通過理由全体の分布と比べ「{CATEGORY_LABELS[topOverrepresented.category]}」が abandoned で突出して多い（
+          {formatDeltaPct(topOverrepresented.deltaPct)}）
+        </p>
+      )}
 
       <ul className="mt-4 space-y-3">
         {breakdown.map((b) => {
@@ -64,7 +92,15 @@ export function AbandonedReasonBreakdownPanel({ runs }: { runs: RunRecord[] }) {
                   style={{ width: `${pct.toFixed(2)}%` }}
                 />
               </div>
-              <p className="mt-1 text-[10px] opacity-50">対象iteration: {b.iterations.join(', ')}</p>
+              <div className="mt-1 flex items-baseline justify-between">
+                <p className="text-[10px] opacity-50">対象iteration: {b.iterations.join(', ')}</p>
+                <span
+                  data-testid={`abandoned-reason-signal-${b.category}`}
+                  className={`rounded px-1.5 py-0.5 text-[10px] ${SIGNAL_BADGE_COLORS[b.signal]}`}
+                >
+                  {SIGNAL_LABELS[b.signal]} ({formatDeltaPct(b.deltaPct)})
+                </span>
+              </div>
             </li>
           );
         })}

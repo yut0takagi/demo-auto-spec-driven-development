@@ -67,6 +67,8 @@ import {
   ideationCostQualityCorrelation,
   abandonedSummary,
   abandonedReasonBreakdown,
+  abandonedReasonOverrepresentation,
+  ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT,
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
@@ -5632,6 +5634,93 @@ describe('abandonedReasonBreakdown', () => {
 
     // gateReasonBreakdown(runs) をそのまま使うと failed のカテゴリ(crashed)が混入してしまう
     expect(breakdown.some((b) => b.category === 'crashed')).toBe(false);
+  });
+});
+
+describe('abandonedReasonOverrepresentation', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(abandonedReasonOverrepresentation([])).toEqual([]);
+  });
+
+  it('abandonedが1件も無ければ空配列を返す（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] })];
+    expect(abandonedReasonOverrepresentation(runs)).toEqual([]);
+  });
+
+  it('abandoned以外にgateReasonsを持つ反復が無ければ、abandoned内の占有率=全体の占有率となりすべてneutral', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const result = abandonedReasonOverrepresentation(runs);
+    expect(result).toHaveLength(2);
+    for (const r of result) {
+      expect(r.deltaPct).toBeCloseTo(0, 5);
+      expect(r.signal).toBe('neutral');
+      expect(r.abandonedSharePct).toBeCloseTo(r.overallSharePct, 5);
+    }
+  });
+
+  it('abandonedで占有率が全体より閾値以上高いカテゴリはoverrepresented、低いカテゴリはunderrepresentedと判定する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      ...Array.from({ length: 8 }, (_, i) =>
+        makeRun({
+          iteration: 3 + i,
+          verdict: 'failed',
+          gateReasons: ['反復が例外で異常終了した: boom'],
+        }),
+      ),
+    ];
+    // abandoned内: adversaryNotApproved 1件(50%) / crashed 1件(50%)
+    // 全体: adversaryNotApproved 1件(10%) / crashed 9件(90%)
+    const result = abandonedReasonOverrepresentation(runs);
+
+    const adversaryEntry = result.find((r) => r.category === 'adversaryNotApproved')!;
+    expect(adversaryEntry.abandonedSharePct).toBeCloseTo(50, 5);
+    expect(adversaryEntry.overallSharePct).toBeCloseTo(10, 5);
+    expect(adversaryEntry.deltaPct).toBeCloseTo(40, 5);
+    expect(adversaryEntry.signal).toBe('overrepresented');
+
+    const crashedEntry = result.find((r) => r.category === 'crashed')!;
+    expect(crashedEntry.abandonedSharePct).toBeCloseTo(50, 5);
+    expect(crashedEntry.overallSharePct).toBeCloseTo(90, 5);
+    expect(crashedEntry.deltaPct).toBeCloseTo(-40, 5);
+    expect(crashedEntry.signal).toBe('underrepresented');
+
+    // 母集団側の crashed の count(9件) が混ざらず、abandoned側の count(1件)のまま
+    expect(crashedEntry.count).toBe(1);
+    expect(crashedEntry.iterations).toEqual([2]);
+  });
+
+  it('deltaPctが閾値(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT)未満ならneutralと判定する', () => {
+    expect(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT).toBe(10);
+
+    const runs = [
+      // abandoned: adversaryNotApproved 6件 / changedLinesExceeded 4件 (60% / 40%)
+      ...Array.from({ length: 6 }, (_, i) =>
+        makeRun({ iteration: i + 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      ),
+      ...Array.from({ length: 4 }, (_, i) =>
+        makeRun({
+          iteration: 7 + i,
+          verdict: 'abandoned',
+          gateReasons: ['変更行数 500 が上限 400 を超えている'],
+        }),
+      ),
+      // failed側に adversaryNotApproved を1件だけ足す(全体: 7件/11件 ≈ 63.6% > abandoned内の60%)
+      // -> delta = 60 - 63.6... ≈ -3.6pt で閾値10未満なのでneutral
+      makeRun({ iteration: 11, verdict: 'failed', gateReasons: ['adversary が approve していない'] }),
+    ];
+    const result = abandonedReasonOverrepresentation(runs);
+    const adversaryEntry = result.find((r) => r.category === 'adversaryNotApproved')!;
+    expect(Math.abs(adversaryEntry.deltaPct)).toBeLessThan(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT);
+    expect(adversaryEntry.signal).toBe('neutral');
   });
 });
 
