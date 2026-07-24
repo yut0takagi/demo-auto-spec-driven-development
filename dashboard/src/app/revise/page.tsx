@@ -12,6 +12,7 @@ import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { VerdictTransitionRootCausePanel } from '@/components/VerdictTransitionRootCausePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
+import { E2eBuilderWorkloadSeparationPanel } from '@/components/E2eBuilderWorkloadSeparationPanel';
 import { BuilderVolumeApprovalCouplingPanel } from '@/components/BuilderVolumeApprovalCouplingPanel';
 
 export default function RevisePage() {
@@ -40,6 +41,7 @@ export default function RevisePage() {
         <VerdictTransitionRootCausePanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
+        <E2eBuilderWorkloadSeparationPanel runs={runs} />
         <BuilderVolumeApprovalCouplingPanel runs={runs} />
       </div>
     </main>

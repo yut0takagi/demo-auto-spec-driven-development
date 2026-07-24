@@ -3249,6 +3249,73 @@ export function e2eFailureDiffSizeCorrelation(runs: RunRecord[]): E2eDiffSizeCor
   };
 }
 
+/** 偏相関が単純相関のこの割合未満に縮んだら「Builder稼働量による見かけ上の相関(交絡)」とみなす閾値。 */
+export const E2E_BUILDER_WORKLOAD_SEPARATION_CONFOUND_RATIO = 0.5;
+
+export type E2eBuilderWorkloadSeparationVerdict = 'independent' | 'confounded' | 'undetermined';
+
+export interface E2eBuilderWorkloadSeparation {
+  sampleSize: number;
+  /** e2e失敗(1)/成功(0)と変更行数(changedLines)の単純Pearson相関(-1..1)。分散0ならnull。 */
+  diffSizeCorrelation: number | null;
+  /** e2e失敗(1)/成功(0)とBuilder稼働量(cost.builderUsd)の単純Pearson相関(-1..1)。分散0ならnull。 */
+  builderWorkloadCorrelation: number | null;
+  /** changedLinesとcost.builderUsdの単純Pearson相関(-1..1)。交絡の強さの目安。分散0ならnull。 */
+  diffSizeWorkloadCorrelation: number | null;
+  /**
+   * Builder稼働量を固定した上でのe2e失敗とdiff sizeの偏相関。diffSizeCorrelationとほぼ同じなら
+   * diff sizeは独立要因、0に近づくほど交絡（見かけ上の相関）だった疑いが強い。単純相関のいずれかが
+   * null、またはrXZ/rYZが±1にごく近く分母が不安定な場合はnull。
+   */
+  diffSizePartialCorrelation: number | null;
+  /** diff sizeを固定した上でのe2e失敗とBuilder稼働量の偏相関。同様の解釈。 */
+  builderWorkloadPartialCorrelation: number | null;
+  /** diffSizePartialCorrelation/diffSizeCorrelation の縮み幅による判定。算出不能ならundetermined。 */
+  verdict: E2eBuilderWorkloadSeparationVerdict;
+}
+
+function partialCorrelation(rXY: number | null, rXZ: number | null, rYZ: number | null): number | null {
+  if (rXY === null || rXZ === null || rYZ === null) return null;
+  // rXZ/rYZ が±1にごく近い(ほぼ完全な共線性)だと浮動小数点誤差でradicandが不安定になるため、閾値未満はnull。
+  const radicand = (1 - rXZ * rXZ) * (1 - rYZ * rYZ);
+  return radicand < 1e-9 ? null : (rXY - rXZ * rYZ) / Math.sqrt(radicand);
+}
+
+function e2eBuilderWorkloadSeparationVerdict(rXY: number | null, partial: number | null): E2eBuilderWorkloadSeparationVerdict {
+  if (rXY === null || partial === null || Math.abs(rXY) < 1e-9) return 'undetermined';
+  const shrinkRatio = Math.abs(partial) / Math.abs(rXY);
+  return shrinkRatio >= E2E_BUILDER_WORKLOAD_SEPARATION_CONFOUND_RATIO ? 'independent' : 'confounded';
+}
+
+/**
+ * e2eFailureDiffSizeCorrelationが示す「diff sizeが大きいほどe2eが失敗しやすい」相関が、実は
+ * Builder稼働量(cost.builderUsd)という別軸に引きずられた見かけ上の関係でないかを、偏相関係数
+ * （もう一方を統計的に固定した相関）で切り分ける。母集団はreachedVerifyで絞る（failed runは
+ * changedLines/builderUsdが測定されなかったsentinel値のため）。
+ */
+export function e2eFailureBuilderWorkloadSeparation(runs: RunRecord[]): E2eBuilderWorkloadSeparation {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const e2eFail = completed.map((r) => (r.verify.e2ePassed ? 0 : 1));
+  const diffSize = completed.map((r) => r.changedLines);
+  const workload = completed.map((r) => r.cost.builderUsd);
+
+  const diffSizeCorrelation = pearsonCorrelation(e2eFail, diffSize);
+  const builderWorkloadCorrelation = pearsonCorrelation(e2eFail, workload);
+  const diffSizeWorkloadCorrelation = pearsonCorrelation(diffSize, workload);
+  const diffSizePartialCorrelation = partialCorrelation(diffSizeCorrelation, builderWorkloadCorrelation, diffSizeWorkloadCorrelation);
+  const builderWorkloadPartialCorrelation = partialCorrelation(builderWorkloadCorrelation, diffSizeCorrelation, diffSizeWorkloadCorrelation);
+
+  return {
+    sampleSize: completed.length,
+    diffSizeCorrelation,
+    builderWorkloadCorrelation,
+    diffSizeWorkloadCorrelation,
+    diffSizePartialCorrelation,
+    builderWorkloadPartialCorrelation,
+    verdict: e2eBuilderWorkloadSeparationVerdict(diffSizeCorrelation, diffSizePartialCorrelation),
+  };
+}
+
 /** カップリング判定に使う直近/直前ウィンドウの反復数（既定値）。 */
 export const BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW = 3;
 /** 直近/直前ウィンドウの平均変更行数の変化率(%)がこの値未満なら生成量は「変化なし」として扱う。 */
