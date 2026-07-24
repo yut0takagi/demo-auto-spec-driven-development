@@ -2717,6 +2717,27 @@ describe('issueLabelSuccessRates', () => {
     const result = issueLabelSuccessRates(runs);
     expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
   });
+
+  it('1件もマージされていないlabelはsuccessRate 0で、mergedCountも0のまま返す（分子が0でも欠落・NaNにならない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', issue: { number: 1, title: 'a', labels: ['stale'] } }),
+      makeRun({ iteration: 2, verdict: 'failed', issue: { number: 2, title: 'b', labels: ['stale'] } }),
+    ];
+    const result = issueLabelSuccessRates(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({ label: 'stale', count: 2, mergedCount: 0, successRate: 0 });
+    expect(result[0].iterations).toEqual([1, 2]);
+  });
+
+  it('全labelのsuccessRateが0のとき、成功率降順ソートはNaN比較で崩れずlabel名昇順にフォールバックする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'failed', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelSuccessRates(runs);
+    expect(result.every((r) => r.successRate === 0)).toBe(true);
+    expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
+  });
 });
 
 describe('modelConfidenceWeightedScores', () => {
