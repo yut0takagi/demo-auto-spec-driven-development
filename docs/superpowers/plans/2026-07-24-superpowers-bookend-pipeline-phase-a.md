@@ -894,6 +894,10 @@ Phase A が develop で緑に稼働したら、別計画で:
 - **Phase B:** `loop-v2.yml`（PLAN→BUILD→GATE の 3 ジョブ、`needs`＋`upload/download-artifact` で handoff 運搬、BUILD が branch push、GATE が merge）を追加し `workflow_dispatch` で検証。`_run_build_phase`/`_run_gate_phase` を完全配線。
 - **Phase C:** 安定後に cron を loop.yml → loop-v2.yml へ切替（この YAML 変更のみ main 昇格が必要）。問題時は cron を戻すだけでロールバック。
 
+### Phase B の必須前提（Phase A レビューで判明した積み残し）
+- **planner コストの総額反映:** Task 6 では `CostBreakdown.planner_usd` を追加したが、`total_usd`/`to_dict()` には未反映（JSON 契約と既存テストを保つための意図的な範囲限定）。Phase A では planner が休眠のため無害だが、**Phase B で planner を実稼働させる前に** `planner_usd` を `total_usd` と `to_dict()`（＝run JSON / dashboard 型）に組み込むこと。さもないと**日次予算ブレーカが planner+plan-review 分だけ過少計上**する。対応時は該当の厳密キー JSON 契約テスト（`tests/test_models.py`）も併せて更新する。
+- **planner フック実体の adapter:** `orchestrator/plan.py::propose_plan` は `PlanResult` を返すが、`run_iteration` の `planner` フックは dict `{trivial, plan_text, cost_usd}` を期待する。Phase B の `_run_plan_phase` 配線時に薄い adapter（`PlanResult` → dict）を噛ませる。
+
 ## Self-Review（計画者による点検）
 
 - **spec 網羅:** planner(§6)=Task3 / plan-review(§5)=Task4 / 昇格(§6)=Task5 / フェーズ分解(§5,§8)=Task6,7 / config(§7)=Task1 / handoff(§4)=Task2 / 段階移行(§13)=Task7+Phase B/C。網羅。
