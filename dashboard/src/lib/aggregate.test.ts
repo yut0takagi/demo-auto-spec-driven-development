@@ -34,6 +34,7 @@ import {
   reviseCycleCostRecovery,
   durationByVerdict,
   breakerRunway,
+  mergedStreak,
   modelEffectiveness,
   issueLabelSuccessRates,
   modelIssueLabelSuccessMatrix,
@@ -452,6 +453,136 @@ describe('breakerRunway', () => {
     // 時系列: 1(merged) -> 2(failed) -> 3(failed)。1 で途切れるので 2,3 が連続。
     expect(r.streak).toBe(2);
     expect(r.iterations).toEqual([2, 3]);
+  });
+});
+
+describe('mergedStreak', () => {
+  it('run が無ければ全てゼロ・空配列で isRecord も false', () => {
+    const s = mergedStreak([]);
+    expect(s.current).toBe(0);
+    expect(s.longest).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longestIterations).toEqual([]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('全件 merged なら current と longest が run 数と一致し、isRecord は true', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(3);
+    expect(s.longest).toBe(3);
+    expect(s.currentIterations).toEqual([1, 2, 3]);
+    expect(s.longestIterations).toEqual([1, 2, 3]);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('最新反復が merged でなければ current は 0（longest は過去の記録を保持）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('過去に最長記録があり、現在のストリークがそれより短い場合は isRecord が false', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    // 最新の連続は iteration 5,6 の2件だが、過去に3連続(1,2,3)があるためそちらが最長
+    expect(s.current).toBe(2);
+    expect(s.currentIterations).toEqual([5, 6]);
+    expect(s.longest).toBe(3);
+    expect(s.longestIterations).toEqual([1, 2, 3]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('現在進行中のストリークが過去最長を更新中なら isRecord は true（current と longest が一致）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(3);
+    expect(s.longest).toBe(3);
+    expect(s.currentIterations).toEqual([4, 5, 6]);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('paused/abandoned/dry-run 等 merged 以外の verdict は非マージとして連続を途切れさせる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(1);
+    expect(s.currentIterations).toEqual([4]);
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+  });
+
+  it('同じ長さの最長区間が複数ある場合は最初に出現した区間を longestIterations に採用する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    // どちらも2連続だが、最初に出現した iteration 1,2 を longest として採用する
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+    // 現在のストリーク(4,5)は longest とタイなので記録更新中扱い
+    expect(s.current).toBe(2);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('配列順に依存せず iteration の時系列順で連続を数える', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+    ];
+    const s = mergedStreak(runs);
+    // 時系列: 1(merged) -> 2(failed) -> 3(merged)。2で途切れるので最新の連続は iteration 3 の1件のみ。
+    expect(s.current).toBe(1);
+    expect(s.currentIterations).toEqual([3]);
+    expect(s.longest).toBe(1);
+  });
+
+  it('全件が非 merged なら current・longest ともに 0', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(0);
+    expect(s.longest).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longestIterations).toEqual([]);
+    expect(s.isRecord).toBe(false);
   });
 });
 

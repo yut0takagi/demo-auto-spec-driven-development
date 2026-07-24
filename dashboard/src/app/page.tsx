@@ -20,6 +20,7 @@ import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
 import { BreakerRunwayPanel } from '@/components/BreakerRunwayPanel';
+import { MergedStreakPanel } from '@/components/MergedStreakPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
@@ -54,6 +55,7 @@ export default function Home() {
         <AdversaryCommentTrendPanel runs={runs} />
         <EarlyWarningCard runs={runs} />
         <BreakerRunwayPanel runs={runs} />
+        <MergedStreakPanel runs={runs} />
         <MetricCards summary={summary} />
         <CycleTimeTrendPanel runs={runs} />
         <TimeToFirstPrTrendPanel runs={runs} />
