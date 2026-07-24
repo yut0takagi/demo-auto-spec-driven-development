@@ -64,6 +64,7 @@ import {
   reviseCyclesSizeCurve,
   modelEfficiencyByRole,
   issueLabelSuccessRates,
+  issueLabelQualityRecoveryMatrix,
   modelIssueLabelSuccessMatrix,
   modelSkillStratification,
   approvedButBuilderFailedSummary,
@@ -2638,6 +2639,56 @@ test('Issueラベル別 成功率パネルが実データから導出したlabel
   const body6 = await bodyTextExcludingFreeform(page);
   expect(body6).not.toContain('NaN');
   expect(body6).not.toContain('undefined');
+});
+
+test('Issue課題型別 提案品質・回収効率マトリクスパネルが実データから導出したlabel別の承認率・回収効率・merge単価を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = issueLabelQualityRecoveryMatrix(runs);
+  expect(
+    rows.length,
+    'data/runs に label 付きの run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('issue-label-quality-recovery-matrix-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}ラベル`);
+
+  for (const r of rows) {
+    const qualityEl = page.getByTestId(`issue-label-quality-recovery-quality-${r.label}`);
+    await expect(qualityEl).toHaveText(
+      r.approvalRate === null ? '提案品質 測定不可' : `提案品質(承認率) ${(r.approvalRate * 100).toFixed(1)}%`,
+    );
+
+    const rateEl = page.getByTestId(`issue-label-quality-recovery-rate-${r.label}`);
+    await expect(rateEl).toHaveText(`回収効率${(r.recoveryRate * 100).toFixed(1)}% (${r.mergedCount}/${r.count}件)`);
+
+    const costEl = page.getByTestId(`issue-label-quality-recovery-cost-${r.label}`);
+    await expect(costEl).toHaveText(
+      r.usdPerMergedIteration === null ? '回収実績なし' : `merge1件あたり $${r.usdPerMergedIteration.toFixed(2)}`,
+    );
+
+    const row = page.getByTestId(`issue-label-quality-recovery-row-${r.label}`);
+    await expect(row).toContainText(`対象iteration: ${r.iterations.join(', ')}`);
+  }
+
+  // 回収効率降順で描画されていること
+  const renderedRows = await page.locator('[data-testid^="issue-label-quality-recovery-row-"]').all();
+  const renderedLabels = await Promise.all(
+    renderedRows.map(async (r) => {
+      const testid = (await r.getAttribute('data-testid'))!;
+      return testid.replace('issue-label-quality-recovery-row-', '');
+    }),
+  );
+  expect(renderedLabels).toEqual(rows.map((r) => r.label));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
 });
 
 test('Modelスキル階層分析パネルが実データから導出したbucket別成功率・pressure判定を表示する', async ({ page }) => {

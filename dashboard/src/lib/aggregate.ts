@@ -2679,6 +2679,75 @@ export function issueLabelSuccessRates(runs: RunRecord[]): IssueLabelSuccessRate
     });
 }
 
+export interface IssueLabelQualityRecoveryRow {
+  label: string;
+  /** この label が付いた issue を扱った反復数（issueLabelSuccessRates と同じ数え方） */
+  count: number;
+  /** verify まで到達した反復数（reachedVerify）。approvalRate の分母 */
+  completedCount: number;
+  /** adversary が approve した割合 0..1 ＝「提案品質」。completedCount=0ならnull（測定不可） */
+  approvalRate: number | null;
+  /** developへマージされた件数 */
+  mergedCount: number;
+  /** 0..1. mergedCount / count。reviseCycleCostRecoveryと同じ定義の「回収効率」 */
+  recoveryRate: number;
+  /** この label の反復が消費した合計コスト(USD) */
+  totalCostUsd: number;
+  /** マージ1件あたりの平均コスト(USD)。totalCostUsd / mergedCount。mergedCount=0ならnull（回収実績なし） */
+  usdPerMergedIteration: number | null;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * issueLabelSuccessRates が issue label（課題型）別のマージ率だけを見ていたのに対し、
+ * こちらは同じ label 単位に「提案品質」（adversary の approval rate）と「回収効率」
+ * （reviseCycleCostRecovery と同じ定義の mergedCount/count、および merge 1件あたりの
+ * コスト）を組み合わせたマトリクスにする。label が空配列の反復（issue を特定できな
+ * かった反復。data/runs/0018.json 等）はissueLabelSuccessRatesと同じ理由でどのバケット
+ * にも属さない。approvalRateはmodelEffectivenessと同じ理由でreachedVerifyな反復のみ
+ * 対象にする（adversary.approvedはfailed runでは測定されなかったsentinel値のため）。
+ * mergedCount/recoveryRate/totalCostUsdはverdictに関係なく全反復を対象にする
+ * （failed/abandonedのコストも「回収できなかった支出」として含める必要があるため）。
+ * 回収効率降順、同値はlabel名昇順で並べる。
+ */
+export function issueLabelQualityRecoveryMatrix(runs: RunRecord[]): IssueLabelQualityRecoveryRow[] {
+  const byLabel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const label of run.issue.labels) {
+      const list = byLabel.get(label);
+      if (list) {
+        list.push(run);
+      } else {
+        byLabel.set(label, [run]);
+      }
+    }
+  }
+
+  return [...byLabel.entries()]
+    .map(([label, labelRuns]) => {
+      const completed = labelRuns.filter(reachedVerify);
+      const mergedCount = labelRuns.filter((r) => r.verdict === 'merged').length;
+      const totalCostUsd = labelRuns.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+      return {
+        label,
+        count: labelRuns.length,
+        completedCount: completed.length,
+        approvalRate:
+          completed.length === 0 ? null : completed.filter((r) => r.adversary.approved).length / completed.length,
+        mergedCount,
+        recoveryRate: mergedCount / labelRuns.length,
+        totalCostUsd,
+        usdPerMergedIteration: mergedCount === 0 ? null : totalCostUsd / mergedCount,
+        iterations: labelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) =>
+      b.recoveryRate !== a.recoveryRate ? b.recoveryRate - a.recoveryRate : a.label.localeCompare(b.label),
+    );
+}
+
 export interface ModelIssueLabelSuccessCell {
   label: string;
   /** このmodel×labelの組み合わせを扱った反復数 */

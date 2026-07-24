@@ -27,6 +27,7 @@ import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationD
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 import { IssueResolutionTimeTrendPanel } from '@/components/IssueResolutionTimeTrendPanel';
 import { IssueLabelSuccessRatePanel } from '@/components/IssueLabelSuccessRatePanel';
+import { IssueLabelQualityRecoveryMatrixPanel } from '@/components/IssueLabelQualityRecoveryMatrixPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -62,6 +63,7 @@ export default function Home() {
         <BuilderUtilizationDeclinePanel runs={runs} />
         <IssueResolutionTimeTrendPanel runs={runs} />
         <IssueLabelSuccessRatePanel runs={runs} />
+        <IssueLabelQualityRecoveryMatrixPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
