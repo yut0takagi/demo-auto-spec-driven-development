@@ -2165,6 +2165,57 @@ export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary
     });
 }
 
+export interface IssueLabelSuccessRate {
+  label: string;
+  /** この label が付いた issue を扱った反復数（1つの issue が複数 label を持つ場合、各labelの分母にそれぞれ数える） */
+  count: number;
+  /** developへマージされた件数 */
+  mergedCount: number;
+  /** マージされた割合 0..1 */
+  successRate: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * issue に付与された GitHub label 別に、その label を持つ issue を扱った反復が
+ * 実際に develop へマージされた割合（成功率）を集計する。1つの issue は複数の
+ * label を持ちうるため、該当する全ての label のバケットにその反復を数える。
+ * 例外で issue を特定できず label が空配列の反復（data/runs/0018.json 等）は、
+ * どのカテゴリにも属さないためどのバケットにも数えない。
+ * 成功率降順（同値は label 名の昇順）で、成功しやすいカテゴリから並べる。
+ */
+export function issueLabelSuccessRates(runs: RunRecord[]): IssueLabelSuccessRate[] {
+  const byLabel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const label of run.issue.labels) {
+      const list = byLabel.get(label);
+      if (list) {
+        list.push(run);
+      } else {
+        byLabel.set(label, [run]);
+      }
+    }
+  }
+
+  return [...byLabel.entries()]
+    .map(([label, labelRuns]) => {
+      const mergedCount = labelRuns.filter((r) => r.verdict === 'merged').length;
+      return {
+        label,
+        count: labelRuns.length,
+        mergedCount,
+        successRate: mergedCount / labelRuns.length,
+        iterations: labelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) => {
+      if (b.successRate !== a.successRate) return b.successRate - a.successRate;
+      return a.label.localeCompare(b.label);
+    });
+}
+
 export interface ModelConfidenceWeightedScore {
   model: string;
   /** この model が builder として使われた反復数（verdict に関係なく全件） */

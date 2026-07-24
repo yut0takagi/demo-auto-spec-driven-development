@@ -33,6 +33,7 @@ import {
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
+  issueLabelSuccessRates,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
   builderModelSwitchComparisons,
@@ -2641,6 +2642,80 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('issueLabelSuccessRates', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(issueLabelSuccessRates([])).toEqual([]);
+  });
+
+  it('labelが空配列の反復（issue特定不能）はどのバケットにも数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 0, title: '?', labels: [] } }),
+    ];
+    expect(issueLabelSuccessRates(runs)).toEqual([]);
+  });
+
+  it('label別にマージ件数・件数・成功率を分けて集計し、成功率降順で並べる', () => {
+    const runs = [
+      // bug: merged 1件, abandoned 1件 → successRate = 1/2
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+      }),
+      // feature: merged 1件のみ → successRate = 1/1
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        issue: { number: 3, title: 'c', labels: ['feature'] },
+      }),
+    ];
+
+    const result = issueLabelSuccessRates(runs);
+
+    // 成功率降順: feature(100%) が bug(50%) より先
+    expect(result.map((r) => r.label)).toEqual(['feature', 'bug']);
+
+    const feature = result[0];
+    expect(feature.count).toBe(1);
+    expect(feature.mergedCount).toBe(1);
+    expect(feature.successRate).toBeCloseTo(1, 10);
+    expect(feature.iterations).toEqual([3]);
+
+    const bug = result[1];
+    expect(bug.count).toBe(2);
+    expect(bug.mergedCount).toBe(1);
+    expect(bug.successRate).toBeCloseTo(0.5, 10);
+    expect(bug.iterations).toEqual([1, 2]);
+  });
+
+  it('1つのissueが複数labelを持つ場合、該当する全labelのバケットに数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug', 'urgent'] },
+      }),
+    ];
+    const result = issueLabelSuccessRates(runs);
+    expect(result.map((r) => r.label).sort()).toEqual(['bug', 'urgent']);
+    expect(result.every((r) => r.count === 1 && r.mergedCount === 1)).toBe(true);
+  });
+
+  it('成功率が同値のときはlabel名の昇順で並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'merged', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelSuccessRates(runs);
+    expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
   });
 });
 

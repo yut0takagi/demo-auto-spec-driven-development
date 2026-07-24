@@ -56,6 +56,7 @@ import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 import { IssueResolutionTimeTrendPanel } from '@/components/IssueResolutionTimeTrendPanel';
+import { IssueLabelSuccessRatePanel } from '@/components/IssueLabelSuccessRatePanel';
 import { IdeationToStartLeadTimePanel } from '@/components/IdeationToStartLeadTimePanel';
 
 const REPO_URL =
@@ -90,6 +91,7 @@ export default function Home() {
         <TimeToFirstPrTrendPanel runs={runs} />
         <BuilderUtilizationDeclinePanel runs={runs} />
         <IssueResolutionTimeTrendPanel runs={runs} />
+        <IssueLabelSuccessRatePanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />
           <TrendChart title="累計コスト" points={costTrend(runs)} unit=" USD" />
