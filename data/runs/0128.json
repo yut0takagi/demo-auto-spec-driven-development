@@ -1,0 +1,44 @@
+{
+  "id": "20260724T111743Z-205",
+  "iteration": 128,
+  "issue": {
+    "number": 205,
+    "title": "Ideation実行と消費タイミングのズレ検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/205-ideation",
+  "startedAt": "2026-07-24T11:17:43Z",
+  "finishedAt": "2026-07-24T11:23:08Z",
+  "durationSec": 325,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation実行と消費タイミングのズレ検知パネルを正確に実装。実行・消費反復の間隔を算出し、2倍以上の乖離で方向を識別して発報する仕様を完全に満たす。テストは3シナリオで計算ロジック・境界値・null判定を検証。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.004159,
+    "adversaryUsd": 0.077774,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 1.081933
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
