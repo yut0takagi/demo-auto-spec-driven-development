@@ -23,6 +23,7 @@ import { GateReasonsPanel } from '@/components/GateReasonsPanel';
 import { GateFailureTypesPanel } from '@/components/GateFailureTypesPanel';
 import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { GateReasonCostPanel } from '@/components/GateReasonCostPanel';
+import { GateReasonSeveritySpectrumPanel } from '@/components/GateReasonSeveritySpectrumPanel';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { GateReasonChainPanel } from '@/components/GateReasonChainPanel';
 import { GateReasonConsecutiveFailureChaosPanel } from '@/components/GateReasonConsecutiveFailureChaosPanel';
@@ -118,6 +119,7 @@ export default function Home() {
         </div>
         <GateReasonBurdenChart runs={runs} />
         <GateReasonCostPanel runs={runs} />
+        <GateReasonSeveritySpectrumPanel runs={runs} />
         <GateReasonTrendPanel runs={runs} />
         <GateReasonChainPanel runs={runs} />
         <GateReasonConsecutiveFailureChaosPanel runs={runs} />

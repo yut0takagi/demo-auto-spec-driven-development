@@ -1567,6 +1567,127 @@ export function gateFailureTypeBreakdown(runs: RunRecord[]): GateFailureTypeSumm
     });
 }
 
+/**
+ * severity（重大さ）を測る対象になる verdict のみ。paused・dry-run は
+ * gateFailureTypeBreakdown と同じ理由で常に gateReasons が空なので対象外
+ * （データ上は到達しないが、契約違反の防御として below でも明示的に除外する）。
+ * 並び順は GATE_FAILURE_TYPE_ORDER の深刻度順（クラッシュ→自動見送り→旧経路）の
+ * 先頭3件をそのまま使う。1つの判断基準を2箇所で食い違わせないための踏襲。
+ */
+const SEVERITY_TIER_VERDICTS: readonly Verdict[] = GATE_FAILURE_TYPE_ORDER.slice(0, 3);
+
+/** 深刻な順（配列の先頭）ほど大きい重みを返す。範囲は 1..SEVERITY_TIER_VERDICTS.length。 */
+function severityWeight(verdict: Verdict): number {
+  return SEVERITY_TIER_VERDICTS.length - SEVERITY_TIER_VERDICTS.indexOf(verdict);
+}
+
+export interface GateReasonSeverityTierSummary {
+  verdict: Verdict;
+  /** このカテゴリ×verdictに該当したrun数（重複なし） */
+  runCount: number;
+  totalCostUsd: number;
+  avgCostUsdPerRun: number;
+  totalReviseCycles: number;
+  avgReviseCyclesPerRun: number;
+}
+
+export interface GateReasonSeveritySpectrumSummary {
+  category: GateReasonCategory;
+  /** このカテゴリが（SEVERITY_TIER_VERDICTSのいずれかの verdict で）出現した run 数の合計 */
+  runCount: number;
+  /** 該当した反復番号（重複なし・昇順、全tier合算） */
+  iterations: number[];
+  /**
+   * severityWeight を runCount で加重平均したもの。1（全てneeds-human）〜
+   * SEVERITY_TIER_VERDICTS.length（全てfailed）の範囲。「このカテゴリでゲートが
+   * 止まったとき、ループがどれだけ深刻な形で手放したか」を1つの値に集約する。
+   */
+  severityScore: number;
+  /** 全tier合計 totalCostUsd / runCount */
+  avgCostUsdPerRun: number;
+  /** 出現した verdict のみ。SEVERITY_TIER_VERDICTS の深刻度順 */
+  tiers: GateReasonSeverityTierSummary[];
+}
+
+/**
+ * gateReasonCostBreakdown は verdict を区別せずカテゴリ単位でコストを合算するため、
+ * 「同じ量のコストでも、自動で見送れた（abandoned）のか、クラッシュ（failed）や旧経路の
+ * 人間対応（needs-human）にまでエスカレーションしたのか」が埋もれてしまう。こちらは
+ * カテゴリ×verdictの2軸でコスト・revise回数を分け、severityWeight で加重した
+ * severityScore によってカテゴリを「軽度〜重度」のスペクトラム上に並べる
+ * （＝ Gate Reason Severity Spectrum）。severityScoreが高いカテゴリほど、
+ * ゲートが止まったときにより深刻な形（クラッシュ寄り）で終わりやすいことを示す。
+ * cost/reviseCyclesの二重計上防止（run.iterationでの重複排除）はgateReasonCostBreakdownと同じ。
+ */
+export function gateReasonSeveritySpectrum(runs: RunRecord[]): GateReasonSeveritySpectrumSummary[] {
+  const byCategory = new Map<
+    GateReasonCategory,
+    Map<Verdict, { iterations: Set<number>; totalCostUsd: number; totalReviseCycles: number }>
+  >();
+
+  for (const run of byIterationAsc(runs)) {
+    if (run.gateReasons.length === 0) continue;
+    if (!SEVERITY_TIER_VERDICTS.includes(run.verdict)) continue;
+
+    const seenCategories = new Set<GateReasonCategory>();
+    for (const reason of run.gateReasons) {
+      const category = classifyGateReason(reason, run.adversary.summary);
+      if (seenCategories.has(category)) continue;
+      seenCategories.add(category);
+
+      let tiers = byCategory.get(category);
+      if (!tiers) {
+        tiers = new Map();
+        byCategory.set(category, tiers);
+      }
+      let entry = tiers.get(run.verdict);
+      if (!entry) {
+        entry = { iterations: new Set(), totalCostUsd: 0, totalReviseCycles: 0 };
+        tiers.set(run.verdict, entry);
+      }
+      entry.iterations.add(run.iteration);
+      entry.totalCostUsd += run.cost.totalUsd;
+      entry.totalReviseCycles += run.reviseCycles;
+    }
+  }
+
+  return [...byCategory.entries()]
+    .map(([category, tiersMap]) => {
+      const tiers: GateReasonSeverityTierSummary[] = SEVERITY_TIER_VERDICTS.filter((v) => tiersMap.has(v)).map(
+        (verdict) => {
+          const entry = tiersMap.get(verdict)!;
+          const runCount = entry.iterations.size;
+          return {
+            verdict,
+            runCount,
+            totalCostUsd: entry.totalCostUsd,
+            avgCostUsdPerRun: entry.totalCostUsd / runCount,
+            totalReviseCycles: entry.totalReviseCycles,
+            avgReviseCyclesPerRun: entry.totalReviseCycles / runCount,
+          };
+        },
+      );
+
+      const runCount = tiers.reduce((sum, t) => sum + t.runCount, 0);
+      const totalCostUsd = tiers.reduce((sum, t) => sum + t.totalCostUsd, 0);
+      const weightedSum = tiers.reduce((sum, t) => sum + severityWeight(t.verdict) * t.runCount, 0);
+      const iterations = [...tiersMap.values()].flatMap((entry) => [...entry.iterations]).sort((a, b) => a - b);
+
+      return {
+        category,
+        runCount,
+        iterations,
+        severityScore: weightedSum / runCount,
+        avgCostUsdPerRun: totalCostUsd / runCount,
+        tiers,
+      };
+    })
+    .sort((a, b) => {
+      if (b.severityScore !== a.severityScore) return b.severityScore - a.severityScore;
+      return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+    });
+}
+
 export type CostRole = 'builder' | 'adversary' | 'ideation';
 
 const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
