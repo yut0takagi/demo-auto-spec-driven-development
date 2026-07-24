@@ -3931,8 +3931,16 @@ export interface IdeationConfidenceTrendPoint {
  * modelConfidenceWeightedScores(builderモデル別マージ率のベイズ縮約)と同じ考え方を、
  * Ideationの提案(nextIssues)が着手されmergedに至ったかという成功率に適用する。
  * 提案・着手の判定は ideationProposalConsumption と同一。着手済みissueを
- * startIteration 昇順に並べ、逐次的な累積 successCount/totalCount から各点を計算する
- * (globalMeanSuccessRateは着手済み全件の最終成功率)。着手済みが0件なら空配列。
+ * startIteration 昇順に並べ、逐次的な累積 successCount/totalCount から各点を計算する。
+ *
+ * globalMeanSuccessRateは「着手済みissue自身の最終成功率」ではなく、modelConfidenceWeightedScores
+ * が個々のモデルを全モデル込みのマージ率に縮約するのと同じく、全run(ideation発の着手issueに
+ * 限らない)のマージ率を使う。着手issueの母集団自身を事前分布にすると、最終点では
+ * successCount/totalCount が定義上そのままglobalMeanSuccessRateと一致してしまい、
+ * priorWeightに関わらずweightedScore(最終点)=rawSuccessRate(最終点)という縮約が一切効かない
+ * 恒等式になる（凡例の「最新X%」は常に生の成功率と同じ値を表示してしまう）。母集団を
+ * 「全run」という外側の集合に置くことで、この最終点での退化を避ける。
+ * 着手済みが0件なら空配列。
  */
 export function ideationConfidenceTrend(
   runs: RunRecord[],
@@ -3961,8 +3969,8 @@ export function ideationConfidenceTrend(
 
   if (started.length === 0) return [];
 
-  const globalSuccessCount = started.filter((s) => s.run.verdict === 'merged').length;
-  const globalMeanSuccessRate = globalSuccessCount / started.length;
+  const overallMergedCount = sorted.filter((r) => r.verdict === 'merged').length;
+  const globalMeanSuccessRate = overallMergedCount / sorted.length;
 
   let successCount = 0;
   return started.map(({ issueNumber, run }, idx) => {
