@@ -3288,6 +3288,134 @@ export function ideationStartSuccessSummary(runs: RunRecord[]): IdeationStartSuc
 }
 
 /**
+ * 提案されてからこの反復数以上経っても着手されなければ「ドロップ」と判定する猶予期間。
+ * ideationStartSuccessSummary の notStartedIssueNumbers は「まだ着手されていない」を
+ * 無条件に列挙するため、提案直後（まだバックログで順番待ちしているだけ）のissueまで
+ * 「ドロップ」と誤認してしまう。猶予期間を設けることで「見送られた」issueだけを対象にする。
+ */
+export const IDEATION_DROP_STALENESS_ITERATIONS = 5;
+
+/** ドロップ判定済みissueが末尾から何件連続したら「ドロップレート悪化」として発報するか。 */
+export const IDEATION_DROP_RATE_STREAK_THRESHOLD = 2;
+
+export interface IdeationDropJudgment {
+  issueNumber: number;
+  /** issue を提案した(nextIssuesに含めた)反復番号 */
+  proposedIteration: number;
+  status: 'started' | 'dropped';
+  /** started の場合のみ、着手した反復番号 */
+  startIteration: number | null;
+  /** 提案から判定時点(startedならstartIteration、droppedならlatestIteration)までの反復数差 */
+  ageIterations: number;
+}
+
+export interface IdeationDropRateSignal {
+  staleAfterIterations: number;
+  /** データセット中の最新反復番号(ドロップ判定の基準点) */
+  latestIteration: number;
+  /** 提案された(いずれかのnextIssuesに現れた)ユニークissue総数 */
+  proposedTotal: number;
+  /** 判定済み(着手 or ドロップが確定した)issue数。まだ猶予期間内の提案は含まない */
+  judgedTotal: number;
+  /** 判定済みのうち着手されたissue数 */
+  startedCount: number;
+  /** 判定済みのうちドロップと判定されたissue数 */
+  droppedCount: number;
+  /** 提案されたがまだ猶予期間内で判定できないissue数 */
+  pendingCount: number;
+  /** droppedCount / judgedTotal。judgedTotalが0ならnull(判定可能なissueがまだ無い) */
+  dropRate: number | null;
+  /** 提案順で末尾から連続してドロップと判定された件数 */
+  streak: number;
+  /** streak >= IDEATION_DROP_RATE_STREAK_THRESHOLD */
+  triggered: boolean;
+  /** streak 分のドロップ記録(提案順) */
+  streakDrops: IdeationDropJudgment[];
+  /** 判定済みの全ドロップ記録(提案順)。streakDropsより広く、過去分も含む */
+  droppedIssues: IdeationDropJudgment[];
+}
+
+/**
+ * Issue提案(ideationのnextIssues)から初着手までのドロップレート検知。
+ * ideationStartSuccessSummary が「今この瞬間まだ着手されていない」を無条件に数えるのに
+ * 対し、こちらは IDEATION_DROP_STALENESS_ITERATIONS 反復分の猶予を与えたうえで
+ * 「見送られた(ドロップした)」issueだけを判定対象にし、さらに提案順で末尾から連続して
+ * ドロップした件数(streak)を builderUtilizationDeclineSignal と同じトレイリング判定で
+ * 見ることで「直近、提案しても拾われなくなってきている」傾向を検知する。
+ * 提案が1件も無い場合は null。
+ */
+export function ideationDropRateSignal(runs: RunRecord[]): IdeationDropRateSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+  if (createdBy.size === 0) return null;
+
+  const latestIteration = sorted[sorted.length - 1].iteration;
+  const startPoints = new Map(ideationToStartLeadTimes(runs).map((p) => [p.issueNumber, p]));
+
+  const proposedEntries = [...createdBy.entries()].sort((a, b) => {
+    const iterDiff = a[1].iteration - b[1].iteration;
+    return iterDiff !== 0 ? iterDiff : a[0] - b[0];
+  });
+
+  const judgments: IdeationDropJudgment[] = [];
+  for (const [issueNumber, created] of proposedEntries) {
+    const startPoint = startPoints.get(issueNumber);
+    if (startPoint) {
+      judgments.push({
+        issueNumber,
+        proposedIteration: created.iteration,
+        status: 'started',
+        startIteration: startPoint.startIteration,
+        ageIterations: startPoint.startIteration - created.iteration,
+      });
+      continue;
+    }
+
+    const age = latestIteration - created.iteration;
+    if (age < IDEATION_DROP_STALENESS_ITERATIONS) continue;
+    judgments.push({
+      issueNumber,
+      proposedIteration: created.iteration,
+      status: 'dropped',
+      startIteration: null,
+      ageIterations: age,
+    });
+  }
+
+  const droppedIssues = judgments.filter((j) => j.status === 'dropped');
+  const startedCount = judgments.length - droppedIssues.length;
+
+  let streak = 0;
+  for (let i = judgments.length - 1; i >= 0; i--) {
+    if (judgments[i].status !== 'dropped') break;
+    streak++;
+  }
+  const streakDrops = streak === 0 ? [] : judgments.slice(judgments.length - streak);
+
+  return {
+    staleAfterIterations: IDEATION_DROP_STALENESS_ITERATIONS,
+    latestIteration,
+    proposedTotal: proposedEntries.length,
+    judgedTotal: judgments.length,
+    startedCount,
+    droppedCount: droppedIssues.length,
+    pendingCount: proposedEntries.length - judgments.length,
+    dropRate: judgments.length === 0 ? null : droppedIssues.length / judgments.length,
+    streak,
+    triggered: streak >= IDEATION_DROP_RATE_STREAK_THRESHOLD,
+    streakDrops,
+    droppedIssues,
+  };
+}
+
+/**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で
  * off-by-one を避ける設計であるのに対し、任意のpには補間が必須で式の形が異なるため。
