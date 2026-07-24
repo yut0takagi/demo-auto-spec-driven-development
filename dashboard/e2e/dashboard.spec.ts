@@ -49,6 +49,8 @@ import {
   ideationToStartLeadTimes,
   ideationToStartLeadTimeTrendSignal,
   ideationStartSuccessSummary,
+  ideationToStartLeadTimeDistribution,
+  ideationToStartBottlenecks,
   verdictTransitions,
   verdictTransitionSummary,
   dropoutStreaks,
@@ -2131,4 +2133,83 @@ test('Modelスキル階層分析パネルが実データから導出したbucket
   const body7 = await bodyTextExcludingFreeform(page);
   expect(body7).not.toContain('NaN');
   expect(body7).not.toContain('undefined');
+});
+
+test('着手リードタイムの分布とボトルネック検知パネルが実データから導出した分布統計・ヒストグラム・ボトルネック一覧を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const distribution = ideationToStartLeadTimeDistribution(runs);
+  expect(
+    distribution.sampleSize,
+    'data/runs に着手済み(提案元が特定できissue.numberとして後続反復に現れた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-to-start-lead-time-distribution-panel');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('ideation-to-start-distribution-sample-size')).toContainText(
+    `サンプル ${distribution.sampleSize}件`,
+  );
+
+  // 分布統計(最小/中央値/p90/最大)は ideationToStartLeadTimeDistribution()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('ideation-to-start-distribution-min')).toHaveText(toMinutes(distribution.minSec));
+  await expect(page.getByTestId('ideation-to-start-distribution-median')).toHaveText(
+    toMinutes(distribution.medianSec),
+  );
+  await expect(page.getByTestId('ideation-to-start-distribution-p90')).toHaveText(toMinutes(distribution.p90Sec));
+  await expect(page.getByTestId('ideation-to-start-distribution-max')).toHaveText(toMinutes(distribution.maxSec));
+
+  // 回帰防止（不変量）: min <= median <= max、min <= p90 <= max
+  expect(distribution.minSec).toBeLessThanOrEqual(distribution.medianSec);
+  expect(distribution.medianSec).toBeLessThanOrEqual(distribution.maxSec);
+  expect(distribution.minSec).toBeLessThanOrEqual(distribution.p90Sec);
+  expect(distribution.p90Sec).toBeLessThanOrEqual(distribution.maxSec);
+
+  // 各ヒストグラム区間が件数を表示し、合計がサンプル数と一致するはず（不変量）
+  let bucketTotal = 0;
+  for (const bucket of distribution.buckets) {
+    bucketTotal += bucket.count;
+    await expect(page.getByTestId(`ideation-to-start-distribution-bucket-${bucket.label}`)).toContainText(
+      `${bucket.count}件`,
+    );
+  }
+  expect(bucketTotal).toBe(distribution.sampleSize);
+
+  const bottlenecks = ideationToStartBottlenecks(runs);
+  await expect(page.getByTestId('ideation-to-start-bottleneck-count')).toHaveText(`${bottlenecks.length}件`);
+
+  if (bottlenecks.length === 0) {
+    // 現状データでは突出した遅延・滞留が無い経路。将来 run が積み増され外れ値が
+    // 発生すれば下の else 側（実際のボトルネック一覧表示）に切り替わる。
+    await expect(panel).toContainText('検出されていません');
+  } else {
+    // 各ボトルネック行が ideationToStartBottlenecks()（別の計算経路）と一致する
+    // issue番号・提案iteration・種別ごとの詳細(リードタイム or 放置反復数)を表示していること
+    for (const b of bottlenecks) {
+      const row = page.getByTestId(`ideation-to-start-bottleneck-row-${b.kind}-${b.issueNumber}`);
+      await expect(row).toContainText(`issue #${b.issueNumber}`);
+      await expect(row).toContainText(`提案 iteration ${b.proposedIteration}`);
+      if (b.kind === 'started-late' && b.leadTimeSec !== null) {
+        await expect(row).toContainText(toMinutes(b.leadTimeSec));
+      } else {
+        await expect(row).toContainText(`${b.waitingIterations}反復 放置`);
+      }
+    }
+
+    // 回帰防止（不変量）: 提案iteration昇順で描画されていること
+    const rows = await page.locator('[data-testid^="ideation-to-start-bottleneck-row-"]').all();
+    const renderedIds = await Promise.all(
+      rows.map(async (r) =>
+        (await r.getAttribute('data-testid'))!.replace('ideation-to-start-bottleneck-row-', ''),
+      ),
+    );
+    expect(renderedIds).toEqual(bottlenecks.map((b) => `${b.kind}-${b.issueNumber}`));
+  }
+
+  const body8 = await bodyTextExcludingFreeform(page);
+  expect(body8).not.toContain('NaN');
+  expect(body8).not.toContain('undefined');
 });
