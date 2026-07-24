@@ -43,6 +43,7 @@ def run_h5i_round(
     cwd: str,
     cfg: Config,
     runner: Runner = real_runner,
+    plan: str = "",  # native と同じシグネチャに揃える。h5i 経路は現状 plan を使わない。
 ) -> RoundOutcome:
     return asyncio.run(
         _run_h5i_round_async(

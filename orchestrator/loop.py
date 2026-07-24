@@ -125,6 +125,7 @@ def _abandon(
     gh: GhLike, *, data_dir, iteration, issue, branch, outcome, changed_lines,
     reasons: tuple[str, ...], cfg: Config, started_at: str, clock: Callable[[], str],
     ideation_cost: float = 0.0, next_issues: list[int] | None = None,
+    planner_cost: float = 0.0,
 ) -> "IterationResult":
     """gate を再試行しても満たせなかった issue を、人間に振らず自動で見送る。
 
@@ -140,7 +141,7 @@ def _abandon(
         data_dir, iteration, issue, branch, outcome, changed_lines,
         verdict="abandoned", started_at=started_at, finished_at=clock(),
         cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues or [],
-        gate_reasons=list(reasons), pr_number=None,
+        gate_reasons=list(reasons), pr_number=None, planner_cost=planner_cost,
     )
     return IterationResult(
         status="abandoned", iteration=iteration,
@@ -158,6 +159,8 @@ def run_iteration(
     kill_switch_reader: Callable[[], bool],
     round_runner: Callable[..., Any],
     ideation_runner: Callable[..., tuple[list[dict], float]],
+    planner: Callable[..., dict] | None = None,
+    plan_reviewer: Callable[..., tuple[Any, float]] | None = None,
 ) -> IterationResult:
     """1 反復を実行する。`clock` は ISO8601 文字列を返す呼び出し可能オブジェクト。
     テストでは固定シーケンスを注入し、`duration_sec` を決定的にする
@@ -186,6 +189,24 @@ def run_iteration(
     # 最新を毎回選び、先に頼まれた古い依頼が後続の給油(新しい雑務 Issue)で永久に後回し＝餓死する。
     # 詰まった Issue は _abandon が loop:ready を剥がして列から抜くので、無限再選択にはならない。
     issue = min(ready, key=lambda i: i.number)
+
+    # --- PLAN フェーズ: 自律 spec+plan → plan-review（build 前に筋を検証）。
+    # planner 未注入（ライブ loop.yml）なら何もしない＝従来動作を厳密に保つ。
+    plan_text = ""
+    planner_cost = 0.0
+    if planner is not None:
+        _task = f"{issue.title}\n\n(issue #{issue.number})"
+        for _ in range(cfg.max_plan_cycles + 1):
+            p = planner(task=_task, cfg=cfg, cwd=repo_root)
+            planner_cost += float(p.get("cost_usd", 0.0))
+            plan_text = "" if p.get("trivial") else str(p.get("plan_text", ""))
+            if plan_reviewer is None or not plan_text:
+                break
+            verdict, review_cost = plan_reviewer(task=_task, plan=plan_text, cfg=cfg, cwd=repo_root)
+            planner_cost += float(review_cost)
+            if verdict.approved:
+                break
+
     branch = f"loop/{issue.number}-{slugify(issue.title)}"
     gh.create_branch(branch, cfg.base_branch)
 
@@ -194,6 +215,7 @@ def run_iteration(
         diff_provider=lambda: gh.diff(cfg.base_branch),
         cwd=repo_root,
         cfg=cfg,
+        plan=plan_text,
     )
 
     # --- 停止チェックポイント 2 ---
@@ -213,6 +235,7 @@ def run_iteration(
             reasons=("builder が変更を生成しなかった",),
             cfg=cfg, started_at=started_at, clock=clock,
             ideation_cost=ideation_cost, next_issues=next_issues,
+            planner_cost=planner_cost,
         )
 
     changed_files = gh.changed_files(cfg.base_branch)
@@ -235,6 +258,7 @@ def run_iteration(
             reasons=tuple(gate.reasons),
             cfg=cfg, started_at=started_at, clock=clock,
             ideation_cost=ideation_cost, next_issues=next_issues,
+            planner_cost=planner_cost,
         )
 
     # gate 通過時のみ push → PR → merge へ進む。
@@ -256,7 +280,7 @@ def run_iteration(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="paused", started_at=started_at, finished_at=clock(),
             cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
-            gate_reasons=gate.reasons, pr_number=pr,
+            gate_reasons=gate.reasons, pr_number=pr, planner_cost=planner_cost,
         )
         return IterationResult(
             status="paused", iteration=iteration,
@@ -270,7 +294,7 @@ def run_iteration(
             data_dir, iteration, issue, branch, outcome, changed_lines,
             verdict="dry-run", started_at=started_at, finished_at=clock(),
             cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
-            gate_reasons=gate.reasons, pr_number=pr,
+            gate_reasons=gate.reasons, pr_number=pr, planner_cost=planner_cost,
         )
         return IterationResult(
             status="dry-run", iteration=iteration,
@@ -288,7 +312,7 @@ def run_iteration(
         data_dir, iteration, issue, branch, outcome, changed_lines,
         verdict="merged", started_at=started_at, finished_at=clock(),
         cfg=cfg, ideation_cost=ideation_cost, next_issues=next_issues,
-        gate_reasons=gate.reasons, pr_number=pr,
+        gate_reasons=gate.reasons, pr_number=pr, planner_cost=planner_cost,
     )
     return IterationResult(
         status="merged", iteration=iteration,
@@ -299,7 +323,7 @@ def run_iteration(
 def _record(
     data_dir, iteration, issue, branch, outcome, changed_lines,
     *, verdict, started_at, finished_at, cfg, ideation_cost, next_issues,
-    gate_reasons, pr_number,
+    gate_reasons, pr_number, planner_cost: float = 0.0,
 ) -> None:
     write_run_record(
         RunRecord(
@@ -324,6 +348,7 @@ def _record(
                 builder_usd=outcome.builder_cost_usd,
                 adversary_usd=outcome.adversary_cost_usd,
                 ideation_usd=ideation_cost,
+                planner_usd=planner_cost,
             ),
             models={
                 "builder": cfg.builder_model,
