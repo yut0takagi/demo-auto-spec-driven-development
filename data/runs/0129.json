@@ -1,0 +1,42 @@
+{
+  "id": "20260724T112309Z-212",
+  "iteration": 129,
+  "issue": {
+    "number": 212,
+    "title": "Backlog生成レート監視パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/212-backlog",
+  "startedAt": "2026-07-24T11:23:09Z",
+  "finishedAt": "2026-07-24T11:35:54Z",
+  "durationSec": 765,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 229,
+  "adversary": {
+    "approved": true,
+    "summary": "Backlog生成レート監視パネルが完全に実装されており、新規追加のみで既存機能を破壊していない。ユニット・コンポーネント・e2e テストが生成数の推移と連続不足の発報ロジックを実質的に検証しており、直近ウィンドウと全体平均の独立表示も要件通り。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 371,
+  "cost": {
+    "builderUsd": 4.04544,
+    "adversaryUsd": 0.106235,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 4.151675
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
