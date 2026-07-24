@@ -29,6 +29,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   COST_PER_APPROVED_PR_TREND_LIMIT,
+  plannerActivity,
   reviseCyclesByModel,
   reviseStopPatternByModel,
   reviseCyclesByVerdict,
@@ -2883,6 +2884,94 @@ describe('costEfficiency', () => {
     expect(e.totalCostUsd).toBeCloseTo(0.5, 6);
     expect(e.approvedPrCount).toBe(1);
     expect(e.usdPerApprovedPr).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('plannerActivity', () => {
+  it('全反復で plannerUsd が未記録（旧レコード）なら trackedCount 0・各率は null で NaN を出さない', () => {
+    const runs = [
+      makeRun({ iteration: 1, cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 } }),
+      makeRun({ iteration: 2, cost: { builderUsd: 0.2, adversaryUsd: 0.02, ideationUsd: 0.02, totalUsd: 0.24 } }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(0);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeNull();
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    expect(a.pctOfTrackedCost).toBeNull();
+    expect(a.trend).toEqual([]);
+  });
+
+  it('plannerUsd は記録されているが全て0（機能未使用期間）なら稼働率は0%、平均コストはnull', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0, totalUsd: 0.12 },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.2, adversaryUsd: 0.02, ideationUsd: 0.02, plannerUsd: 0, totalUsd: 0.24 },
+      }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(2);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeCloseTo(0, 6);
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    // totalTrackedCost(0.36) > 0 かつ plannerコスト合計0なので0%（nullではない）
+    expect(a.pctOfTrackedCost).toBeCloseTo(0, 6);
+    expect(a.trend).toEqual([
+      { iteration: 1, active: false, usd: 0 },
+      { iteration: 2, active: false, usd: 0 },
+    ]);
+  });
+
+  it('アクティブ/非アクティブが混在する場合、稼働率とアクティブ平均コスト・コスト構成比を正しく計算する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0, totalUsd: 0.12 },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0.3, totalUsd: 0.42 },
+      }),
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0.1, totalUsd: 0.22 },
+      }),
+      // plannerUsd 未記録の反復は tracked から除外される
+      makeRun({ iteration: 4, cost: { builderUsd: 0.5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.5 } }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(3);
+    expect(a.activeCount).toBe(2);
+    expect(a.activationRatePct).toBeCloseTo((2 / 3) * 100, 6);
+    // アクティブ平均 = (0.3 + 0.1) / 2 = 0.2
+    expect(a.avgUsdPerActiveRun).toBeCloseTo(0.2, 6);
+    // 計測対象総コスト = 0.12+0.42+0.22 = 0.76、plannerコスト合計 = 0.4 → 約52.6%
+    expect(a.pctOfTrackedCost).toBeCloseTo((0.4 / 0.76) * 100, 6);
+    expect(a.trend).toEqual([
+      { iteration: 1, active: false, usd: 0 },
+      { iteration: 2, active: true, usd: 0.3 },
+      { iteration: 3, active: true, usd: 0.1 },
+    ]);
+  });
+
+  it('計測対象反復の総コストが0の境界値でも0除算でNaNにならず null を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, plannerUsd: 0, totalUsd: 0 },
+      }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(1);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeCloseTo(0, 6);
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    expect(a.pctOfTrackedCost).toBeNull();
+    expect(Number.isNaN(a.pctOfTrackedCost)).toBe(false);
   });
 });
 

@@ -16,6 +16,7 @@ import {
   gateReasonSeveritySpectrum,
   costEfficiency,
   costPerApprovedPrTrend,
+  plannerActivity,
   breakerRunway,
   mergedStreak,
   modelEffectiveness,
@@ -1346,6 +1347,38 @@ test('Cost効率（USD per 承認PR）パネルが実データから導出した
   await expect(bars).toHaveCount(trend.length);
   const lastPoint = trend[trend.length - 1];
   await expect(page.getByTestId(`cost-efficiency-bar-${lastPoint.iteration}`)).toBeVisible();
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Planner稼働とコスト効率パネルが実データから導出した稼働率・平均コスト・トレンドバーを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const activity = plannerActivity(runs);
+  expect(
+    activity.trackedCount,
+    'data/runs に cost.plannerUsd が記録された反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('planner-activity-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの計測対象・稼働反復数は plannerActivity()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('planner-activity-count')).toHaveText(
+    `計測対象 ${activity.trackedCount}反復中 ${activity.activeCount}反復が稼働`,
+  );
+  await expect(page.getByTestId('planner-activity-rate')).toHaveText(`${activity.activationRatePct!.toFixed(1)}%`);
+
+  // 推移バーは plannerActivity().trend（別の計算経路）の件数と一致し、
+  // 最後のバーの iteration が実データの最終計測対象点と揃っていること
+  const bars = page.locator('[data-testid^="planner-activity-bar-"]');
+  await expect(bars).toHaveCount(activity.trend.length);
+  const lastPoint = activity.trend[activity.trend.length - 1];
+  await expect(page.getByTestId(`planner-activity-bar-${lastPoint.iteration}`)).toBeVisible();
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
