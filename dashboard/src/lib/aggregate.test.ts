@@ -33,6 +33,7 @@ import {
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
+  modelConfidenceWeightedScores,
   modelEfficiencyByRole,
   builderModelSwitchComparisons,
   approvalRateTrendByModel,
@@ -2497,6 +2498,134 @@ describe('modelEffectiveness', () => {
     ];
     const result = modelEffectiveness(runs);
     expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+});
+
+describe('modelConfidenceWeightedScores', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(modelConfidenceWeightedScores([])).toEqual([]);
+  });
+
+  it('少数サンプルのモデルは全体平均側に縮約され、rawMergeRate=100%でも weightedScore は100%より大きく下がる', () => {
+    const runs = [
+      // model-a: 1件のみ merged → rawMergeRate = 100%（暴れやすい極端値）
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        models: { builder: 'model-a', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      // model-b: 9件中3件 merged → rawMergeRate = 1/3
+      ...Array.from({ length: 9 }, (_, i) =>
+        makeRun({
+          iteration: i + 2,
+          verdict: i < 3 ? 'merged' : 'needs-human',
+          models: { builder: 'model-b', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+        }),
+      ),
+    ];
+
+    const result = modelConfidenceWeightedScores(runs);
+    // globalMean = 4/10 = 0.4, priorWeight既定=5
+    const a = result.find((r) => r.model === 'model-a')!;
+    const b = result.find((r) => r.model === 'model-b')!;
+
+    expect(a.rawMergeRate).toBe(1);
+    expect(a.count).toBe(1);
+    // (1*1 + 5*0.4) / (1+5) = 3/6 = 0.5
+    expect(a.weightedScore).toBeCloseTo(0.5, 10);
+    expect(a.confidence).toBeCloseTo(1 / 6, 10);
+
+    expect(b.rawMergeRate).toBeCloseTo(1 / 3, 10);
+    expect(b.count).toBe(9);
+    // (9*(1/3) + 5*0.4) / (9+5) = 5/14
+    expect(b.weightedScore).toBeCloseTo(5 / 14, 10);
+    expect(b.confidence).toBeCloseTo(9 / 14, 10);
+
+    // 生の値では model-a(100%) が model-b(33%) を圧倒的に上回るが、
+    // 加重後は差が大きく縮まる（暴れの抑制）ことを確認する
+    const rawGap = a.rawMergeRate - b.rawMergeRate;
+    const weightedGap = a.weightedScore - b.weightedScore;
+    expect(weightedGap).toBeLessThan(rawGap);
+    expect(weightedGap).toBeGreaterThan(0);
+  });
+
+  it('件数が多いモデルは全体平均に引きずられにくく、weightedScore が rawMergeRate に近い値を保つ', () => {
+    const runs = [
+      // model-large: 100件中70件 merged → rawMergeRate = 0.7
+      ...Array.from({ length: 100 }, (_, i) =>
+        makeRun({
+          iteration: i + 1,
+          verdict: i < 70 ? 'merged' : 'needs-human',
+          models: { builder: 'model-large', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+        }),
+      ),
+      // model-small: 1件 merged → rawMergeRate = 1（極端な少数サンプル）
+      makeRun({
+        iteration: 101,
+        verdict: 'merged',
+        models: { builder: 'model-small', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+
+    const result = modelConfidenceWeightedScores(runs);
+    const large = result.find((r) => r.model === 'model-large')!;
+    const small = result.find((r) => r.model === 'model-small')!;
+
+    // globalMean = (70 + 1) / 101
+    const globalMean = 71 / 101;
+
+    // 100件の実績はほぼ動かない（差は 1%未満）
+    expect(Math.abs(large.weightedScore - large.rawMergeRate)).toBeLessThan(0.01);
+    expect(large.weightedScore).toBeCloseTo((100 * 0.7 + 5 * globalMean) / 105, 10);
+
+    // 1件しかない model-small は priorWeight(5) が count(1) を上回るため、
+    // rawMergeRate(100%) より全体平均寄りの値まで大きく下振れする
+    expect(small.weightedScore).toBeCloseTo((1 * 1 + 5 * globalMean) / 6, 10);
+    expect(small.weightedScore).toBeLessThan(0.9);
+    expect(small.weightedScore).toBeGreaterThan(globalMean);
+  });
+
+  it('全反復が同一モデルなら事前平均=生の平均と一致し、priorWeightに関わらず weightedScore は rawMergeRate と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', models: { builder: 'solo-model', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 2, verdict: 'needs-human', models: { builder: 'solo-model', adversary: 'x', ideation: 'x' } }),
+    ];
+    const result = modelConfidenceWeightedScores(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].rawMergeRate).toBeCloseTo(0.5, 10);
+    expect(result[0].weightedScore).toBeCloseTo(0.5, 10);
+  });
+
+  it('priorWeight=0 なら縮約が完全に無効化され weightedScore は rawMergeRate と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 2, verdict: 'needs-human', models: { builder: 'model-b', adversary: 'x', ideation: 'x' } }),
+    ];
+    const result = modelConfidenceWeightedScores(runs, 0);
+    const a = result.find((r) => r.model === 'model-a')!;
+    const b = result.find((r) => r.model === 'model-b')!;
+    expect(a.weightedScore).toBe(a.rawMergeRate);
+    expect(b.weightedScore).toBe(b.rawMergeRate);
+    expect(a.confidence).toBe(1);
+    expect(b.confidence).toBe(1);
+  });
+
+  it('weightedScore が同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', models: { builder: 'zeta-model', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 2, verdict: 'merged', models: { builder: 'alpha-model', adversary: 'x', ideation: 'x' } }),
+    ];
+    const result = modelConfidenceWeightedScores(runs);
+    expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+
+  it('対象iterationの一覧を昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 3, models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+      makeRun({ iteration: 1, models: { builder: 'model-a', adversary: 'x', ideation: 'x' } }),
+    ];
+    const result = modelConfidenceWeightedScores(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
   });
 });
 

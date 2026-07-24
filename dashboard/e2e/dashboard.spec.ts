@@ -17,6 +17,7 @@ import {
   costPerApprovedPrTrend,
   breakerRunway,
   modelEffectiveness,
+  modelConfidenceWeightedScores,
   builderModelSwitchComparisons,
   ideationFailureSummary,
   ideationFailureRateTrend,
@@ -1867,4 +1868,54 @@ test('Model効率分析パネルが実データから導出した役割別・モ
   const body4 = await bodyTextExcludingFreeform(page);
   expect(body4).not.toContain('NaN');
   expect(body4).not.toContain('undefined');
+});
+
+test('信頼度加重スコアパネルが実データから導出した加重スコア・生マージ率・信頼度・少数サンプル注意を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const scores = modelConfidenceWeightedScores(runs);
+  expect(
+    scores.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-confidence-weighted-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${scores.length}モデル`);
+
+  for (const s of scores) {
+    const scoreEl = page.getByTestId(`model-confidence-weighted-score-${s.model}`);
+    await expect(scoreEl).toHaveText(`加重${(s.weightedScore * 100).toFixed(1)}%`);
+
+    const rawEl = page.getByTestId(`model-confidence-weighted-raw-${s.model}`);
+    await expect(rawEl).toHaveText(
+      `生マージ率${(s.rawMergeRate * 100).toFixed(1)}% (${s.count}件) / 信頼度${(s.confidence * 100).toFixed(0)}%`,
+    );
+
+    const row = page.getByTestId(`model-confidence-weighted-row-${s.model}`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+
+    // count < 5 のモデルだけ「少数サンプル注意」バッジが出る不変量
+    const lowSampleBadge = page.getByTestId(`model-confidence-weighted-lowsample-${s.model}`);
+    if (s.count < 5) {
+      await expect(lowSampleBadge).toBeVisible();
+    } else {
+      await expect(lowSampleBadge).toHaveCount(0);
+    }
+  }
+
+  // 加重スコア降順で描画されていること
+  const rows = await page.locator('[data-testid^="model-confidence-weighted-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-confidence-weighted-row-', '')),
+  );
+  expect(renderedModels).toEqual(scores.map((s) => s.model));
+
+  const body5 = await bodyTextExcludingFreeform(page);
+  expect(body5).not.toContain('NaN');
+  expect(body5).not.toContain('undefined');
 });
