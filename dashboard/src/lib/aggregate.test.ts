@@ -59,6 +59,10 @@ import {
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
   CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT,
+  tokenEfficiencyTrend,
+  tokenEfficiencyTrendSignal,
+  TOKEN_EFFICIENCY_TREND_WINDOW,
+  TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT,
   timeToFirstPrTrend,
   timeToFirstPrTrendSignal,
   TIME_TO_FIRST_PR_TREND_WINDOW,
@@ -5540,6 +5544,87 @@ describe('cycleTimeTrendSignal', () => {
     const signal = cycleTimeTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+/** iteration 1..totalUsds.length の反復を、totalUsd/changedLines/verdictの配列から生成する。 */
+function makeEfficiencyRuns(
+  totalUsds: number[],
+  changedLines: number[] = totalUsds.map(() => 100),
+  verdicts: RunRecord['verdict'][] = [],
+): RunRecord[] {
+  return totalUsds.map((totalUsd, i) =>
+    makeRun({
+      iteration: i + 1,
+      changedLines: changedLines[i],
+      verdict: verdicts[i] ?? 'merged',
+      cost: { builderUsd: totalUsd, adversaryUsd: 0, ideationUsd: 0, totalUsd },
+    }),
+  );
+}
+
+describe('tokenEfficiencyTrend', () => {
+  it('runsが空なら空配列（境界値）', () => {
+    expect(tokenEfficiencyTrend([])).toEqual([]);
+  });
+
+  it('cost.totalUsdをchangedLinesで正規化し、failed run（changedLines sentinel 0）は除外する', () => {
+    const runs = makeEfficiencyRuns([2, 1, 0.5], [20, 10, 0], ['merged', 'merged', 'failed']);
+    expect(tokenEfficiencyTrend(runs)).toEqual([
+      { iteration: 1, value: 0.1 },
+      { iteration: 2, value: 0.1 },
+    ]);
+  });
+
+  it('changedLinesが0以下の非failed run（境界値）は0除算を避けるため除外する', () => {
+    expect(tokenEfficiencyTrend(makeEfficiencyRuns([1], [0]))).toEqual([]);
+  });
+
+  it('totalUsdが0の反復でも0除算にならずvalue:0を返す', () => {
+    expect(tokenEfficiencyTrend(makeEfficiencyRuns([0], [10]))).toEqual([{ iteration: 1, value: 0 }]);
+  });
+});
+
+describe('tokenEfficiencyTrendSignal', () => {
+  it('runsが0件、または対象点が1件だけならnull（境界値。比較対象が存在しない）', () => {
+    expect(tokenEfficiencyTrendSignal([])).toBeNull();
+    expect(tokenEfficiencyTrendSignal(makeEfficiencyRuns([1]))).toBeNull();
+  });
+
+  it('コスト/変更行数が単調悪化する合成runsではdirectionがdegrading', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 1, 1, 4, 4, 4]));
+    expect(signal!.windowSize).toBe(TOKEN_EFFICIENCY_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgUsdPerLine).toBeCloseTo(0.01, 10);
+    expect(signal!.recentAvgUsdPerLine).toBeCloseTo(0.04, 10);
+    expect(signal!.direction).toBe('degrading');
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('コスト/変更行数が単調改善する合成runsではdirectionがimproving', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([4, 4, 4, 1, 1, 1]));
+    expect(signal!.direction).toBe('improving');
+    expect(signal!.deltaPct).toBeCloseTo(-75, 10);
+  });
+
+  it(`変化率が閾値(${TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT}%)未満ならflat`, () => {
+    // +4%は閾値(5%)未満なのでflatになるはず
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 1, 1, 1.04, 1.04, 1.04]));
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('対象点数が少ない(2件・境界値)場合はwindowSize=1でpartial:trueへ縮小する', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 2]));
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でも0除算せずdegradingと判定する', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([0, 5]));
+    expect(signal!.previousAvgUsdPerLine).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('degrading');
   });
 });
 

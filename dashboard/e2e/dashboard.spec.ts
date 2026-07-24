@@ -31,6 +31,8 @@ import {
   e2eFailureBuilderWorkloadSeparation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
+  tokenEfficiencyTrend,
+  tokenEfficiencyTrendSignal,
   timeToFirstPrTrend,
   timeToFirstPrTrendSignal,
   issueResolutionTimeTrend,
@@ -2119,6 +2121,47 @@ test('CI/ゲート通過時間のトレンド観測パネルが実データか�
   );
   await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
   await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Token消費効率トレンドパネルが実データから導出したUSD/行の推移・方向・明細を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = tokenEfficiencyTrend(runs);
+  const signal = tokenEfficiencyTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の変更行数を伴う完了反復が2件未満で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('token-efficiency-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 見出しのUSD/行は tokenEfficiencyTrend()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(`$${latest.value.toFixed(4)}`);
+
+  const directionLabels: Record<string, string> = {
+    improving: '改善傾向',
+    degrading: '悪化傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('token-efficiency-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+
+  // 明細行: totalUsd/changedLinesがsentinel 0のfailed runは対象に含まれないはず
+  const failedIterations = runs.filter((r) => r.verdict === 'failed').map((r) => r.iteration);
+  for (const it of failedIterations) {
+    await expect(page.locator(`[data-testid="token-efficiency-trend-row-${it}"]`)).toHaveCount(0);
+  }
+  const latestRow = page.getByTestId(`token-efficiency-trend-row-${latest.iteration}`);
+  await expect(latestRow).toContainText(latest.value.toFixed(4));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

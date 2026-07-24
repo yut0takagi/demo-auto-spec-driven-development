@@ -441,6 +441,89 @@ export function cycleTimeTrendSignal(runs: RunRecord[]): CycleTimeTrendSignal | 
   };
 }
 
+/** トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。cycleTimeTrendSignal と揃えている。 */
+export const TOKEN_EFFICIENCY_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウの平均が直前ウィンドウよりこの割合(%)以上変化して初めて
+ * 改善/悪化と判定する。cycleTimeTrendSignal と同じ閾値・考え方。
+ */
+export const TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT = 5;
+
+/** improving: 1行あたりのトークン消費代理指標(USD)が減少（効率改善）。degrading: 増加（効率悪化）。 */
+export type TokenEfficiencyTrendDirection = 'improving' | 'degrading' | 'flat';
+
+export interface TokenEfficiencyTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は TOKEN_EFFICIENCY_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が TOKEN_EFFICIENCY_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgUsdPerLine: number;
+  previousAvgUsdPerLine: number;
+  /** recentAvgUsdPerLine - previousAvgUsdPerLine */
+  deltaUsdPerLine: number;
+  /** deltaUsdPerLine / previousAvgUsdPerLine * 100。previousAvgUsdPerLine が 0 のときは定義できないため null */
+  deltaPct: number | null;
+  direction: TokenEfficiencyTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+/**
+ * ループ自身のToken消費効率トレンド観測。RunRecord には生トークン数フィールドが無いため、
+ * cost.totalUsd（USD）を「トークン消費量の代理指標」として用い、成果指標 changedLines で
+ * 正規化した usdPerChangedLine（= cost.totalUsd / changedLines）を各反復の値とする。
+ * changedLinesTrend と同じ理由で、verify に到達しなかった failed run（changedLines が
+ * sentinel 0）は除外する。加えて changedLines が 0 以下の場合は 0 除算を避けるため除外する。
+ */
+export function tokenEfficiencyTrend(runs: RunRecord[]): TrendPoint[] {
+  return byIterationAsc(runs)
+    .filter((r) => reachedVerify(r) && r.changedLines > 0)
+    .map((r) => ({ iteration: r.iteration, value: r.cost.totalUsd / r.changedLines }));
+}
+
+function tokenEfficiencyDirection(
+  deltaUsdPerLine: number,
+  previousAvgUsdPerLine: number,
+): TokenEfficiencyTrendDirection {
+  if (previousAvgUsdPerLine === 0) return deltaUsdPerLine === 0 ? 'flat' : 'degrading';
+  const deltaPct = (deltaUsdPerLine / previousAvgUsdPerLine) * 100;
+  if (Math.abs(deltaPct) < TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'degrading' : 'improving';
+}
+
+/**
+ * tokenEfficiencyTrend の直近 window 反復の平均と、その直前 window 反復の平均を比較し、
+ * 改善(improving)/悪化(degrading)/横ばい(flat)を判定する。cycleTimeTrendSignal /
+ * timeToFirstPrTrendSignal と同じローリング窓比較パターン。比較対象となる「直前」
+ * ウィンドウが取れない（対象点が1件以下）場合は null。
+ */
+export function tokenEfficiencyTrendSignal(runs: RunRecord[]): TokenEfficiencyTrendSignal | null {
+  const points = tokenEfficiencyTrend(runs);
+  if (points.length < 2) return null;
+
+  const windowSize = Math.min(TOKEN_EFFICIENCY_TREND_WINDOW, Math.floor(points.length / 2));
+  const recent = points.slice(points.length - windowSize);
+  const previous = points.slice(points.length - windowSize * 2, points.length - windowSize);
+
+  const recentAvgUsdPerLine = mean(recent.map((p) => p.value));
+  const previousAvgUsdPerLine = mean(previous.map((p) => p.value));
+  const deltaUsdPerLine = recentAvgUsdPerLine - previousAvgUsdPerLine;
+
+  return {
+    windowSize,
+    partial: windowSize < TOKEN_EFFICIENCY_TREND_WINDOW,
+    recentAvgUsdPerLine,
+    previousAvgUsdPerLine,
+    deltaUsdPerLine,
+    deltaPct: previousAvgUsdPerLine === 0 ? null : (deltaUsdPerLine / previousAvgUsdPerLine) * 100,
+    direction: tokenEfficiencyDirection(deltaUsdPerLine, previousAvgUsdPerLine),
+    recentIterations: recent.map((p) => p.iteration),
+    previousIterations: previous.map((p) => p.iteration),
+  };
+}
+
 /**
  * issue開始(startedAt)から初PR作成までの所要時間の時系列推移。RunRecord は PR が実際に
  * 開かれた時刻を個別に記録していないため、durationSec（issue開始〜反復完了）を近似値
