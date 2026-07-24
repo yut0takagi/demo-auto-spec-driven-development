@@ -115,6 +115,9 @@ import {
   MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT,
   approvedButBuilderFailedIterations,
   approvedButBuilderFailedSummary,
+  modelPairCompatibilityDivergence,
+  MODEL_PAIR_MIN_SAMPLE,
+  MODEL_PAIR_DIVERGENCE_THRESHOLD_PT,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -7067,5 +7070,202 @@ describe('approvedButBuilderFailedSummary', () => {
     const s = approvedButBuilderFailedSummary(runs);
     expect(s.topCategory).toBe('e2eFailed');
     expect(s.topCategoryCount).toBe(1);
+  });
+});
+
+describe('modelPairCompatibilityDivergence', () => {
+  /** builder×adversary のペアで mergedCount 件を merged、残りを needs-human にした run 群を作る */
+  function makePairRuns(
+    startIteration: number,
+    builder: string,
+    adversary: string,
+    count: number,
+    mergedCount: number,
+  ): RunRecord[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeRun({
+        iteration: startIteration + i,
+        verdict: i < mergedCount ? 'merged' : 'needs-human',
+        models: { builder, adversary, ideation: adversary },
+      }),
+    );
+  }
+
+  it('run が0件なら空配列を返す', () => {
+    expect(modelPairCompatibilityDivergence([])).toEqual([]);
+  });
+
+  it('builder が常に同じ adversary としか組んでいない（交絡）場合、identifiable=false かつ divergencePt は0になり isDivergent は常にfalse', () => {
+    const runs = makePairRuns(1, 'b1', 'a1', 3, 2);
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(1);
+    const [row] = result;
+    expect(row.builder).toBe('b1');
+    expect(row.adversary).toBe('a1');
+    expect(row.count).toBe(3);
+    expect(row.mergedCount).toBe(2);
+    expect(row.actualMergeRatePct).toBeCloseTo((2 / 3) * 100, 10);
+    expect(row.builderMarginalMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.adversaryMarginalMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.expectedMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.divergencePt).toBeCloseTo(0, 10);
+    expect(row.identifiable).toBe(false);
+    expect(row.isDivergent).toBe(false);
+  });
+
+  it('2x2クロス設計で各セルの実測が単体成績からの期待値と一致しない場合、全セルを乖離として検知し、乖離度|同点は builder→adversary名順でソートする', () => {
+    // (B1,A1)=100%, (B1,A2)=25%, (B2,A1)=25%, (B2,A2)=25% の 2x2、各セル4件
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 4, 4),
+      ...makePairRuns(5, 'B1', 'A2', 4, 1),
+      ...makePairRuns(9, 'B2', 'A1', 4, 1),
+      ...makePairRuns(13, 'B2', 'A2', 4, 1),
+    ];
+    // baseline = 7/16 = 43.75%
+    // builderMarginal(B1) = 5/8 = 62.5%, builderMarginal(B2) = 2/8 = 25%
+    // adversaryMarginal(A1) = 5/8 = 62.5%, adversaryMarginal(A2) = 2/8 = 25%
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(4);
+    expect(result.every((r) => r.identifiable)).toBe(true);
+    expect(result.every((r) => r.count === 4)).toBe(true);
+    expect(result.every((r) => r.isDivergent)).toBe(true);
+
+    const byKey = new Map(result.map((r) => [`${r.builder}-${r.adversary}`, r]));
+    const b1a1 = byKey.get('B1-A1')!;
+    const b1a2 = byKey.get('B1-A2')!;
+    const b2a1 = byKey.get('B2-A1')!;
+    const b2a2 = byKey.get('B2-A2')!;
+
+    expect(b1a1.baselineMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b1a1.actualMergeRatePct).toBeCloseTo(100, 10);
+    expect(b1a1.expectedMergeRatePct).toBeCloseTo(81.25, 10);
+    expect(b1a1.divergencePt).toBeCloseTo(18.75, 10);
+
+    expect(b1a2.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b1a2.expectedMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b1a2.divergencePt).toBeCloseTo(-18.75, 10);
+
+    expect(b2a1.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b2a1.expectedMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b2a1.divergencePt).toBeCloseTo(-18.75, 10);
+
+    expect(b2a2.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b2a2.expectedMergeRatePct).toBeCloseTo(6.25, 10);
+    expect(b2a2.divergencePt).toBeCloseTo(18.75, 10);
+
+    // 全て |divergencePt|=18.75pt で同点 → builder名昇順、同builder内はadversary名昇順
+    expect(result.map((r) => `${r.builder}-${r.adversary}`)).toEqual(['B1-A1', 'B1-A2', 'B2-A1', 'B2-A2']);
+  });
+
+  it(`サンプル数が MODEL_PAIR_MIN_SAMPLE(${MODEL_PAIR_MIN_SAMPLE})未満だと、乖離幅が閾値を超えていても isDivergent は false`, () => {
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 2, 2), // 100%, count=2 < MIN_SAMPLE
+      ...makePairRuns(3, 'b1', 'a2', 1, 0), // b1をクロス設計にするための最小限の相方
+      ...makePairRuns(4, 'b2', 'a1', 1, 0), // a1をクロス設計にするための最小限の相方
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'b1' && r.adversary === 'a1')!;
+    expect(target.count).toBe(2);
+    expect(target.count).toBeLessThan(MODEL_PAIR_MIN_SAMPLE);
+    expect(target.identifiable).toBe(true);
+    expect(Math.abs(target.divergencePt)).toBeGreaterThanOrEqual(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(target.isDivergent).toBe(false);
+  });
+
+  it('乖離幅が閾値未満なら、サンプル数が十分でも isDivergent は false', () => {
+    // 全ペアが同じ 50% 前後の実測率になるよう揃え、乖離をほぼ0に保つ
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 4, 2),
+      ...makePairRuns(5, 'b1', 'a2', 4, 2),
+      ...makePairRuns(9, 'b2', 'a1', 4, 2),
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'b1' && r.adversary === 'a1')!;
+    expect(target.count).toBeGreaterThanOrEqual(MODEL_PAIR_MIN_SAMPLE);
+    expect(target.identifiable).toBe(true);
+    expect(Math.abs(target.divergencePt)).toBeLessThan(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(target.isDivergent).toBe(false);
+  });
+
+  it('期待値が100%を超える組み合わせでは100%にクランプされる（実測が既に100%なら乖離は0扱い）', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 2, 2), // 100%
+      ...makePairRuns(3, 'B1', 'A2', 1, 1), // 100%、B1をクロス設計にする
+      ...makePairRuns(4, 'B2', 'A1', 1, 1), // 100%、A1をクロス設計にする
+      ...makePairRuns(5, 'BX', 'AX', 10, 0), // baseline を大きく引き下げるダミー群
+    ];
+    // baseline = 4/14 = 28.571...%
+    // builderMarginal(B1) = 3/3 = 100%, adversaryMarginal(A1) = 3/3 = 100%
+    // raw expected = 100 + 100 - 28.571... = 171.43...% → 100%にクランプ
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'B1' && r.adversary === 'A1')!;
+    expect(target.builderMarginalMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.adversaryMarginalMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.expectedMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.actualMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.divergencePt).toBeCloseTo(0, 10);
+  });
+
+  it('期待値が0%を下回る組み合わせでは0%にクランプされる（実測が既に0%なら乖離は0扱い）', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 2, 0), // 0%
+      ...makePairRuns(3, 'B1', 'A2', 1, 0), // 0%、B1をクロス設計にする
+      ...makePairRuns(4, 'B2', 'A1', 1, 0), // 0%、A1をクロス設計にする
+      ...makePairRuns(5, 'BX', 'AX', 10, 10), // baseline を大きく引き上げるダミー群
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'B1' && r.adversary === 'A1')!;
+    expect(target.builderMarginalMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.adversaryMarginalMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.expectedMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.actualMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.divergencePt).toBeCloseTo(0, 10);
+  });
+
+  it('identifiable=false のペアは乖離幅が閾値を超えていても isDivergent にならず、乖離検知済みペアより後ろにソートされる', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 3, 3), // 100%
+      ...makePairRuns(4, 'B1', 'A2', 3, 0), // 0%
+      ...makePairRuns(7, 'B2', 'A1', 3, 3), // 100%
+      ...makePairRuns(10, 'B3', 'A1', 3, 0), // 0%、B3はA1としか組んでいない（交絡）
+    ];
+    // baseline = 6/12 = 50%
+    // builderMarginal(B1)=3/6=50%, builderMarginal(B2)=3/3=100%, builderMarginal(B3)=0/3=0%
+    // adversaryMarginal(A1)=6/9=66.67%, adversaryMarginal(A2)=0/3=0%
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(4);
+
+    const byKey = new Map(result.map((r) => [`${r.builder}-${r.adversary}`, r]));
+    const b1a1 = byKey.get('B1-A1')!;
+    const b3a1 = byKey.get('B3-A1')!;
+
+    expect(b1a1.identifiable).toBe(true);
+    expect(b1a1.divergencePt).toBeCloseTo(33.3333, 3);
+    expect(b1a1.isDivergent).toBe(true);
+
+    expect(b3a1.identifiable).toBe(false);
+    expect(b3a1.divergencePt).toBeCloseTo(-16.6667, 3);
+    expect(Math.abs(b3a1.divergencePt)).toBeGreaterThanOrEqual(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(b3a1.isDivergent).toBe(false);
+
+    // isDivergent=true が常に先頭。B3-A1 は乖離幅こそ閾値超えだが identifiable=false のため
+    // isDivergent=false 側（非乖離グループの中では乖離幅降順で先頭）に位置する。
+    expect(result[0].builder).toBe('B1');
+    expect(result[0].adversary).toBe('A1');
+    expect(result[0].isDivergent).toBe(true);
+    expect(result[1].builder).toBe('B3');
+    expect(result[1].adversary).toBe('A1');
+    expect(result[1].isDivergent).toBe(false);
+  });
+
+  it('入力順が iteration 順でなくても集計結果は変わらない', () => {
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 3, 2),
+    ].reverse();
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].count).toBe(3);
+    expect(result[0].mergedCount).toBe(2);
+    expect(result[0].iterations).toEqual([1, 2, 3]);
   });
 });

@@ -4714,3 +4714,145 @@ export function approvedButBuilderFailedSummary(runs: RunRecord[]): ApprovedButB
     topCategoryCount,
   };
 }
+
+/** modelPairCompatibilityDivergence が「乖離あり」と判定するために必要な最小サンプル数 */
+export const MODEL_PAIR_MIN_SAMPLE = 3;
+/** 乖離ありと判定する |実測 - 期待| の閾値(pt)。ノイズと区別できる程度の幅を確保する */
+export const MODEL_PAIR_DIVERGENCE_THRESHOLD_PT = 15;
+
+export interface ModelPairCompatibilityRow {
+  builder: string;
+  adversary: string;
+  /** このペアの反復数（verdict に関係なく全件） */
+  count: number;
+  mergedCount: number;
+  /** このペアの実測マージ率(pt, 0..100) */
+  actualMergeRatePct: number;
+  /** builder 単体（相手のadversaryを問わず全反復）のマージ率(pt) */
+  builderMarginalMergeRatePct: number;
+  /** adversary 単体（相手のbuilderを問わず全反復）のマージ率(pt) */
+  adversaryMarginalMergeRatePct: number;
+  /** 全反復に対するマージ率(pt) */
+  baselineMergeRatePct: number;
+  /**
+   * 「builder と adversary の間に相互作用が無い」と仮定した場合の期待マージ率(pt, 0..100)。
+   * builderMarginalMergeRatePct + adversaryMarginalMergeRatePct - baselineMergeRatePct
+   * （二元配置の加法モデル。両モデルの単体効果を baseline からの差分として足し合わせる）を
+   * 0..100 にクランプする。
+   */
+  expectedMergeRatePct: number;
+  /** actualMergeRatePct - expectedMergeRatePct（pt）。正なら期待以上に相性が良い、負なら相性が悪い */
+  divergencePt: number;
+  /**
+   * この builder が当該 adversary 以外とも組んだ実績があり、かつこの adversary も当該 builder
+   * 以外とも組んだ実績があるか。どちらか一方でも false だと、単体効果とペア固有の効果が
+   * 完全に交絡し（このペアの実測値がそのまま単体マージ率になる）、divergencePt は統計的に
+   * 意味を持たない（常に0近辺になる）。isDivergent の判定はこれが true の行に限る。
+   */
+  identifiable: boolean;
+  /** identifiable && count >= MODEL_PAIR_MIN_SAMPLE && |divergencePt| >= MODEL_PAIR_DIVERGENCE_THRESHOLD_PT */
+  isDivergent: boolean;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+function clampPct(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+function mergeRatePct(runs: RunRecord[]): number {
+  if (runs.length === 0) return 0;
+  return (runs.filter((r) => r.verdict === 'merged').length / runs.length) * 100;
+}
+
+/**
+ * builder モデルと adversary モデルの「組み合わせ」単位で、実測マージ率が両モデルの単体成績
+ * から期待される水準からどれだけ乖離しているかを検知する。modelEffectiveness や
+ * adversaryOutcomeDivergence がモデルを builder/adversary それぞれ単独の軸で評価するのに対し、
+ * こちらは「特定の builder × 特定の adversary という組み合わせ自体に、単体成績の合算では
+ * 説明できない相性（相互作用）があるか」を二元配置の加法モデル（期待値 = builder単体率 +
+ * adversary単体率 - 全体平均）で検出する。期待値との差が大きい組み合わせほど、
+ * その2モデルの相性が（良い方にも悪い方にも）通常の想定から外れていることを示す。
+ * builder が常に同じ adversary としか組んだことが無い（交絡）場合は identifiable=false とし、
+ * isDivergent の対象から外す（このとき divergencePt は定義上0になる）。
+ * 乖離度（isDivergent true を優先し、その中で |divergencePt| 降順）で並べる。
+ */
+export function modelPairCompatibilityDivergence(runs: RunRecord[]): ModelPairCompatibilityRow[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+
+  const baseline = mergeRatePct(sorted);
+
+  const byBuilder = new Map<string, RunRecord[]>();
+  const byAdversary = new Map<string, RunRecord[]>();
+  const byPair = new Map<string, RunRecord[]>();
+  const adversariesByBuilder = new Map<string, Set<string>>();
+  const buildersByAdversary = new Map<string, Set<string>>();
+
+  for (const run of sorted) {
+    const { builder, adversary } = run.models;
+    const pairKey = `${builder}:${adversary}`;
+
+    for (const [map, key] of [
+      [byBuilder, builder],
+      [byAdversary, adversary],
+    ] as const) {
+      const list = map.get(key);
+      if (list) list.push(run);
+      else map.set(key, [run]);
+    }
+
+    const pairList = byPair.get(pairKey);
+    if (pairList) pairList.push(run);
+    else byPair.set(pairKey, [run]);
+
+    const advSet = adversariesByBuilder.get(builder);
+    if (advSet) advSet.add(adversary);
+    else adversariesByBuilder.set(builder, new Set([adversary]));
+
+    const builderSet = buildersByAdversary.get(adversary);
+    if (builderSet) builderSet.add(builder);
+    else buildersByAdversary.set(adversary, new Set([builder]));
+  }
+
+  const rows: ModelPairCompatibilityRow[] = [...byPair.values()].map((pairRuns) => {
+    const { builder, adversary } = pairRuns[0].models;
+    const count = pairRuns.length;
+    const mergedCount = pairRuns.filter((r) => r.verdict === 'merged').length;
+    const actualMergeRatePct = mergeRatePct(pairRuns);
+    const builderMarginalMergeRatePct = mergeRatePct(byBuilder.get(builder) ?? []);
+    const adversaryMarginalMergeRatePct = mergeRatePct(byAdversary.get(adversary) ?? []);
+    const expectedMergeRatePct = clampPct(
+      builderMarginalMergeRatePct + adversaryMarginalMergeRatePct - baseline,
+    );
+    const divergencePt = actualMergeRatePct - expectedMergeRatePct;
+    const identifiable =
+      (adversariesByBuilder.get(builder)?.size ?? 0) >= 2 && (buildersByAdversary.get(adversary)?.size ?? 0) >= 2;
+    const isDivergent =
+      identifiable && count >= MODEL_PAIR_MIN_SAMPLE && Math.abs(divergencePt) >= MODEL_PAIR_DIVERGENCE_THRESHOLD_PT;
+
+    return {
+      builder,
+      adversary,
+      count,
+      mergedCount,
+      actualMergeRatePct,
+      builderMarginalMergeRatePct,
+      adversaryMarginalMergeRatePct,
+      baselineMergeRatePct: baseline,
+      expectedMergeRatePct,
+      divergencePt,
+      identifiable,
+      isDivergent,
+      iterations: pairRuns.map((r) => r.iteration),
+    };
+  });
+
+  return rows.sort((a, b) => {
+    if (a.isDivergent !== b.isDivergent) return a.isDivergent ? -1 : 1;
+    const diff = Math.abs(b.divergencePt) - Math.abs(a.divergencePt);
+    if (diff !== 0) return diff;
+    if (a.builder !== b.builder) return a.builder.localeCompare(b.builder);
+    return a.adversary.localeCompare(b.adversary);
+  });
+}

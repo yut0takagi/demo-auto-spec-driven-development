@@ -54,6 +54,7 @@ import { AdversaryModelVerdictMissMatrixPanel } from '@/components/AdversaryMode
 import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPanel';
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratificationPanel';
+import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
@@ -163,6 +164,7 @@ export default function Home() {
         <BuilderModelSwitchAbPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
         <ModelSkillStratificationPanel runs={runs} />
+        <ModelPairCompatibilityDivergencePanel runs={runs} />
         <IterationTimeline runs={runs} />
         <BacklogPanel runs={runs} repoUrl={REPO_URL} />
       </div>
