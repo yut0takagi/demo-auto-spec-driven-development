@@ -1,0 +1,46 @@
+{
+  "id": "20260724T160111Z-241",
+  "iteration": 148,
+  "issue": {
+    "number": 241,
+    "title": "Ideation 提案採用率 × マージまでのリードタイムの 2 軸マトリクス",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/241-ideation-2",
+  "startedAt": "2026-07-24T16:01:11Z",
+  "finishedAt": "2026-07-24T16:48:52Z",
+  "durationSec": 2861,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 256,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たし、既存挙動を壊さず、実装を検証するテストが充実。変更行数221行で制限以内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 392,
+  "cost": {
+    "builderUsd": 14.136979,
+    "adversaryUsd": 0.286019,
+    "ideationUsd": 0.1694836,
+    "plannerUsd": 0.9474925000000001,
+    "totalUsd": 15.539974
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    253,
+    254,
+    255
+  ]
+}
