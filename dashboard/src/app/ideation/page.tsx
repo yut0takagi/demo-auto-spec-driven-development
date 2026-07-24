@@ -14,6 +14,7 @@ import { BacklogFlowPanel } from '@/components/BacklogFlowPanel';
 import { BacklogGenerationRatePanel } from '@/components/BacklogGenerationRatePanel';
 import { IdeationGenerationDecayPanel } from '@/components/IdeationGenerationDecayPanel';
 import { IdeationExecutionConsumptionGapPanel } from '@/components/IdeationExecutionConsumptionGapPanel';
+import { IdeationAdoptionLeadTimeMatrixPanel } from '@/components/IdeationAdoptionLeadTimeMatrixPanel';
 
 export default function IdeationPage() {
   const { runs } = loadRuns();
@@ -43,6 +44,7 @@ export default function IdeationPage() {
         <BacklogGenerationRatePanel runs={runs} />
         <IdeationGenerationDecayPanel runs={runs} />
         <IdeationExecutionConsumptionGapPanel runs={runs} />
+        <IdeationAdoptionLeadTimeMatrixPanel runs={runs} />
       </div>
     </main>
   );

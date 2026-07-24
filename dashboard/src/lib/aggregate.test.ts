@@ -113,6 +113,8 @@ import {
   ideationToStartLeadTimeTrendSignal,
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
   IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
+  ideationAdoptionLeadTimeMatrix,
+  ideationAdoptionRateBucket,
   ideationStartSuccessSummary,
   ideationDropRateSignal,
   IDEATION_DROP_STALENESS_ITERATIONS,
@@ -6962,6 +6964,117 @@ describe('ideationToStartLeadTimeTrendSignal', () => {
     expect(signal!.partial).toBe(true);
     expect(signal!.recentAvgSec).toBeCloseTo(300, 10);
     expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+});
+
+describe('ideationAdoptionLeadTimeMatrix', () => {
+  const IDEATION_COST = { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 };
+
+  function proposerAndMergedChildren(
+    iteration: number,
+    proposerIssueNumber: number,
+    childIssueNumbers: number[],
+    mergedIssueNumbers: number[],
+    leadTimesSec: number[],
+  ): RunRecord[] {
+    return [
+      makeRun({
+        iteration,
+        issue: { number: proposerIssueNumber, title: 'p', labels: [] },
+        nextIssues: childIssueNumbers,
+        finishedAt: '2026-07-20T00:00:00Z',
+        cost: IDEATION_COST,
+      }),
+      ...mergedIssueNumbers.map((n, i) =>
+        makeRun({
+          iteration: iteration + 100 + i,
+          issue: { number: n, title: 'c', labels: [] },
+          verdict: 'merged',
+          finishedAt: new Date(new Date('2026-07-20T00:00:00Z').getTime() + leadTimesSec[i] * 1000).toISOString(),
+        }),
+      ),
+    ];
+  }
+
+  it('runsが空、またはideationUsdが0/nextIssuesが空の反復しか無い場合はcells空・除外数0（境界値）', () => {
+    expect(ideationAdoptionLeadTimeMatrix([])).toEqual({ cells: [], excludedZeroAdoptionCount: 0 });
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [2], cost: { ...IDEATION_COST, ideationUsd: 0 } }),
+      makeRun({ iteration: 2, nextIssues: [], cost: IDEATION_COST }),
+    ];
+    expect(ideationAdoptionLeadTimeMatrix(runs)).toEqual({ cells: [], excludedZeroAdoptionCount: 0 });
+  });
+
+  it('全batchでmerged到達が0件のときはcellsを空にし、excludedZeroAdoptionCountのみ加算する（未着手・着手したが不採用の両方を含む）', () => {
+    const runs = [
+      ...proposerAndMergedChildren(1, 1, [100, 101], [], []), // 未着手のみ
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [200], cost: IDEATION_COST }),
+      makeRun({ iteration: 3, issue: { number: 200, title: 'not-merged', labels: [] }, verdict: 'abandoned' }),
+    ];
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.cells).toEqual([]);
+    expect(result.excludedZeroAdoptionCount).toBe(2);
+  });
+
+  it('提案元自身のissue番号がnextIssuesに含まれていても自分自身をmerged到達した子issueとしてカウントしない（自己参照。data/runs/0014.jsonのパターン）', () => {
+    // 自己参照(issue 10)が紛れ込むと2/2=1.0(high)になってしまうが、正しくは子issue 11のみが分子で1/2=0.5(medium)
+    const runs = proposerAndMergedChildren(5, 10, [10, 11], [11], [300]);
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.excludedZeroAdoptionCount).toBe(0);
+    expect(result.cells).toEqual([
+      {
+        adoptionBucket: 'medium',
+        leadTimeBucket: 'fast',
+        count: 1,
+        avgAdoptionRate: 0.5,
+        avgLeadTimeToMergeSec: 300,
+        iterations: [5],
+      },
+    ]);
+  });
+
+  it('採用率bucket境界(0.34/0.66ちょうど)はlow/highに、その内側はmediumに分類する（境界値）', () => {
+    expect(ideationAdoptionRateBucket(0.34)).toBe('low');
+    expect(ideationAdoptionRateBucket(0.66)).toBe('high');
+    expect(ideationAdoptionRateBucket(0.35)).toBe('medium');
+    expect(ideationAdoptionRateBucket(0.65)).toBe('medium');
+  });
+
+  it('採用率low/medium/high × リードタイムfast/medium/slowの9通り全セルに最低1バッチが乗る合成データで件数・平均値を検算する（high-fastは複数子issueの平均検算も兼ねる）', () => {
+    // 採用率low=1/3,medium=1/2,high=1。リードタイム代表値[10..90]はp33=36.4/p66=62.8で{10-30}/{40-60}/{70-90}に分かれる。
+    const runs = [
+      ...proposerAndMergedChildren(1, 9101, [2001, 2002, 2003], [2001], [10]),
+      ...proposerAndMergedChildren(2, 9102, [2011, 2012, 2013], [2011], [40]),
+      ...proposerAndMergedChildren(3, 9103, [2021, 2022, 2023], [2021], [70]),
+      ...proposerAndMergedChildren(4, 9104, [2031, 2032], [2031], [20]),
+      ...proposerAndMergedChildren(5, 9105, [2041, 2042], [2041], [50]),
+      ...proposerAndMergedChildren(6, 9106, [2051, 2052], [2051], [80]),
+      ...proposerAndMergedChildren(7, 9107, [2061, 2062], [2061, 2062], [20, 40]), // high-fast: 平均(20,40)=30
+      ...proposerAndMergedChildren(8, 9108, [2071], [2071], [60]),
+      ...proposerAndMergedChildren(9, 9109, [2081], [2081], [90]),
+    ];
+
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.excludedZeroAdoptionCount).toBe(0);
+    expect(result.cells.map((c) => `${c.adoptionBucket}|${c.leadTimeBucket}`)).toEqual([
+      'low|fast', 'low|medium', 'low|slow',
+      'medium|fast', 'medium|medium', 'medium|slow',
+      'high|fast', 'high|medium', 'high|slow',
+    ]);
+
+    // 単純ケース(low-fast)と複数子issue平均ケース(high-fast)を検算する
+    const byKey = new Map(result.cells.map((c) => [`${c.adoptionBucket}|${c.leadTimeBucket}`, c]));
+    const expected: Array<[string, number, number, number]> = [
+      ['low|fast', 1 / 3, 10, 1],
+      ['high|fast', 1, 30, 7],
+    ];
+    for (const [key, adoptionRate, leadTimeSec, iteration] of expected) {
+      const cell = byKey.get(key);
+      expect(cell!.count).toBe(1);
+      expect(cell!.avgAdoptionRate).toBeCloseTo(adoptionRate, 10);
+      expect(cell!.avgLeadTimeToMergeSec).toBeCloseTo(leadTimeSec, 10);
+      expect(cell!.iterations).toEqual([iteration]);
+    }
   });
 });
 

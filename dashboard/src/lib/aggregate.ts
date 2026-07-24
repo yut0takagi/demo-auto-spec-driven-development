@@ -4574,6 +4574,111 @@ export function ideationToStartLeadTimeTrendSignal(runs: RunRecord[]): IdeationT
   };
 }
 
+export type IdeationAdoptionRateBucketLabel = 'low' | 'medium' | 'high';
+export type IdeationLeadTimeBucketLabel = 'fast' | 'medium' | 'slow';
+
+export const IDEATION_ADOPTION_RATE_BUCKET_ORDER: readonly IdeationAdoptionRateBucketLabel[] = ['low', 'medium', 'high'];
+export const IDEATION_LEAD_TIME_BUCKET_ORDER: readonly IdeationLeadTimeBucketLabel[] = ['fast', 'medium', 'slow'];
+
+/** bucket境界は SUCCESS_PATTERN_HIGH_THRESHOLD/LOW_THRESHOLD(0.66/0.34)を流用（境界値はhigh/low側）。 */
+export function ideationAdoptionRateBucket(rate: number): IdeationAdoptionRateBucketLabel {
+  if (rate >= SUCCESS_PATTERN_HIGH_THRESHOLD) return 'high';
+  if (rate <= SUCCESS_PATTERN_LOW_THRESHOLD) return 'low';
+  return 'medium';
+}
+
+function ideationLeadTimeBucket(sec: number, p33: number, p66: number): IdeationLeadTimeBucketLabel {
+  if (sec <= p33) return 'fast';
+  if (sec <= p66) return 'medium';
+  return 'slow';
+}
+
+export interface IdeationAdoptionLeadTimeCell {
+  adoptionBucket: IdeationAdoptionRateBucketLabel;
+  leadTimeBucket: IdeationLeadTimeBucketLabel;
+  count: number;
+  avgAdoptionRate: number;
+  /** batch内でmergedになった子issueのリードタイム平均を、さらにセル内で平均した値(秒) */
+  avgLeadTimeToMergeSec: number;
+  iterations: number[];
+}
+
+export interface IdeationAdoptionLeadTimeMatrix {
+  /** 出現した組み合わせのみ。空セルは含めない */
+  cells: IdeationAdoptionLeadTimeCell[];
+  /** merged到達0件でリードタイムが定義できずセルに含められなかったbatch数 */
+  excludedZeroAdoptionCount: number;
+}
+
+/**
+ * Ideationの提案(nextIssues)採用率 × マージまでのリードタイムの2軸クロス集計。
+ * batch特定は ideationCostQualityCorrelation と同一だが、採用率の分母は「着手数」ではなく
+ * 「提案件数」そのもの（未着手も不採用として数える）。リードタイムは提案元のfinishedAtから
+ * mergedな子issueのfinishedAtまで（複数あれば平均）。bucket境界(fast/medium/slow)は絶対時間
+ * ではなく、merged到達済みbatch群のpercentile(33)/percentile(66)から算出する相対分類。
+ * merged到達0件のbatchはリードタイム未定義のためセルに含めず件数のみ報告する。
+ */
+export function ideationAdoptionLeadTimeMatrix(runs: RunRecord[]): IdeationAdoptionLeadTimeMatrix {
+  const sorted = byIterationAsc(runs);
+  const proposingRuns = sorted.filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0);
+
+  const batches: Array<{ iteration: number; adoptionRate: number; avgLeadTimeSec: number }> = [];
+  let excludedZeroAdoptionCount = 0;
+
+  for (const r of proposingRuns) {
+    const mergedChildren = sorted.filter(
+      (child) =>
+        child.verdict === 'merged' && child.iteration > r.iteration && r.nextIssues.includes(child.issue.number),
+    );
+
+    if (mergedChildren.length === 0) {
+      excludedZeroAdoptionCount++;
+      continue;
+    }
+
+    const proposerFinishedAt = new Date(r.finishedAt).getTime();
+    const leadTimes = mergedChildren.map((c) => (new Date(c.finishedAt).getTime() - proposerFinishedAt) / 1000);
+
+    batches.push({
+      iteration: r.iteration,
+      adoptionRate: mergedChildren.length / r.nextIssues.length,
+      avgLeadTimeSec: mean(leadTimes),
+    });
+  }
+
+  if (batches.length === 0) {
+    return { cells: [], excludedZeroAdoptionCount };
+  }
+
+  const sortedLeadTimes = batches.map((b) => b.avgLeadTimeSec).sort((a, b) => a - b);
+  const p33 = percentile(sortedLeadTimes, 33);
+  const p66 = percentile(sortedLeadTimes, 66);
+
+  const withBuckets = batches.map((b) => ({
+    ...b,
+    adoptionBucket: ideationAdoptionRateBucket(b.adoptionRate),
+    leadTimeBucket: ideationLeadTimeBucket(b.avgLeadTimeSec, p33, p66),
+  }));
+
+  const cells: IdeationAdoptionLeadTimeCell[] = [];
+  for (const adoptionBucket of IDEATION_ADOPTION_RATE_BUCKET_ORDER) {
+    for (const leadTimeBucket of IDEATION_LEAD_TIME_BUCKET_ORDER) {
+      const group = withBuckets.filter((b) => b.adoptionBucket === adoptionBucket && b.leadTimeBucket === leadTimeBucket);
+      if (group.length === 0) continue;
+      cells.push({
+        adoptionBucket,
+        leadTimeBucket,
+        count: group.length,
+        avgAdoptionRate: mean(group.map((b) => b.adoptionRate)),
+        avgLeadTimeToMergeSec: mean(group.map((b) => b.avgLeadTimeSec)),
+        iterations: group.map((b) => b.iteration),
+      });
+    }
+  }
+
+  return { cells, excludedZeroAdoptionCount };
+}
+
 export interface IdeationStartSuccessSummary {
   /** Ideationが提案した(いずれかの反復のnextIssuesに現れた)ユニークissue数 */
   proposedTotal: number;
