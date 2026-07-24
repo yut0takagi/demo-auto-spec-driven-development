@@ -29,6 +29,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   reviseCyclesByModel,
+  reviseStopPatternByModel,
   reviseCyclesByVerdict,
   reviseVerdictMatrix,
   reviseCycleCostRecovery,
@@ -37,6 +38,7 @@ import {
   mergedStreak,
   modelEffectiveness,
   issueLabelSuccessRates,
+  issueLabelQualityRecoveryMatrix,
   modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
@@ -107,6 +109,7 @@ import {
   IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS,
   verdictTransitions,
   verdictTransitionSummary,
+  verdictTransitionRootCausePatterns,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
   reviseSizeSuccessPatterns,
@@ -2835,6 +2838,181 @@ describe('reviseCyclesByModel', () => {
   });
 });
 
+describe('reviseStopPatternByModel', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseStopPatternByModel([])).toEqual([]);
+  });
+
+  it('failed run（verifyに未到達）は打ち止めパターンが定義できないため母集団から除外する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 99,
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    expect(reviseStopPatternByModel(runs)).toEqual([]);
+  });
+
+  it('adversary.approved を境に early-exit（承認されて打ち止め）と枯渇（上限まで承認されず打ち止め）に分類する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 0,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        verdict: 'merged',
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result).toEqual([
+      {
+        model: 'claude-sonnet-5',
+        count: 3,
+        earlyExitCount: 2,
+        exhaustedCount: 1,
+        unparseableCount: 0,
+        exhaustionRate: 1 / 3,
+        earlyExitMeanReviseCycles: 0.5,
+        exhaustedMeanReviseCycles: 3,
+        iterations: [1, 2, 3],
+      },
+    ]);
+  });
+
+  it('adversary出力が解釈できず安全側で棄却された反復（adversary.summaryがパース失敗を示す）は、内容を読んで却下された「枯渇」とは別に unparseableCount として数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: 'approved が真偽値でないため棄却: "yes"' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        reviseCycles: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '実装が要件を満たしていない' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result).toEqual([
+      {
+        model: 'claude-opus-4-8',
+        count: 3,
+        earlyExitCount: 0,
+        exhaustedCount: 1,
+        unparseableCount: 2,
+        // 分子(exhaustedCount)はパース失敗2件を含まないため、単純な not-approved 件数(3/3=1)より低くなる
+        exhaustionRate: 1 / 3,
+        earlyExitMeanReviseCycles: 0,
+        exhaustedMeanReviseCycles: 2,
+        iterations: [1, 2, 3],
+      },
+    ]);
+  });
+
+  it('枯渇率(exhaustionRate)の降順で、モデル間の打ち止めパターンの違いを比較できる', () => {
+    const runs = [
+      // claude-sonnet-5: 2件中2件が early-exit → exhaustionRate 0
+      makeRun({
+        iteration: 1,
+        reviseCycles: 0,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      // claude-opus-4-8: 2件中2件が枯渇 → exhaustionRate 1
+      makeRun({
+        iteration: 3,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 4,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result.map((r) => r.model)).toEqual(['claude-opus-4-8', 'claude-sonnet-5']);
+    expect(result[0].exhaustionRate).toBe(1);
+    expect(result[1].exhaustionRate).toBe(0);
+  });
+
+  it('枯渇率が同値のときはモデル名の昇順で安定させる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'zeta-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'alpha-model', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result.map((r) => r.model)).toEqual(['alpha-model', 'zeta-model']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({
+        iteration: 3,
+        reviseCycles: 1,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 1,
+        reviseCycles: 2,
+        adversary: { approved: true, summary: '' },
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result[0].iterations).toEqual([1, 3]);
+  });
+});
+
 describe('reviseCyclesByVerdict', () => {
   it('run が無ければ空配列を返す', () => {
     expect(reviseCyclesByVerdict([])).toEqual([]);
@@ -3358,6 +3536,98 @@ describe('issueLabelSuccessRates', () => {
     ];
     const result = issueLabelSuccessRates(runs);
     expect(result.every((r) => r.successRate === 0)).toBe(true);
+    expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+describe('issueLabelQualityRecoveryMatrix', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(issueLabelQualityRecoveryMatrix([])).toEqual([]);
+  });
+
+  it('labelが空配列の反復（issue特定不能）はどのバケットにも数えない', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', issue: { number: 0, title: '?', labels: [] } })];
+    expect(issueLabelQualityRecoveryMatrix(runs)).toEqual([]);
+  });
+
+  it('label別に提案品質(承認率)と回収効率(マージ率・コスト)を分けて集計する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        adversary: { approved: true, summary: '' },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        adversary: { approved: false, summary: '' },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+    ];
+
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result).toHaveLength(1);
+    const bug = result[0];
+    expect(bug.label).toBe('bug');
+    expect(bug.count).toBe(2);
+    expect(bug.completedCount).toBe(2);
+    expect(bug.approvalRate).toBeCloseTo(0.5, 10);
+    expect(bug.mergedCount).toBe(1);
+    expect(bug.recoveryRate).toBeCloseTo(0.5, 10);
+    expect(bug.totalCostUsd).toBeCloseTo(2, 10);
+    expect(bug.usdPerMergedIteration).toBeCloseTo(2, 10);
+    expect(bug.iterations).toEqual([1, 2]);
+  });
+
+  it('verify未到達の反復しか無いlabelはapprovalRateがnull（品質を測れない）、マージも無いのでrecoveryRate=0・usdPerMergedIterationもnull（回収実績なし）で欠落しない', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['crash'] } })];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      label: 'crash',
+      count: 1,
+      completedCount: 0,
+      approvalRate: null,
+      mergedCount: 0,
+      recoveryRate: 0,
+    });
+    expect(result[0].usdPerMergedIteration).toBeNull();
+  });
+
+  it('1つのissueが複数labelを持つ場合、該当する全labelのバケットに数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug', 'urgent'] },
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.map((r) => r.label).sort()).toEqual(['bug', 'urgent']);
+    expect(result.every((r) => r.count === 1 && r.mergedCount === 1 && r.approvalRate === 1)).toBe(true);
+  });
+
+  it('回収効率(recoveryRate)降順、同値はlabel名昇順で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 3, title: 'c', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.map((r) => r.label)).toEqual(['zeta', 'alpha']);
+  });
+
+  it('全labelのrecoveryRateが0のときも降順ソートが崩れずlabel名昇順にフォールバックする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'failed', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.every((r) => r.recoveryRate === 0)).toBe(true);
     expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
   });
 });
@@ -7351,6 +7621,80 @@ describe('verdictTransitions / verdictTransitionSummary', () => {
     ];
     // 3遷移すべてcount=1で同数 → 定義順
     expect(verdictTransitionSummary(runs).map((s) => s.kind)).toEqual(['sustainedSuccess', 'recovered', 'regressed']);
+  });
+});
+
+describe('verdictTransitionRootCausePatterns', () => {
+  const verifyFailedReason = 'verify(lint/typecheck/unit/build) が失敗している';
+  const e2eFailedReason = 'e2e(Playwright) が失敗している';
+
+  it('run が1件以下なら空配列を返す（比較対象となる隣接ペアが無い）', () => {
+    expect(verdictTransitionRootCausePatterns([])).toEqual([]);
+    expect(verdictTransitionRootCausePatterns([makeRun({ iteration: 1 })])).toEqual([]);
+  });
+
+  it('regressed/repeatedFailure/shiftedFailureはtoの、recoveredはfromのgateReasons[0]を根本原因として採用し、rowはVERDICT_TRANSITION_KIND_ORDER順で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed', gateReasons: [verifyFailedReason] }), // regressed: verifyFailed
+      makeRun({ iteration: 3, verdict: 'failed', gateReasons: [verifyFailedReason] }), // repeatedFailure: verifyFailed
+      makeRun({ iteration: 4, verdict: 'abandoned', gateReasons: [e2eFailedReason] }), // shiftedFailure: e2eFailed
+      makeRun({ iteration: 5, verdict: 'merged' }), // recovered: e2eFailed(iter4の原因を乗り越えた)
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    expect(rows).toEqual([
+      { kind: 'recovered', total: 1, cells: [{ rootCause: 'e2eFailed', count: 1, pct: 100 }] },
+      { kind: 'repeatedFailure', total: 1, cells: [{ rootCause: 'verifyFailed', count: 1, pct: 100 }] },
+      { kind: 'shiftedFailure', total: 1, cells: [{ rootCause: 'e2eFailed', count: 1, pct: 100 }] },
+      { kind: 'regressed', total: 1, cells: [{ rootCause: 'verifyFailed', count: 1, pct: 100 }] },
+    ]);
+  });
+
+  it('recoveredはfromのgateReasons[0]を「何を乗り越えて回復したか」として採用する（adversary.summaryを使った分類も反映する）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'blocking な欠陥を指摘' },
+      }),
+      makeRun({ iteration: 2, verdict: 'merged' }), // recovered: adversaryNotApproved
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    expect(rows).toEqual([
+      { kind: 'recovered', total: 1, cells: [{ rootCause: 'adversaryNotApproved', count: 1, pct: 100 }] },
+    ]);
+  });
+
+  it('sustainedSuccessはgateReasonsが常に空のため対象外（rowが生成されない）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(verdictTransitionRootCausePatterns(runs)).toEqual([]);
+  });
+
+  it('paused/dry-runはgateReasonsが常に空のため、その反復が関わる遷移は根本原因を特定できず集計から除く', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'paused', gateReasons: [] }), // regressed だが gateReasons が空
+    ];
+    expect(verdictTransitionRootCausePatterns(runs)).toEqual([]);
+  });
+
+  it('同じkind内で複数の根本原因が混在する場合、count降順でcellsを並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed', gateReasons: [e2eFailedReason] }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed', gateReasons: [verifyFailedReason] }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'failed', gateReasons: [verifyFailedReason] }),
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    const regressedRow = rows.find((r) => r.kind === 'regressed')!;
+    expect(regressedRow.total).toBe(3);
+    expect(regressedRow.cells).toEqual([
+      { rootCause: 'verifyFailed', count: 2, pct: expect.closeTo(66.6666, 3) },
+      { rootCause: 'e2eFailed', count: 1, pct: expect.closeTo(33.3333, 3) },
+    ]);
   });
 });
 

@@ -2029,6 +2029,87 @@ export function reviseCyclesByModel(runs: RunRecord[]): ModelReviseCyclesSummary
     });
 }
 
+export interface ModelReviseStopPatternSummary {
+  model: string;
+  /** この model が builder として使われ、かつ verify に到達した反復数 */
+  count: number;
+  /** adversary が approve し、revise 上限を使い切る前に打ち止めた件数（early-exit） */
+  earlyExitCount: number;
+  /** 内容を読んだ上で承認されないまま revise 上限を使い切って打ち止めた件数（枯渇） */
+  exhaustedCount: number;
+  /** adversary 出力が解釈できず安全側で棄却された件数。内容に基づく枯渇ではないため exhaustedCount から分離する */
+  unparseableCount: number;
+  /** exhaustedCount / count。0件のときは0（unparseableCount は分子に含めない） */
+  exhaustionRate: number;
+  /** early-exit した反復の平均revise回数 */
+  earlyExitMeanReviseCycles: number;
+  /** 枯渇した反復の平均revise回数 */
+  exhaustedMeanReviseCycles: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * Builder に使われたモデル別に、revise ループがどう打ち止まったかを分類する。
+ * round.py の retry-to-comply ループは (verify・e2e・adversary が全て通って承認された)
+ * か (revise 上限 max_revise_cycles を使い切った) のいずれかでしか止まらないため、
+ * `adversary.approved` の真偽だけで「早期に承認されて止まった(early-exit)」か
+ * 「承認されないまま上限を使い切って止まった(枯渇)」かを一意に判定できる
+ * （reachedVerify を通した母集団のみ。failed run は打ち止め理由が「途中クラッシュ」で
+ * 意味が異なるため除外する）。
+ * ただし `adversary.approved === false` は「内容を読んで却下した」場合と「出力を解釈できず
+ * 安全側で棄却した」場合の両方で起こり得る（classifyGateReason の adversaryNotApproved /
+ * adversaryUnparseable の区別と同じ）。後者はモデルの再現性の問題ではなく orchestrator 側の
+ * パース失敗なので、`isAdversaryParseFailureSummary` で判定し unparseableCount として
+ * exhaustedCount から分離する。両者を混ぜると exhaustionRate が「粘っても承認されにくい
+ * モデル」ではなく「パース事故に当たりやすいモデル」を表してしまう。
+ * 枯渇率(exhaustionRate)の降順で、粘っても承認されにくいモデルから並べる。
+ */
+export function reviseStopPatternByModel(runs: RunRecord[]): ModelReviseStopPatternSummary[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const byModel = new Map<
+    string,
+    { early: number[]; exhausted: number[]; unparseable: number[]; iterations: number[] }
+  >();
+
+  for (const run of completed) {
+    const model = run.models.builder;
+    let entry = byModel.get(model);
+    if (!entry) {
+      entry = { early: [], exhausted: [], unparseable: [], iterations: [] };
+      byModel.set(model, entry);
+    }
+    if (run.adversary.approved) {
+      entry.early.push(run.reviseCycles);
+    } else if (isAdversaryParseFailureSummary(run.adversary.summary)) {
+      entry.unparseable.push(run.reviseCycles);
+    } else {
+      entry.exhausted.push(run.reviseCycles);
+    }
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byModel.entries()]
+    .map(([model, entry]) => {
+      const count = entry.early.length + entry.exhausted.length + entry.unparseable.length;
+      return {
+        model,
+        count,
+        earlyExitCount: entry.early.length,
+        exhaustedCount: entry.exhausted.length,
+        unparseableCount: entry.unparseable.length,
+        exhaustionRate: count === 0 ? 0 : entry.exhausted.length / count,
+        earlyExitMeanReviseCycles: mean(entry.early),
+        exhaustedMeanReviseCycles: mean(entry.exhausted),
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => {
+      if (b.exhaustionRate !== a.exhaustionRate) return b.exhaustionRate - a.exhaustionRate;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 export interface VerdictReviseCyclesSummary {
   verdict: Verdict;
   /** この verdict に該当した反復数 */
@@ -2596,6 +2677,75 @@ export function issueLabelSuccessRates(runs: RunRecord[]): IssueLabelSuccessRate
       if (b.successRate !== a.successRate) return b.successRate - a.successRate;
       return a.label.localeCompare(b.label);
     });
+}
+
+export interface IssueLabelQualityRecoveryRow {
+  label: string;
+  /** この label が付いた issue を扱った反復数（issueLabelSuccessRates と同じ数え方） */
+  count: number;
+  /** verify まで到達した反復数（reachedVerify）。approvalRate の分母 */
+  completedCount: number;
+  /** adversary が approve した割合 0..1 ＝「提案品質」。completedCount=0ならnull（測定不可） */
+  approvalRate: number | null;
+  /** developへマージされた件数 */
+  mergedCount: number;
+  /** 0..1. mergedCount / count。reviseCycleCostRecoveryと同じ定義の「回収効率」 */
+  recoveryRate: number;
+  /** この label の反復が消費した合計コスト(USD) */
+  totalCostUsd: number;
+  /** マージ1件あたりの平均コスト(USD)。totalCostUsd / mergedCount。mergedCount=0ならnull（回収実績なし） */
+  usdPerMergedIteration: number | null;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * issueLabelSuccessRates が issue label（課題型）別のマージ率だけを見ていたのに対し、
+ * こちらは同じ label 単位に「提案品質」（adversary の approval rate）と「回収効率」
+ * （reviseCycleCostRecovery と同じ定義の mergedCount/count、および merge 1件あたりの
+ * コスト）を組み合わせたマトリクスにする。label が空配列の反復（issue を特定できな
+ * かった反復。data/runs/0018.json 等）はissueLabelSuccessRatesと同じ理由でどのバケット
+ * にも属さない。approvalRateはmodelEffectivenessと同じ理由でreachedVerifyな反復のみ
+ * 対象にする（adversary.approvedはfailed runでは測定されなかったsentinel値のため）。
+ * mergedCount/recoveryRate/totalCostUsdはverdictに関係なく全反復を対象にする
+ * （failed/abandonedのコストも「回収できなかった支出」として含める必要があるため）。
+ * 回収効率降順、同値はlabel名昇順で並べる。
+ */
+export function issueLabelQualityRecoveryMatrix(runs: RunRecord[]): IssueLabelQualityRecoveryRow[] {
+  const byLabel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    for (const label of run.issue.labels) {
+      const list = byLabel.get(label);
+      if (list) {
+        list.push(run);
+      } else {
+        byLabel.set(label, [run]);
+      }
+    }
+  }
+
+  return [...byLabel.entries()]
+    .map(([label, labelRuns]) => {
+      const completed = labelRuns.filter(reachedVerify);
+      const mergedCount = labelRuns.filter((r) => r.verdict === 'merged').length;
+      const totalCostUsd = labelRuns.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+      return {
+        label,
+        count: labelRuns.length,
+        completedCount: completed.length,
+        approvalRate:
+          completed.length === 0 ? null : completed.filter((r) => r.adversary.approved).length / completed.length,
+        mergedCount,
+        recoveryRate: mergedCount / labelRuns.length,
+        totalCostUsd,
+        usdPerMergedIteration: mergedCount === 0 ? null : totalCostUsd / mergedCount,
+        iterations: labelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) =>
+      b.recoveryRate !== a.recoveryRate ? b.recoveryRate - a.recoveryRate : a.label.localeCompare(b.label),
+    );
 }
 
 export interface ModelIssueLabelSuccessCell {
@@ -4910,6 +5060,83 @@ export function verdictTransitionSummary(runs: RunRecord[]): VerdictTransitionKi
       return { kind, count, pct: transitions.length === 0 ? 0 : (count / transitions.length) * 100 };
     })
     .sort((a, b) => b.count - a.count);
+}
+
+export interface VerdictTransitionRootCauseCell {
+  rootCause: GateReasonCategory;
+  count: number;
+  /** count / このkindで根本原因を特定できた遷移数(row.total) * 100 */
+  pct: number;
+}
+
+export interface VerdictTransitionRootCauseRow {
+  kind: VerdictTransitionKind;
+  /** このkindのうち根本原因を特定できた遷移数（cellsのcount合計と一致。verdictTransitionSummaryのcountとは母集団が異なりうる） */
+  total: number;
+  /** 実際に出現したrootCauseだけをcount降順・同数はGATE_REASON_CATEGORY_ORDER順で持つ */
+  cells: VerdictTransitionRootCauseCell[];
+}
+
+/**
+ * verdictTransitions/verdictTransitionSummary が遷移を「種別(kind)」だけで分類するのに
+ * 対し、こちらはさらに各遷移に伴う gateReasons[0]（最初にブロックした条件）を根本原因
+ * カテゴリとして紐付け、「kind × rootCause」のクロス集計としてパターン化する。例えば
+ * repeatedFailure（同型で足踏み）が頻発している場合に、それが verifyFailed による
+ * 足踏みなのか adversaryNotApproved による足踏みなのかを区別できる。
+ *
+ * 根本原因を紐付けられる遷移は以下のみ:
+ * - regressed/repeatedFailure/shiftedFailure: 遷移先(to)が非mergedなので、to自身の
+ *   gateReasons[0]を採用する（「今回」何が原因でブロックされたか）
+ * - recovered: 遷移元(from)が非mergedなので、fromのgateReasons[0]を採用する
+ *   （何を乗り越えて回復したか）
+ * - sustainedSuccess: 両方mergedでgateReasonsが常に空のため対象外
+ *
+ * paused/dry-run は evaluate_gate が意図的に gateReasons を積まない非マージ
+ * （gateReasonBreakdown 等と同じ前提）なので、これらが上記の判定対象側（regressed等の
+ * to、recoveredのfrom）に来る遷移は根本原因を特定できず、その遷移自体を集計から除く
+ * （row.total にも数えない）。
+ */
+export function verdictTransitionRootCausePatterns(runs: RunRecord[]): VerdictTransitionRootCauseRow[] {
+  const sorted = byIterationAsc(runs);
+  const byKind = new Map<VerdictTransitionKind, GateReasonCategory[]>();
+
+  for (let i = 1; i < sorted.length; i++) {
+    const from = sorted[i - 1];
+    const to = sorted[i];
+    const kind = classifyVerdictTransition(from.verdict, to.verdict);
+
+    let rootCause: GateReasonCategory | null = null;
+    if (kind === 'recovered') {
+      if (from.gateReasons.length > 0) rootCause = rootCauseCategory(from);
+    } else if (kind === 'regressed' || kind === 'repeatedFailure' || kind === 'shiftedFailure') {
+      if (to.gateReasons.length > 0) rootCause = rootCauseCategory(to);
+    }
+    if (rootCause === null) continue;
+
+    const list = byKind.get(kind);
+    if (list) {
+      list.push(rootCause);
+    } else {
+      byKind.set(kind, [rootCause]);
+    }
+  }
+
+  return VERDICT_TRANSITION_KIND_ORDER.filter((kind) => byKind.has(kind)).map((kind) => {
+    const rootCauses = byKind.get(kind)!;
+    const counts = new Map<GateReasonCategory, number>();
+    for (const rc of rootCauses) counts.set(rc, (counts.get(rc) ?? 0) + 1);
+
+    const cells: VerdictTransitionRootCauseCell[] = GATE_REASON_CATEGORY_ORDER.filter(
+      (category) => (counts.get(category) ?? 0) > 0,
+    )
+      .map((category) => {
+        const count = counts.get(category)!;
+        return { rootCause: category, count, pct: (count / rootCauses.length) * 100 };
+      })
+      .sort((a, b) => b.count - a.count);
+
+    return { kind, total: rootCauses.length, cells };
+  });
 }
 
 /** 離脱パターン判定の対象とする最小連続長。1回だけの非マージはまだ「パターン」ではないため2以上を対象にする。 */

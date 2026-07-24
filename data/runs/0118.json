@@ -1,0 +1,44 @@
+{
+  "id": "20260724T085705Z-187",
+  "iteration": 118,
+  "issue": {
+    "number": 187,
+    "title": "issue チケット型別の提案品質・回収効率マトリックス",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/187-issue",
+  "startedAt": "2026-07-24T08:57:05Z",
+  "finishedAt": "2026-07-24T09:01:22Z",
+  "durationSec": 257,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue label別の提案品質・回収効率マトリックスの機能を完全に実装。承認率・マージ率・コストの計算が正確で、null処理も適切。単体テスト・e2eテストで具体的な値を検証し、既存パネルへの影響なし。変更行数388行で制限内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.651453,
+    "adversaryUsd": 0.146988,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 0.798441
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
