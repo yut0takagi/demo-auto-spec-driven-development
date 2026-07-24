@@ -75,6 +75,7 @@ import {
   gateReasonChains,
   gateReasonConsecutiveFailureChaos,
   gateReasonUnificationPatterns,
+  gateReasonRecoverySteps,
   adversaryApprovalByReasonAndModel,
   issueResolutionTimeTrend,
   issueResolutionTimeTrendSignal,
@@ -2128,6 +2129,115 @@ describe('gateReasonUnificationPatterns', () => {
     expect(p.unifiedRootCause).toBe('adversaryUnparseable');
     expect(p.unifiedRunLength).toBe(2);
     expect(p.unifiedSinceIteration).toBe(2);
+  });
+});
+
+describe('gateReasonRecoverySteps', () => {
+  it('runが0件、またはstreakがnot-unifiedしか無ければ空配列を返す', () => {
+    expect(gateReasonRecoverySteps([])).toEqual([]);
+
+    const notUnified = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    expect(gateReasonRecoverySteps(notUnified)).toEqual([]);
+  });
+
+  it('同一理由の連続の直後にmergedが来た場合はrecovered=trueで、stepsToSuccessが再試行回数+1になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 4, verdict: 'merged', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('e2eFailed');
+    expect(step.iterations).toEqual([1, 2, 3]);
+    expect(step.retryCount).toBe(3);
+    expect(step.nextIteration).toBe(4);
+    expect(step.nextVerdict).toBe('merged');
+    expect(step.recovered).toBe(true);
+    expect(step.stepsToSuccess).toBe(4);
+  });
+
+  it('直後がmerged以外（paused）ならrecovered=falseでstepsToSuccessはnull', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'paused', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('e2eFailed');
+    expect(step.nextIteration).toBe(3);
+    expect(step.nextVerdict).toBe('paused');
+    expect(step.recovered).toBe(false);
+    expect(step.stepsToSuccess).toBeNull();
+  });
+
+  it('データ終端で同一理由の連続が途切れず終わる場合はnextIteration/nextVerdictがnullでrecovered=false（まだ結末不明）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.nextIteration).toBeNull();
+    expect(step.nextVerdict).toBeNull();
+    expect(step.recovered).toBe(false);
+    expect(step.stepsToSuccess).toBeNull();
+  });
+
+  it('converged（前半で原因が入れ替わり末尾で単一原因化）したstreakは、単一化した末尾部分の反復数のみを再試行回数として扱う', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({ iteration: 4, verdict: 'merged', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('verifyFailed');
+    expect(step.iterations).toEqual([2, 3]);
+    expect(step.retryCount).toBe(2);
+    expect(step.recovered).toBe(true);
+    expect(step.stepsToSuccess).toBe(3);
+  });
+
+  it('複数streakを新しいstreakから順に返す（gateReasonUnificationPatternsと同じ並び）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'merged', gateReasons: [] }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 501 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 420 が上限 400 を超えている'],
+      }),
+      makeRun({ iteration: 6, verdict: 'paused', gateReasons: [] }),
+    ];
+    const steps = gateReasonRecoverySteps(runs);
+    expect(steps).toHaveLength(2);
+    expect(steps[0].iterations).toEqual([4, 5]);
+    expect(steps[0].recovered).toBe(false);
+    expect(steps[0].nextVerdict).toBe('paused');
+    expect(steps[1].iterations).toEqual([1, 2]);
+    expect(steps[1].recovered).toBe(true);
+    expect(steps[1].stepsToSuccess).toBe(3);
   });
 });
 
