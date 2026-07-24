@@ -142,6 +142,10 @@ import {
   backlogFlowByIteration,
   ideationExecutionConsumptionGapSignal,
   IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD,
+  backlogGenerationRateSignal,
+  GENERATION_RATE_WINDOW,
+  GENERATION_RATE_SUSTAINABLE,
+  GENERATION_RATE_ALERT_STREAK,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -8980,6 +8984,81 @@ describe('backlogFlowByIteration', () => {
     expect(points[0]).toMatchObject({ inflow: 2, outflow: 1, net: 1, balance: IDEATION_LOW_WATER + 1 });
     expect(points[1]).toMatchObject({ inflow: 1, outflow: 1, net: 0, balance: IDEATION_LOW_WATER + 1 });
     expect(points[2]).toMatchObject({ inflow: 0, outflow: 1, net: -1, balance: IDEATION_LOW_WATER });
+  });
+});
+
+describe('backlogGenerationRateSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(backlogGenerationRateSignal([])).toBeNull();
+  });
+
+  it('1件、生成0件なら平均レートは0で持続不可、生成不足streakは1（発報はまだ）', () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, 1));
+    expect(s).not.toBeNull();
+    expect(s!.windowSize).toBe(1);
+    expect(s!.recentAverageRate).toBe(0);
+    expect(s!.overallAverageRate).toBe(0);
+    expect(s!.belowSustainableRate).toBe(true);
+    expect(s!.lowRateStreak).toBe(1);
+    expect(s!.triggered).toBe(false);
+    expect(s!.iterations).toEqual([1]);
+    expect(s!.points).toEqual([{ iteration: 1, generated: 0 }]);
+  });
+
+  it('1件、生成1件はちょうど持続可能レート（境界値）なので不足streakは0で持続可能', () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, 1, 1));
+    expect(s!.recentAverageRate).toBe(GENERATION_RATE_SUSTAINABLE);
+    expect(s!.belowSustainableRate).toBe(false);
+    expect(s!.lowRateStreak).toBe(0);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it(`生成不足が${GENERATION_RATE_ALERT_STREAK}反復連続すると発報する（境界値ちょうど）`, () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, GENERATION_RATE_ALERT_STREAK));
+    expect(s!.lowRateStreak).toBe(GENERATION_RATE_ALERT_STREAK);
+    expect(s!.triggered).toBe(true);
+  });
+
+  it(`生成不足が${GENERATION_RATE_ALERT_STREAK - 1}反復連続では未発報（閾値未満）`, () => {
+    const s = backlogGenerationRateSignal(makeRunRange(1, GENERATION_RATE_ALERT_STREAK - 1));
+    expect(s!.lowRateStreak).toBe(GENERATION_RATE_ALERT_STREAK - 1);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it('直近が生成ありで途切れれば、それ以前に不足が続いていてもstreakは0にリセットされる', () => {
+    const runs = [...makeRunRange(1, 3), makeRun({ iteration: 4, nextIssues: [401] })];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.lowRateStreak).toBe(0);
+    expect(s!.triggered).toBe(false);
+  });
+
+  it(`直近${GENERATION_RATE_WINDOW}反復だけを平均レートに使い、全体平均とは別集計になる`, () => {
+    // 前半5反復は生成3件(平均3)、後半(window分)5反復は生成0件(平均0)。
+    // overallAverageRate は全10反復の平均、recentAverageRate は直近5反復のみ。
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 10)];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.windowSize).toBe(GENERATION_RATE_WINDOW);
+    expect(s!.iterations).toEqual([6, 7, 8, 9, 10]);
+    expect(s!.recentAverageRate).toBe(0);
+    expect(s!.overallAverageRate).toBe(1.5);
+    expect(s!.belowSustainableRate).toBe(true);
+    expect(s!.lowRateStreak).toBe(5);
+    expect(s!.triggered).toBe(true);
+  });
+
+  it('iteration降順など入力順に依存せず、iteration昇順に整列して集計する', () => {
+    const runs = [
+      makeRun({ iteration: 3, nextIssues: [] }),
+      makeRun({ iteration: 1, nextIssues: [101, 102] }),
+      makeRun({ iteration: 2, nextIssues: [] }),
+    ];
+    const s = backlogGenerationRateSignal(runs);
+    expect(s!.points).toEqual([
+      { iteration: 1, generated: 2 },
+      { iteration: 2, generated: 0 },
+      { iteration: 3, generated: 0 },
+    ]);
+    expect(s!.lowRateStreak).toBe(2);
   });
 });
 

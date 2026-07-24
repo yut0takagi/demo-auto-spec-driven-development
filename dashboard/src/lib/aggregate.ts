@@ -6017,3 +6017,79 @@ export function backlogFlowByIteration(runs: RunRecord[]): BacklogFlowPoint[] {
     return { iteration: run.iteration, inflow, outflow, net, balance };
   });
 }
+
+/** 生成レートの移動平均に使う直近反復数。 */
+export const GENERATION_RATE_WINDOW = 5;
+
+/** 1反復あたり必ず1件消費されるため、生成レートがこれを下回ると持続不可能（先細り）。 */
+export const GENERATION_RATE_SUSTAINABLE = 1;
+
+/** 生成不足（1件未満）が何反復連続したら発報するか。 */
+export const GENERATION_RATE_ALERT_STREAK = 3;
+
+export interface BacklogGenerationRatePoint {
+  iteration: number;
+  /** その反復が ideation で生成した issue 数（nextIssues.length）。 */
+  generated: number;
+}
+
+export interface BacklogGenerationRateSignal {
+  /** recentAverageRate の算出に使った反復数（GENERATION_RATE_WINDOW を上限にruns件数で制限）。 */
+  windowSize: number;
+  /** 直近windowSize反復の平均生成数。 */
+  recentAverageRate: number;
+  /** 全反復を通した平均生成数（比較用のベースライン）。 */
+  overallAverageRate: number;
+  /** recentAverageRate が GENERATION_RATE_SUSTAINABLE を下回っている。 */
+  belowSustainableRate: boolean;
+  /** 直近から遡って、生成数が持続可能レート未満の反復が連続している数。 */
+  lowRateStreak: number;
+  /** lowRateStreak が GENERATION_RATE_ALERT_STREAK 以上（発報）。 */
+  triggered: boolean;
+  /** 全反復の生成点列（古い→新しい順）。 */
+  points: BacklogGenerationRatePoint[];
+  /** recentAverageRate の対象iteration（古い→新しい順）。 */
+  iterations: number[];
+}
+
+/**
+ * バックログ生成レート監視: 直近の生成数(nextIssues.length)平均が、1反復あたり
+ * 必ず1件消費される持続可能レートを下回っていないかを監視する。balance/ETA系の既存
+ * パネルとは異なり、生成数そのものの推移と不足streakを追跡する。runsが空ならnull。
+ */
+export function backlogGenerationRateSignal(runs: RunRecord[]): BacklogGenerationRateSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const points: BacklogGenerationRatePoint[] = sorted.map((run) => ({
+    iteration: run.iteration,
+    generated: run.nextIssues.length,
+  }));
+
+  const windowSize = Math.min(GENERATION_RATE_WINDOW, points.length);
+  const windowPoints = points.slice(points.length - windowSize);
+  const recentAverageRate = windowPoints.reduce((sum, p) => sum + p.generated, 0) / windowSize;
+  const overallAverageRate = points.reduce((sum, p) => sum + p.generated, 0) / points.length;
+  const belowSustainableRate = recentAverageRate < GENERATION_RATE_SUSTAINABLE;
+
+  let lowRateStreak = 0;
+  for (let i = points.length - 1; i >= 0; i--) {
+    if (points[i].generated < GENERATION_RATE_SUSTAINABLE) {
+      lowRateStreak += 1;
+    } else {
+      break;
+    }
+  }
+  const triggered = lowRateStreak >= GENERATION_RATE_ALERT_STREAK;
+
+  return {
+    windowSize,
+    recentAverageRate,
+    overallAverageRate,
+    belowSustainableRate,
+    lowRateStreak,
+    triggered,
+    points,
+    iterations: windowPoints.map((p) => p.iteration),
+  };
+}

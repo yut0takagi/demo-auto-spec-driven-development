@@ -76,6 +76,7 @@ import {
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
   backlogFlowByIteration,
+  backlogGenerationRateSignal,
   ideationQualityDegradationSignal,
   ideationExecutionConsumptionGapSignal,
 } from '../src/lib/aggregate';
@@ -1816,6 +1817,45 @@ test('反復ごとのバックログ増減フローパネルが実データか�
 
   // 反復ごとのバーが1本ずつ、過不足なく描画されているはず
   await expect(page.locator('[data-testid^="backlog-flow-bar-"]')).toHaveCount(points.length);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('バックログ生成レート監視パネルが実データから導出した平均生成数・連続不足数・発報状態を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = backlogGenerationRateSignal(runs);
+  expect(signal, 'runsが1件以上あればbacklogGenerationRateSignalはnullを返さないはず').not.toBeNull();
+
+  const panel = page.getByTestId('backlog-generation-rate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-triggered', String(signal!.triggered));
+
+  // 平均生成数・連続不足数は backlogGenerationRateSignal()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('backlog-generation-rate-recent')).toHaveText(
+    `${signal!.recentAverageRate.toFixed(2)}/反復`,
+  );
+  await expect(page.getByTestId('backlog-generation-rate-overall')).toHaveText(
+    `${signal!.overallAverageRate.toFixed(2)}/反復`,
+  );
+  await expect(page.getByTestId('backlog-generation-rate-streak')).toHaveText(String(signal!.lowRateStreak));
+
+  const status = page.getByTestId('backlog-generation-rate-status');
+  if (signal!.triggered) {
+    await expect(status).toContainText('発報');
+  } else if (signal!.belowSustainableRate) {
+    await expect(status).toContainText('注意');
+  } else {
+    await expect(status).toContainText('平常');
+  }
+
+  await expect(panel).toContainText(`対象iteration: ${signal!.iterations.join(', ')}`);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
