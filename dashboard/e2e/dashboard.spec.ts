@@ -39,6 +39,7 @@ import {
   abandonedSummary,
   abandonedRateTrend,
   abandonedIterationDetails,
+  abandonedReasonBreakdown,
   adversaryApprovalByReasonAndModel,
   pausedDryRunSummary,
   pausedDryRunDetails,
@@ -1807,6 +1808,53 @@ test('Abandoned反復の追跡・分析パネルが実データから導出し�
   const nonAbandonedIterations = runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(nonAbandonedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('打ち止め（abandoned）の原因分類パネルが実データから導出した分類・件数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = abandonedReasonBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に abandoned な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('abandoned-reason-breakdown-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
+  await expect(panel).toContainText(`${totalCount}件`);
+
+  // 各分類行が abandonedReasonBreakdown()（別の計算経路）と一致する件数・割合・対象iterationを表示する
+  for (const b of breakdown) {
+    const countEl = page.getByTestId(`abandoned-reason-count-${b.category}`);
+    const pct = (b.count / totalCount) * 100;
+    await expect(countEl).toHaveText(`${b.count}件 (${pct.toFixed(1)}%)`);
+
+    const row = page.getByTestId(`abandoned-reason-row-${b.category}`);
+    await expect(row).toContainText(`対象iteration: ${b.iterations.join(', ')}`);
+  }
+
+  // 件数降順で描画されていること（パネルの主張である「分類」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="abandoned-reason-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('abandoned-reason-row-', '')),
+  );
+  expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  // 回帰防止（不変量）: abandoned 以外の verdict の反復番号はこのパネルの対象iterationに現れてはいけない
+  const nonAbandonedIterations = new Set(runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration));
+  for (const b of breakdown) {
+    for (const it of b.iterations) {
+      expect(nonAbandonedIterations.has(it)).toBe(false);
+    }
   }
 
   const body = await bodyTextExcludingFreeform(page);
