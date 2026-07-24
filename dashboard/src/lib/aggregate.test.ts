@@ -31,6 +31,7 @@ import {
   reviseCyclesByModel,
   reviseCyclesByVerdict,
   reviseVerdictMatrix,
+  reviseCycleCostRecovery,
   durationByVerdict,
   breakerRunway,
   modelEffectiveness,
@@ -2577,6 +2578,103 @@ describe('reviseVerdictMatrix', () => {
     const sum = Object.values(row.byVerdict).reduce((a, b) => a + b, 0);
     expect(row.total).toBe(sum);
     expect(row.total).toBe(3);
+  });
+});
+
+describe('reviseCycleCostRecovery', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseCycleCostRecovery([])).toEqual([]);
+  });
+
+  it('bucket内のコスト分布(mean/median/min/max/p90)とmerge回収率を正確な値で集計する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        reviseCycles: 1,
+        cost: { builderUsd: 0.9, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 1.0 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        reviseCycles: 1,
+        cost: { builderUsd: 1.8, adversaryUsd: 0.2, ideationUsd: 0, totalUsd: 2.0 },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        reviseCycles: 1,
+        cost: { builderUsd: 3.6, adversaryUsd: 0.4, ideationUsd: 0, totalUsd: 4.0 },
+      }),
+    ];
+    const result = reviseCycleCostRecovery(runs);
+    expect(result).toHaveLength(1);
+    const bucket1 = result[0];
+    expect(bucket1.bucket).toBe('1');
+    expect(bucket1.count).toBe(3);
+    expect(bucket1.totalCostUsd).toBeCloseTo(7.0, 6);
+    expect(bucket1.meanCostUsd).toBeCloseTo(7 / 3, 6);
+    // 中央値: [1,2,4]の中央2要素(index1)の平均 = 2
+    expect(bucket1.medianCostUsd).toBeCloseTo(2, 6);
+    expect(bucket1.minCostUsd).toBeCloseTo(1, 6);
+    expect(bucket1.maxCostUsd).toBeCloseTo(4, 6);
+    // p90: rank=0.9*2=1.8 → sorted[1] + (sorted[2]-sorted[1])*0.8 = 2 + 2*0.8 = 3.6
+    expect(bucket1.p90CostUsd).toBeCloseTo(3.6, 6);
+    expect(bucket1.mergedCount).toBe(2);
+    expect(bucket1.recoveryRate).toBeCloseTo(2 / 3, 6);
+    expect(bucket1.usdPerMergedIteration).toBeCloseTo(3.5, 6);
+    expect(bucket1.iterations).toEqual([1, 2, 3]);
+  });
+
+  it('bucket内にmergedが1件も無ければ回収率0・usdPerMergedIterationはnull（0除算を避ける）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        reviseCycles: 0,
+        cost: { builderUsd: 0.5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.5 },
+      }),
+    ];
+    const [bucket0] = reviseCycleCostRecovery(runs);
+    expect(bucket0.mergedCount).toBe(0);
+    expect(bucket0.recoveryRate).toBe(0);
+    expect(bucket0.usdPerMergedIteration).toBeNull();
+  });
+
+  it('failed run のコストも「回収できなかった支出」としてbucketの分布に含める（costEfficiencyと同じ理由）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        reviseCycles: 2,
+        cost: { builderUsd: 3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 3 },
+      }),
+    ];
+    const [bucket2] = reviseCycleCostRecovery(runs);
+    expect(bucket2.bucket).toBe('2');
+    expect(bucket2.count).toBe(1);
+    expect(bucket2.totalCostUsd).toBeCloseTo(3, 6);
+    expect(bucket2.mergedCount).toBe(0);
+    expect(bucket2.recoveryRate).toBe(0);
+  });
+
+  it('データに出現しない区分は含めず、出現した区分は入力順に関係なく 0→1→2→3+ の順で返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 1, cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 } }),
+    ];
+    const result = reviseCycleCostRecovery(runs);
+    expect(result.map((b) => b.bucket)).toEqual(['0', '1', '3+']);
+  });
+
+  it('iteration昇順でない入力を渡しても iterations を昇順で保持する', () => {
+    const runs = [
+      makeRun({ iteration: 5, verdict: 'merged', reviseCycles: 0, cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 } }),
+    ];
+    const [bucket0] = reviseCycleCostRecovery(runs);
+    expect(bucket0.iterations).toEqual([2, 5]);
   });
 });
 
