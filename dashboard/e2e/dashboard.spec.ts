@@ -65,6 +65,7 @@ import {
   approvedButBuilderFailedSummary,
   approvedButBuilderFailedIterations,
   reviseCycleCostRecovery,
+  modelPairCompatibilityDivergence,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -2415,6 +2416,59 @@ test('Modelスキル階層分析パネルが実データから導出したbucket
   const body7 = await bodyTextExcludingFreeform(page);
   expect(body7).not.toContain('NaN');
   expect(body7).not.toContain('undefined');
+});
+
+test('Model ペア相性の乖離検知パネルが実データから導出した組み合わせ別の実測/期待マージ率・乖離幅を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = modelPairCompatibilityDivergence(runs);
+  expect(
+    rows.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-pair-compatibility-divergence-panel');
+  await expect(panel).toBeVisible();
+  const divergentCount = rows.filter((r) => r.isDivergent).length;
+  await expect(panel).toContainText(`${rows.length}組中 乖離${divergentCount}組`);
+
+  // 各行が modelPairCompatibilityDivergence()（別の計算経路）と一致する件数・実測/期待マージ率・
+  // 乖離幅を表示し、isDivergent の有無で乖離バッジ/対象外注記の出しわけが一致していること
+  for (const row of rows) {
+    const key = `${row.builder}__${row.adversary}`;
+    const rowEl = page.getByTestId(`model-pair-compatibility-row-${key}`);
+    await expect(rowEl).toContainText(`${row.count}件 (merged ${row.mergedCount})`);
+    await expect(rowEl).toContainText(
+      `実測 ${row.actualMergeRatePct.toFixed(1)}% / 期待 ${row.expectedMergeRatePct.toFixed(1)}%`,
+    );
+
+    const divergenceEl = page.getByTestId(`model-pair-compatibility-divergence-${key}`);
+    const sign = row.divergencePt > 0 ? '+' : '';
+    await expect(divergenceEl).toHaveText(`${sign}${row.divergencePt.toFixed(1)}pt`);
+
+    const flagEl = page.locator(`[data-testid="model-pair-compatibility-flag-${key}"]`);
+    if (row.isDivergent) {
+      await expect(flagEl).toContainText(`${Math.abs(row.divergencePt).toFixed(1)}pt乖離`);
+    } else {
+      await expect(flagEl).toHaveCount(0);
+      if (!row.identifiable) {
+        await expect(rowEl).toContainText('乖離判定の対象外');
+      }
+    }
+  }
+
+  // isDivergent を優先し、その中で乖離幅(絶対値)降順に並んでいること
+  const rowEls = await page.locator('[data-testid^="model-pair-compatibility-row-"]').all();
+  const renderedKeys = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-pair-compatibility-row-', '')),
+  );
+  expect(renderedKeys).toEqual(rows.map((r) => `${r.builder}__${r.adversary}`));
+
+  const body7b = await bodyTextExcludingFreeform(page);
+  expect(body7b).not.toContain('NaN');
+  expect(body7b).not.toContain('undefined');
 });
 
 test('着手リードタイムの分布とボトルネック検知パネルが実データから導出した分布統計・ヒストグラム・ボトルネック一覧を表示する', async ({
