@@ -26,6 +26,7 @@ import { GateReasonCostPanel } from '@/components/GateReasonCostPanel';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
 import { GateReasonChainPanel } from '@/components/GateReasonChainPanel';
 import { GateReasonConsecutiveFailureChaosPanel } from '@/components/GateReasonConsecutiveFailureChaosPanel';
+import { GateReasonUnificationPanel } from '@/components/GateReasonUnificationPanel';
 import { AdversaryReasonModelPanel } from '@/components/AdversaryReasonModelPanel';
 import { AbandonedIterationsPanel } from '@/components/AbandonedIterationsPanel';
 import { PausedDryRunSurvivalPanel } from '@/components/PausedDryRunSurvivalPanel';
@@ -116,6 +117,7 @@ export default function Home() {
         <GateReasonTrendPanel runs={runs} />
         <GateReasonChainPanel runs={runs} />
         <GateReasonConsecutiveFailureChaosPanel runs={runs} />
+        <GateReasonUnificationPanel runs={runs} />
         <AdversaryReasonModelPanel runs={runs} />
         <AbandonedIterationsPanel runs={runs} />
         <PausedDryRunSurvivalPanel runs={runs} />

@@ -62,6 +62,7 @@ import {
   abandonedIterationDetails,
   gateReasonChains,
   gateReasonConsecutiveFailureChaos,
+  gateReasonUnificationPatterns,
   adversaryApprovalByReasonAndModel,
   issueResolutionTimeTrend,
   issueResolutionTimeTrendSignal,
@@ -1844,6 +1845,115 @@ describe('gateReasonConsecutiveFailureChaos', () => {
     expect(streaks).toHaveLength(2);
     expect(streaks[0].iterations).toEqual([6, 7]);
     expect(streaks[1].iterations).toEqual([1, 2]);
+  });
+});
+
+describe('gateReasonUnificationPatterns', () => {
+  it('streakが1つも無ければ空配列を返す', () => {
+    expect(gateReasonUnificationPatterns([])).toEqual([]);
+    const isolated = [
+      makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'merged', gateReasons: [] }),
+    ];
+    expect(gateReasonUnificationPatterns(isolated)).toEqual([]);
+  });
+
+  it('streak全体で根本原因が同じなら unified-from-start（末尾の連続長=streak長）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    const [p] = gateReasonUnificationPatterns(runs);
+    expect(p.pattern).toBe('unified-from-start');
+    expect(p.unifiedRootCause).toBe('e2eFailed');
+    expect(p.unifiedRunLength).toBe(3);
+    expect(p.unifiedSinceIteration).toBe(1);
+  });
+
+  it('長さ2のstreakで根本原因が異なれば not-unified（収束するには末尾2反復以上の一致が必要）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const [p] = gateReasonUnificationPatterns(runs);
+    expect(p.pattern).toBe('not-unified');
+    expect(p.unifiedRootCause).toBeNull();
+    expect(p.unifiedRunLength).toBe(0);
+    expect(p.unifiedSinceIteration).toBeNull();
+  });
+
+  it('前半で原因が入れ替わり、末尾2反復以上が同じ原因で終わるstreakは converged になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const [p] = gateReasonUnificationPatterns(runs);
+    expect(p.pattern).toBe('converged');
+    expect(p.rootCauses).toEqual(['e2eFailed', 'verifyFailed', 'verifyFailed', 'verifyFailed']);
+    expect(p.unifiedRootCause).toBe('verifyFailed');
+    expect(p.unifiedRunLength).toBe(3);
+    expect(p.unifiedSinceIteration).toBe(2);
+  });
+
+  it('末尾の反復だけがその直前と異なる（最後で再び入れ替わって終わる）streakは、途中に同一原因の連続があっても not-unified になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const [p] = gateReasonUnificationPatterns(runs);
+    expect(p.pattern).toBe('not-unified');
+    expect(p.unifiedRootCause).toBeNull();
+    expect(p.unifiedRunLength).toBe(0);
+    expect(p.unifiedSinceIteration).toBeNull();
+  });
+
+  it('複数streakを新しいstreakから順に返す（gateReasonConsecutiveFailureChaosと同じ並び）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'paused', gateReasons: [] }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+      }),
+    ];
+    const patterns = gateReasonUnificationPatterns(runs);
+    expect(patterns).toHaveLength(2);
+    expect(patterns[0].iterations).toEqual([4, 5]);
+    expect(patterns[0].pattern).toBe('not-unified');
+    expect(patterns[1].iterations).toEqual([1, 2]);
+    expect(patterns[1].pattern).toBe('unified-from-start');
   });
 });
 

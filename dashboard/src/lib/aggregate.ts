@@ -1351,6 +1351,65 @@ export function gateReasonConsecutiveFailureChaos(runs: RunRecord[]): GateReason
   return streaks.reverse();
 }
 
+/**
+ * gateReasonConsecutiveFailureChaos の streak を「終盤、根本原因が一つに絞られたか」で
+ * さらに分類する。chaosLevel は switchCount（入れ替わり回数）を streak 全体で1つの
+ * 指標に集約するため、「mixed」判定の中に「前半は原因が入れ替わったが後半は同じ原因が
+ * 居座るようになった（収束しつつある）」streak と「最後まで入れ替わり続けた」streak が
+ * 混在してしまい、reviseがそろそろ的を絞れてきたのか判別できない。こちらは streak の
+ * 末尾から見て根本原因カテゴリが何反復連続しているか（tailRunLength）だけを見て、
+ * 3水準に分ける:
+ * - unified-from-start: 最初から最後まで同じ原因（tailRunLength === length。chaosLevel
+ *   'stable' と対応する）
+ * - converged: 途中までは原因が入れ替わったが、末尾2反復以上は同じ原因で終わった
+ * - not-unified: 最後の反復の原因がその直前と異なる（末尾が孤立しており、収束したとは
+ *   言えない）
+ */
+export type GateReasonUnificationPattern = 'unified-from-start' | 'converged' | 'not-unified';
+
+export interface GateReasonUnificationStreak {
+  startIteration: number;
+  endIteration: number;
+  length: number;
+  /** streakに含まれる反復番号（古い→新しい順、length件） */
+  iterations: number[];
+  /** 各反復の根本原因カテゴリ（古い→新しい順）。gateReasonConsecutiveFailureChaosと同じ定義 */
+  rootCauses: GateReasonCategory[];
+  pattern: GateReasonUnificationPattern;
+  /** streak終端で持続していた（or最初から一貫していた）根本原因カテゴリ。'not-unified'ならnull */
+  unifiedRootCause: GateReasonCategory | null;
+  /** unifiedRootCauseがstreak終端まで連続した反復数。'not-unified'なら0 */
+  unifiedRunLength: number;
+  /** unifiedRootCauseの連続が始まった反復番号。'not-unified'ならnull */
+  unifiedSinceIteration: number | null;
+}
+
+export function gateReasonUnificationPatterns(runs: RunRecord[]): GateReasonUnificationStreak[] {
+  return gateReasonConsecutiveFailureChaos(runs).map((streak) => {
+    const { rootCauses, iterations, length } = streak;
+    const lastCategory = rootCauses[rootCauses.length - 1];
+    let tailRunLength = 1;
+    for (let i = rootCauses.length - 2; i >= 0 && rootCauses[i] === lastCategory; i--) {
+      tailRunLength++;
+    }
+
+    const pattern: GateReasonUnificationPattern =
+      tailRunLength === length ? 'unified-from-start' : tailRunLength >= 2 ? 'converged' : 'not-unified';
+
+    return {
+      startIteration: streak.startIteration,
+      endIteration: streak.endIteration,
+      length,
+      iterations,
+      rootCauses,
+      pattern,
+      unifiedRootCause: pattern === 'not-unified' ? null : lastCategory,
+      unifiedRunLength: pattern === 'not-unified' ? 0 : tailRunLength,
+      unifiedSinceIteration: pattern === 'not-unified' ? null : iterations[length - tailRunLength],
+    };
+  });
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
