@@ -1520,6 +1520,53 @@ export function gateReasonUnificationPatterns(runs: RunRecord[]): GateReasonUnif
   });
 }
 
+export interface GateReasonRecoveryStep {
+  reasonCategory: GateReasonCategory;
+  /** 同じ根本原因が連続した反復番号（古い→新しい順、unifiedRunLength件） */
+  iterations: number[];
+  /** 同一理由での再試行回数（gateReasonUnificationPatternsのunifiedRunLengthと同義） */
+  retryCount: number;
+  /** 連続の直後に来た反復番号。データ終端で次反復が無ければnull */
+  nextIteration: number | null;
+  /** 直後の反復のverdict。nextIterationがnullならnull */
+  nextVerdict: Verdict | null;
+  /** 直後の反復がmergedだったか（同理由の連続から回復できたか） */
+  recovered: boolean;
+  /** 回復した場合、同一理由が始まった反復から成功反復までの総ステップ数（retryCount + 1）。未回復ならnull */
+  stepsToSuccess: number | null;
+}
+
+/**
+ * gateReasonUnificationPatterns が「streakの末尾で根本原因が一つに絞られたか」を判定する
+ * ところまでで止まっているのに対し、こちらは「その絞られた同一理由の連続が、実際に何ステップで
+ * 成功（merged）にたどり着いたか」を可視化する。not-unified（末尾まで原因が入れ替わり続けた）は
+ * 「同一理由の再試行」自体が存在しないため対象外。unifiedRunLength件の同一理由連続の直後の
+ * 反復がmergedならrecovered=trueとし、stepsToSuccessに「同一理由の初回失敗から成功反復まで」の
+ * 総試行数（unifiedRunLength + 1）を記録する。直後の反復がmerged以外、またはデータ終端で
+ * 直後の反復が無ければrecovered=falseでstepsToSuccessはnull（まだ回復できていない、または
+ * このデータの範囲では結末が分からない）。新しい反復から返す。
+ */
+export function gateReasonRecoverySteps(runs: RunRecord[]): GateReasonRecoveryStep[] {
+  const byIteration = new Map(runs.map((r) => [r.iteration, r]));
+
+  return gateReasonUnificationPatterns(runs)
+    .filter((p) => p.pattern !== 'not-unified')
+    .map((p) => {
+      const reasonIterations = p.iterations.slice(p.length - p.unifiedRunLength);
+      const next = byIteration.get(p.endIteration + 1) ?? null;
+      const recovered = next !== null && next.verdict === 'merged';
+      return {
+        reasonCategory: p.unifiedRootCause as GateReasonCategory,
+        iterations: reasonIterations,
+        retryCount: p.unifiedRunLength,
+        nextIteration: next ? next.iteration : null,
+        nextVerdict: next ? next.verdict : null,
+        recovered,
+        stepsToSuccess: recovered ? p.unifiedRunLength + 1 : null,
+      };
+    });
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
