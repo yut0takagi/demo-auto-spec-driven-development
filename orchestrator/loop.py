@@ -182,7 +182,10 @@ def run_iteration(
     if not ready:
         return IterationResult(status="no-work", iteration=iteration)
 
-    issue = ready[0]
+    # 公正順(FIFO): 最古＝最小番号の Issue を拾う。gh 既定は新しい順のため素朴な ready[0] だと
+    # 最新を毎回選び、先に頼まれた古い依頼が後続の給油(新しい雑務 Issue)で永久に後回し＝餓死する。
+    # 詰まった Issue は _abandon が loop:ready を剥がして列から抜くので、無限再選択にはならない。
+    issue = min(ready, key=lambda i: i.number)
     branch = f"loop/{issue.number}-{slugify(issue.title)}"
     gh.create_branch(branch, cfg.base_branch)
 
