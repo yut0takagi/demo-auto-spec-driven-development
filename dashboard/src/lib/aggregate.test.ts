@@ -1955,6 +1955,35 @@ describe('gateReasonUnificationPatterns', () => {
     expect(patterns[1].iterations).toEqual([1, 2]);
     expect(patterns[1].pattern).toBe('unified-from-start');
   });
+
+  it('reasonの文字列が同じ "adversary が approve していない" でも adversary.summary が技術的棄却の文言(adversaryUnparseable)に切り替わると switchCount に反映され、単純な reason 文字列一致では収束と誤判定しない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '要件を満たしていない実装のため却下' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+    ];
+    const [p] = gateReasonUnificationPatterns(runs);
+    expect(p.rootCauses).toEqual(['adversaryNotApproved', 'adversaryUnparseable', 'adversaryUnparseable']);
+    expect(p.pattern).toBe('converged');
+    expect(p.unifiedRootCause).toBe('adversaryUnparseable');
+    expect(p.unifiedRunLength).toBe(2);
+    expect(p.unifiedSinceIteration).toBe(2);
+  });
 });
 
 describe('gateFailureTypeBreakdown', () => {

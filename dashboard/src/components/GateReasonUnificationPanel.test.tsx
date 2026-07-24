@@ -108,4 +108,34 @@ describe('GateReasonUnificationPanel', () => {
     expect(notUnifiedRow?.getAttribute('data-pattern')).toBe('not-unified');
     expect(notUnifiedRow?.textContent).toContain('収束せず: 最後まで原因が入れ替わり続けた');
   });
+
+  it('adversary.summary が技術的棄却の文言(adversaryUnparseable)のときは、reasonが同じ「adversary が approve していない」でも adversary未承認とは別ラベルで表示し、そこへ収束したことを示す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '要件を満たしていない実装のため却下' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+      }),
+    ];
+    const { container } = render(<GateReasonUnificationPanel runs={runs} />);
+    const row = container.querySelector('[data-testid="gate-reason-unification-streak-1-3"]');
+    expect(row).not.toBeNull();
+    expect(row?.getAttribute('data-pattern')).toBe('converged');
+    expect(row?.textContent).toContain('adversary未承認');
+    expect(row?.textContent).toContain('adversary出力解析不能');
+    expect(row?.textContent).toContain('#2以降、adversary出力解析不能に収束（2反復持続）');
+  });
 });
