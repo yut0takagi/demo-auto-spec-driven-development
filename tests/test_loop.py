@@ -486,3 +486,42 @@ class TestPlanPhase:
         result = run(tmp_path, gh=gh, proposals=(), planner=planner, round_runner_fn=round_runner)
         assert result.status == "merged"
         assert seen["round_plan"] == ""   # trivial は plan を渡さない
+
+
+class TestPlanPhaseFunction:
+    def test_plan_phase_picks_oldest_and_returns_plan(self, tmp_path):
+        from orchestrator.loop import plan_phase
+
+        def planner(*, task, cfg, cwd):
+            return {"trivial": False, "plan_text": "## 設計\nX", "cost_usd": 0.05}
+
+        gh = FakeGh(issues=[
+            Issue(number=9, title="new", labels=["loop:ready"]),
+            Issue(number=3, title="old", labels=["loop:ready"]),
+        ])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: True,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=planner, plan_reviewer=None)
+        assert res.status == "ok"
+        assert res.issue.number == 3           # FIFO 最古
+        assert "## 設計" in res.plan_text
+        assert res.branch == "loop/3-old"
+
+    def test_plan_phase_no_work_when_empty(self, tmp_path):
+        from orchestrator.loop import plan_phase
+        gh = FakeGh(issues=[])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: True,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=None, plan_reviewer=None)
+        assert res.status == "no-work"
+
+    def test_plan_phase_skipped_when_kill_switch_off(self, tmp_path):
+        from orchestrator.loop import plan_phase
+        gh = FakeGh(issues=[Issue(number=1, title="t", labels=["loop:ready"])])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: False,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=None, plan_reviewer=None)
+        assert res.status == "skipped-disabled"

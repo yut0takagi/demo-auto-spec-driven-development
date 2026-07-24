@@ -169,6 +169,49 @@ def _abandon(
     )
 
 
+@dataclass(frozen=True)
+class PlanPhaseResult:
+    status: str            # "ok" | "no-work" | "skipped-disabled"
+    issue: Issue | None = None
+    branch: str = ""
+    plan_text: str = ""
+    planner_cost: float = 0.0
+    ideation_cost: float = 0.0
+    next_issues: tuple[int, ...] = ()
+
+
+def plan_phase(
+    *,
+    gh: GhLike,
+    cfg: Config,
+    repo_root: str,
+    kill_switch_reader: Callable[[], bool],
+    ideation_runner: Callable[..., tuple[list[dict], float]],
+    planner: Callable[..., dict] | None,
+    plan_reviewer: Callable[..., tuple[Any, float]] | None,
+) -> PlanPhaseResult:
+    """PLAN フェーズ単体: kill-switch→refuel→FIFO pick→planner+plan-review。build/merge はしない。"""
+    if not kill_switch_reader():
+        return PlanPhaseResult(status="skipped-disabled")
+    ready = gh.list_ready_issues(cfg.ready_label)
+    ideation_cost, next_issues = _refuel_backlog(
+        gh=gh, cfg=cfg, repo_root=repo_root, ready=ready, ideation_runner=ideation_runner
+    )
+    if next_issues:
+        ready = gh.list_ready_issues(cfg.ready_label)
+    if not ready:
+        return PlanPhaseResult(status="no-work", ideation_cost=ideation_cost,
+                                next_issues=tuple(next_issues))
+    issue = min(ready, key=lambda i: i.number)
+    branch = f"loop/{issue.number}-{slugify(issue.title)}"
+    plan_text, planner_cost = _run_planner(
+        issue=issue, cfg=cfg, repo_root=repo_root, planner=planner, plan_reviewer=plan_reviewer
+    )
+    return PlanPhaseResult(status="ok", issue=issue, branch=branch, plan_text=plan_text,
+                            planner_cost=planner_cost, ideation_cost=ideation_cost,
+                            next_issues=tuple(next_issues))
+
+
 def run_iteration(
     *,
     gh: GhLike,
