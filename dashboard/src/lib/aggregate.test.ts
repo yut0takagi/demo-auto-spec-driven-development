@@ -36,6 +36,7 @@ import {
   breakerRunway,
   modelEffectiveness,
   issueLabelSuccessRates,
+  modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
   builderModelSwitchComparisons,
@@ -2973,6 +2974,150 @@ describe('issueLabelSuccessRates', () => {
     const result = issueLabelSuccessRates(runs);
     expect(result.every((r) => r.successRate === 0)).toBe(true);
     expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+describe('modelIssueLabelSuccessMatrix', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(modelIssueLabelSuccessMatrix([])).toEqual([]);
+  });
+
+  it('labelが空配列の反復（issue特定不能）はどのmodel行にも数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 0, title: '?', labels: [] } }),
+    ];
+    expect(modelIssueLabelSuccessMatrix(runs)).toEqual([]);
+  });
+
+  it('builderモデル×labelごとにマージ件数・件数・成功率を分けて集計する', () => {
+    const runs = [
+      // model-a × bug: merged 1件, abandoned 1件 → successRate = 1/2
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      // model-a × feature: merged 1件のみ → successRate = 1/1
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        issue: { number: 3, title: 'c', labels: ['feature'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = modelIssueLabelSuccessMatrix(runs);
+    expect(result).toHaveLength(1);
+    const row = result[0];
+    expect(row.model).toBe('model-a');
+    expect(row.totalCount).toBe(3);
+
+    // 成功率降順: feature(100%) が bug(50%) より先
+    expect(row.cells.map((c) => c.label)).toEqual(['feature', 'bug']);
+
+    const feature = row.cells[0];
+    expect(feature).toMatchObject({ label: 'feature', count: 1, mergedCount: 1 });
+    expect(feature.successRate).toBeCloseTo(1, 10);
+    expect(feature.iterations).toEqual([3]);
+
+    const bug = row.cells[1];
+    expect(bug).toMatchObject({ label: 'bug', count: 2, mergedCount: 1 });
+    expect(bug.successRate).toBeCloseTo(0.5, 10);
+    expect(bug.iterations).toEqual([1, 2]);
+  });
+
+  it('モデルが異なれば同じlabelでも別セルとして分離集計する（一方が強く一方が弱いケース）', () => {
+    const runs = [
+      // model-a × bug: 2件とも merged → 100%
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      // model-b × bug: 2件とも needs-human → 0%
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        issue: { number: 3, title: 'c', labels: ['bug'] },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'needs-human',
+        issue: { number: 4, title: 'd', labels: ['bug'] },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = modelIssueLabelSuccessMatrix(runs);
+    // 行はtotalCount同値(2件ずつ)なのでmodel名昇順
+    expect(result.map((r) => r.model)).toEqual(['model-a', 'model-b']);
+
+    const a = result.find((r) => r.model === 'model-a')!;
+    expect(a.cells).toEqual([{ label: 'bug', count: 2, mergedCount: 2, successRate: 1, iterations: [1, 2] }]);
+
+    const b = result.find((r) => r.model === 'model-b')!;
+    expect(b.cells).toEqual([{ label: 'bug', count: 2, mergedCount: 0, successRate: 0, iterations: [3, 4] }]);
+  });
+
+  it('1つのissueが複数labelを持つ場合、該当する全labelのセルに数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug', 'urgent'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+    const result = modelIssueLabelSuccessMatrix(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].totalCount).toBe(1);
+    expect(result[0].cells.map((c) => c.label).sort()).toEqual(['bug', 'urgent']);
+    expect(result[0].cells.every((c) => c.count === 1 && c.mergedCount === 1)).toBe(true);
+  });
+
+  it('行はtotalCount降順（同値はmodel名昇順）、セルは成功率降順（同値はlabel名昇順）で並ぶ', () => {
+    const runs = [
+      // model-zeta: 1件
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['x'] },
+        models: { builder: 'model-zeta', adversary: 'x', ideation: 'x' },
+      }),
+      // model-alpha: 2件
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        issue: { number: 2, title: 'b', labels: ['zeta-label'] },
+        models: { builder: 'model-alpha', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        issue: { number: 3, title: 'c', labels: ['alpha-label'] },
+        models: { builder: 'model-alpha', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+    const result = modelIssueLabelSuccessMatrix(runs);
+    // totalCount降順: model-alpha(2件) が model-zeta(1件) より先
+    expect(result.map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
+    // model-alphaのセルは両方successRate=1(同値)なのでlabel名昇順
+    expect(result[0].cells.map((c) => c.label)).toEqual(['alpha-label', 'zeta-label']);
   });
 });
 
