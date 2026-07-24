@@ -1,0 +1,44 @@
+{
+  "id": "20260724T091456Z-193",
+  "iteration": 120,
+  "issue": {
+    "number": 193,
+    "title": "Verdict遷移の根本原因パターン化パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/193-verdict",
+  "startedAt": "2026-07-24T09:14:56Z",
+  "finishedAt": "2026-07-24T09:18:09Z",
+  "durationSec": 193,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "仕様通りの根本原因パターン化機能を正確に実装。regressed/repeatedFailure/shiftedFailureは遷移先の原因を、recoveredは遷移元の原因を採用する判定ロジックが正しく、テストで主要ケースをカバー。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.540149,
+    "adversaryUsd": 0.058843,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 0.598992
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
