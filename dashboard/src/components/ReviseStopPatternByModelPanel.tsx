@@ -28,12 +28,13 @@ export function ReviseStopPatternByModelPanel({ runs }: { runs: RunRecord[] }) {
         {summaries.map((s) => {
           const earlyPct = s.count === 0 ? 0 : (s.earlyExitCount / s.count) * 100;
           const exhaustedPct = s.count === 0 ? 0 : (s.exhaustedCount / s.count) * 100;
+          const unparseablePct = s.count === 0 ? 0 : (s.unparseableCount / s.count) * 100;
           return (
             <li key={s.model} data-testid={`revise-stop-pattern-row-${s.model}`}>
               <div className="flex items-baseline justify-between text-sm">
                 <span className="opacity-80">{s.model}</span>
                 <span data-testid={`revise-stop-pattern-stats-${s.model}`} className="tabular-nums opacity-60">
-                  early-exit {s.earlyExitCount}件 / 枯渇 {s.exhaustedCount}件 (枯渇率{(s.exhaustionRate * 100).toFixed(1)}%, {s.count}件中)
+                  early-exit {s.earlyExitCount}件 / 枯渇 {s.exhaustedCount}件 / 解釈不能 {s.unparseableCount}件 (枯渇率{(s.exhaustionRate * 100).toFixed(1)}%, {s.count}件中)
                 </span>
               </div>
               <div className="mt-1 flex h-1.5 w-full overflow-hidden rounded-full bg-white/10">
@@ -46,6 +47,11 @@ export function ReviseStopPatternByModelPanel({ runs }: { runs: RunRecord[] }) {
                   data-testid={`revise-stop-pattern-exhausted-bar-${s.model}`}
                   className="h-full bg-rose-500"
                   style={{ width: `${exhaustedPct.toFixed(2)}%` }}
+                />
+                <div
+                  data-testid={`revise-stop-pattern-unparseable-bar-${s.model}`}
+                  className="h-full bg-amber-500"
+                  style={{ width: `${unparseablePct.toFixed(2)}%` }}
                 />
               </div>
               <p data-testid={`revise-stop-pattern-mean-${s.model}`} className="mt-1 text-[10px] opacity-50">

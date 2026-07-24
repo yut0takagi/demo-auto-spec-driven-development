@@ -2885,9 +2885,51 @@ describe('reviseStopPatternByModel', () => {
         count: 3,
         earlyExitCount: 2,
         exhaustedCount: 1,
+        unparseableCount: 0,
         exhaustionRate: 1 / 3,
         earlyExitMeanReviseCycles: 0.5,
         exhaustedMeanReviseCycles: 3,
+        iterations: [1, 2, 3],
+      },
+    ]);
+  });
+
+  it('adversary出力が解釈できず安全側で棄却された反復（adversary.summaryがパース失敗を示す）は、内容を読んで却下された「枯渇」とは別に unparseableCount として数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: 'adversary の出力を解釈できないため棄却として扱う' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        reviseCycles: 3,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: 'approved が真偽値でないため棄却: "yes"' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        reviseCycles: 2,
+        verdict: 'abandoned',
+        adversary: { approved: false, summary: '実装が要件を満たしていない' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const result = reviseStopPatternByModel(runs);
+    expect(result).toEqual([
+      {
+        model: 'claude-opus-4-8',
+        count: 3,
+        earlyExitCount: 0,
+        exhaustedCount: 1,
+        unparseableCount: 2,
+        // 分子(exhaustedCount)はパース失敗2件を含まないため、単純な not-approved 件数(3/3=1)より低くなる
+        exhaustionRate: 1 / 3,
+        earlyExitMeanReviseCycles: 0,
+        exhaustedMeanReviseCycles: 2,
         iterations: [1, 2, 3],
       },
     ]);
