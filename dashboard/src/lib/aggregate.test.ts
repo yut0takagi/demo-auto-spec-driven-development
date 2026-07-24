@@ -104,6 +104,8 @@ import {
   REVISE_SIZE_CURVE_FLAT_THRESHOLD,
   modelSkillStratification,
   MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT,
+  approvedButBuilderFailedIterations,
+  approvedButBuilderFailedSummary,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -6291,5 +6293,188 @@ describe('modelSkillStratification', () => {
     ];
     const result = modelSkillStratification(runs);
     expect(result.map((r) => r.model)).toEqual(['a-model', 'b-model']);
+  });
+});
+
+describe('approvedButBuilderFailedIterations', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(approvedButBuilderFailedIterations([])).toEqual([]);
+  });
+
+  it('approve済みなのに builder が変更を生成しなかった反復を noChanges として検知する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = approvedButBuilderFailedIterations(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].iteration).toBe(1);
+    expect(result[0].categories).toEqual(['noChanges']);
+  });
+
+  it('approve済みなのに e2e が失敗した反復を e2eFailed として検知する（needs-human でも対象になる）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'needs-human',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = approvedButBuilderFailedIterations(runs);
+    expect(result[0].categories).toEqual(['e2eFailed']);
+  });
+
+  it('1反復が複数の builder 側理由を持つ場合、全カテゴリを保持する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'needs-human',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = approvedButBuilderFailedIterations(runs);
+    expect(result[0].categories).toEqual(['verifyFailed', 'changedLinesExceeded']);
+  });
+
+  it('verdict が merged の反復は対象外（承認どおりにマージできているため）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        gateReasons: [],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    expect(approvedButBuilderFailedIterations(runs)).toEqual([]);
+  });
+
+  it('adversary が approve していない反復は対象外（却下理由の分析は別パネルの領分）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '要件不適合' },
+      }),
+    ];
+    expect(approvedButBuilderFailedIterations(runs)).toEqual([]);
+  });
+
+  it('paused/dry-run のようにゲート自体は通過し gateReasons が空の反復は対象外', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'paused',
+        gateReasons: [],
+        adversary: { approved: true, summary: '' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'dry-run',
+        gateReasons: [],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    expect(approvedButBuilderFailedIterations(runs)).toEqual([]);
+  });
+
+  it('approved=true なのに adversary側カテゴリしか無い不整合データは防御的に除外する', () => {
+    // 本来 approved=true では出現しないはずの理由文字列が混入した異常データを想定。
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    expect(approvedButBuilderFailedIterations(runs)).toEqual([]);
+  });
+
+  it('新しい反復から順に並ぶ', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = approvedButBuilderFailedIterations(runs);
+    expect(result.map((d) => d.iteration)).toEqual([5, 3, 1]);
+  });
+});
+
+describe('approvedButBuilderFailedSummary', () => {
+  it('空配列でもゼロ値を返す（境界値）', () => {
+    const s = approvedButBuilderFailedSummary([]);
+    expect(s).toEqual({
+      count: 0,
+      approvedCount: 0,
+      ratePct: 0,
+      totalCostUsd: 0,
+      topCategory: null,
+      topCategoryCount: 0,
+    });
+  });
+
+  it('approvedCount は verdict を問わず approve された全反復数を分母にする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, verdict: 'merged', adversary: { approved: true, summary: '' } }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+        cost: { builderUsd: 1, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 1.1 },
+      }),
+    ];
+    const s = approvedButBuilderFailedSummary(runs);
+    expect(s.count).toBe(1);
+    expect(s.approvedCount).toBe(3);
+    expect(s.ratePct).toBeCloseTo((1 / 3) * 100, 5);
+    expect(s.totalCostUsd).toBeCloseTo(1.1, 5);
+    expect(s.topCategory).toBe('noChanges');
+    expect(s.topCategoryCount).toBe(1);
+  });
+
+  it('最多カテゴリは件数降順、同数なら GATE_REASON_CATEGORY_ORDER の並び順で決まる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'needs-human',
+        gateReasons: ['builder が変更を生成しなかった'],
+        adversary: { approved: true, summary: '' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'needs-human',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    // noChanges と e2eFailed が同数(1件)。GATE_REASON_CATEGORY_ORDER では e2eFailed が先。
+    const s = approvedButBuilderFailedSummary(runs);
+    expect(s.topCategory).toBe('e2eFailed');
+    expect(s.topCategoryCount).toBe(1);
   });
 });
