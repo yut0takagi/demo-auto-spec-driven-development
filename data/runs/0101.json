@@ -1,0 +1,45 @@
+{
+  "id": "20260724T051335Z-176",
+  "iteration": 101,
+  "issue": {
+    "number": 176,
+    "title": "ダッシュボードを複数ページ化（1ページ詰め込み→ナビ＋ルーティングで分割）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/176-1",
+  "startedAt": "2026-07-24T05:13:35Z",
+  "finishedAt": "2026-07-24T05:35:14Z",
+  "durationSec": 1299,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 183,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たしている。1ページ詰め込みから5ページ分割への構造変更が正しく実装され、ナビゲーション・ルーティング・テストすべてが欠陥なく機能する。既存の挙動も壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 484,
+  "cost": {
+    "builderUsd": 8.314279,
+    "adversaryUsd": 0.121798,
+    "ideationUsd": 0.5748681,
+    "totalUsd": 9.010945
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    179,
+    180,
+    181
+  ]
+}

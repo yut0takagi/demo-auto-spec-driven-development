@@ -36,6 +36,7 @@ import {
   breakerRunway,
   modelEffectiveness,
   issueLabelSuccessRates,
+  modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
   builderModelSwitchComparisons,
@@ -74,6 +75,7 @@ import {
   gateReasonChains,
   gateReasonConsecutiveFailureChaos,
   gateReasonUnificationPatterns,
+  gateReasonRecoverySteps,
   adversaryApprovalByReasonAndModel,
   issueResolutionTimeTrend,
   issueResolutionTimeTrendSignal,
@@ -115,6 +117,9 @@ import {
   MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT,
   approvedButBuilderFailedIterations,
   approvedButBuilderFailedSummary,
+  modelPairCompatibilityDivergence,
+  MODEL_PAIR_MIN_SAMPLE,
+  MODEL_PAIR_DIVERGENCE_THRESHOLD_PT,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -2127,6 +2132,115 @@ describe('gateReasonUnificationPatterns', () => {
   });
 });
 
+describe('gateReasonRecoverySteps', () => {
+  it('runが0件、またはstreakがnot-unifiedしか無ければ空配列を返す', () => {
+    expect(gateReasonRecoverySteps([])).toEqual([]);
+
+    const notUnified = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    expect(gateReasonRecoverySteps(notUnified)).toEqual([]);
+  });
+
+  it('同一理由の連続の直後にmergedが来た場合はrecovered=trueで、stepsToSuccessが再試行回数+1になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 4, verdict: 'merged', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('e2eFailed');
+    expect(step.iterations).toEqual([1, 2, 3]);
+    expect(step.retryCount).toBe(3);
+    expect(step.nextIteration).toBe(4);
+    expect(step.nextVerdict).toBe('merged');
+    expect(step.recovered).toBe(true);
+    expect(step.stepsToSuccess).toBe(4);
+  });
+
+  it('直後がmerged以外（paused）ならrecovered=falseでstepsToSuccessはnull', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'paused', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('e2eFailed');
+    expect(step.nextIteration).toBe(3);
+    expect(step.nextVerdict).toBe('paused');
+    expect(step.recovered).toBe(false);
+    expect(step.stepsToSuccess).toBeNull();
+  });
+
+  it('データ終端で同一理由の連続が途切れず終わる場合はnextIteration/nextVerdictがnullでrecovered=false（まだ結末不明）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.nextIteration).toBeNull();
+    expect(step.nextVerdict).toBeNull();
+    expect(step.recovered).toBe(false);
+    expect(step.stepsToSuccess).toBeNull();
+  });
+
+  it('converged（前半で原因が入れ替わり末尾で単一原因化）したstreakは、単一化した末尾部分の反復数のみを再試行回数として扱う', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+      makeRun({ iteration: 4, verdict: 'merged', gateReasons: [] }),
+    ];
+    const [step] = gateReasonRecoverySteps(runs);
+    expect(step.reasonCategory).toBe('verifyFailed');
+    expect(step.iterations).toEqual([2, 3]);
+    expect(step.retryCount).toBe(2);
+    expect(step.recovered).toBe(true);
+    expect(step.stepsToSuccess).toBe(3);
+  });
+
+  it('複数streakを新しいstreakから順に返す（gateReasonUnificationPatternsと同じ並び）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'merged', gateReasons: [] }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 501 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 420 が上限 400 を超えている'],
+      }),
+      makeRun({ iteration: 6, verdict: 'paused', gateReasons: [] }),
+    ];
+    const steps = gateReasonRecoverySteps(runs);
+    expect(steps).toHaveLength(2);
+    expect(steps[0].iterations).toEqual([4, 5]);
+    expect(steps[0].recovered).toBe(false);
+    expect(steps[0].nextVerdict).toBe('paused');
+    expect(steps[1].iterations).toEqual([1, 2]);
+    expect(steps[1].recovered).toBe(true);
+    expect(steps[1].stepsToSuccess).toBe(3);
+  });
+});
+
 describe('gateFailureTypeBreakdown', () => {
   it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
     expect(gateFailureTypeBreakdown([])).toEqual([]);
@@ -2970,6 +3084,150 @@ describe('issueLabelSuccessRates', () => {
     const result = issueLabelSuccessRates(runs);
     expect(result.every((r) => r.successRate === 0)).toBe(true);
     expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+describe('modelIssueLabelSuccessMatrix', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(modelIssueLabelSuccessMatrix([])).toEqual([]);
+  });
+
+  it('labelが空配列の反復（issue特定不能）はどのmodel行にも数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 0, title: '?', labels: [] } }),
+    ];
+    expect(modelIssueLabelSuccessMatrix(runs)).toEqual([]);
+  });
+
+  it('builderモデル×labelごとにマージ件数・件数・成功率を分けて集計する', () => {
+    const runs = [
+      // model-a × bug: merged 1件, abandoned 1件 → successRate = 1/2
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      // model-a × feature: merged 1件のみ → successRate = 1/1
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        issue: { number: 3, title: 'c', labels: ['feature'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = modelIssueLabelSuccessMatrix(runs);
+    expect(result).toHaveLength(1);
+    const row = result[0];
+    expect(row.model).toBe('model-a');
+    expect(row.totalCount).toBe(3);
+
+    // 成功率降順: feature(100%) が bug(50%) より先
+    expect(row.cells.map((c) => c.label)).toEqual(['feature', 'bug']);
+
+    const feature = row.cells[0];
+    expect(feature).toMatchObject({ label: 'feature', count: 1, mergedCount: 1 });
+    expect(feature.successRate).toBeCloseTo(1, 10);
+    expect(feature.iterations).toEqual([3]);
+
+    const bug = row.cells[1];
+    expect(bug).toMatchObject({ label: 'bug', count: 2, mergedCount: 1 });
+    expect(bug.successRate).toBeCloseTo(0.5, 10);
+    expect(bug.iterations).toEqual([1, 2]);
+  });
+
+  it('モデルが異なれば同じlabelでも別セルとして分離集計する（一方が強く一方が弱いケース）', () => {
+    const runs = [
+      // model-a × bug: 2件とも merged → 100%
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+      // model-b × bug: 2件とも needs-human → 0%
+      makeRun({
+        iteration: 3,
+        verdict: 'needs-human',
+        issue: { number: 3, title: 'c', labels: ['bug'] },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'needs-human',
+        issue: { number: 4, title: 'd', labels: ['bug'] },
+        models: { builder: 'model-b', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+
+    const result = modelIssueLabelSuccessMatrix(runs);
+    // 行はtotalCount同値(2件ずつ)なのでmodel名昇順
+    expect(result.map((r) => r.model)).toEqual(['model-a', 'model-b']);
+
+    const a = result.find((r) => r.model === 'model-a')!;
+    expect(a.cells).toEqual([{ label: 'bug', count: 2, mergedCount: 2, successRate: 1, iterations: [1, 2] }]);
+
+    const b = result.find((r) => r.model === 'model-b')!;
+    expect(b.cells).toEqual([{ label: 'bug', count: 2, mergedCount: 0, successRate: 0, iterations: [3, 4] }]);
+  });
+
+  it('1つのissueが複数labelを持つ場合、該当する全labelのセルに数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug', 'urgent'] },
+        models: { builder: 'model-a', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+    const result = modelIssueLabelSuccessMatrix(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].totalCount).toBe(1);
+    expect(result[0].cells.map((c) => c.label).sort()).toEqual(['bug', 'urgent']);
+    expect(result[0].cells.every((c) => c.count === 1 && c.mergedCount === 1)).toBe(true);
+  });
+
+  it('行はtotalCount降順（同値はmodel名昇順）、セルは成功率降順（同値はlabel名昇順）で並ぶ', () => {
+    const runs = [
+      // model-zeta: 1件
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['x'] },
+        models: { builder: 'model-zeta', adversary: 'x', ideation: 'x' },
+      }),
+      // model-alpha: 2件
+      makeRun({
+        iteration: 2,
+        verdict: 'merged',
+        issue: { number: 2, title: 'b', labels: ['zeta-label'] },
+        models: { builder: 'model-alpha', adversary: 'x', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        issue: { number: 3, title: 'c', labels: ['alpha-label'] },
+        models: { builder: 'model-alpha', adversary: 'x', ideation: 'x' },
+      }),
+    ];
+    const result = modelIssueLabelSuccessMatrix(runs);
+    // totalCount降順: model-alpha(2件) が model-zeta(1件) より先
+    expect(result.map((r) => r.model)).toEqual(['model-alpha', 'model-zeta']);
+    // model-alphaのセルは両方successRate=1(同値)なのでlabel名昇順
+    expect(result[0].cells.map((c) => c.label)).toEqual(['alpha-label', 'zeta-label']);
   });
 });
 
@@ -7067,5 +7325,202 @@ describe('approvedButBuilderFailedSummary', () => {
     const s = approvedButBuilderFailedSummary(runs);
     expect(s.topCategory).toBe('e2eFailed');
     expect(s.topCategoryCount).toBe(1);
+  });
+});
+
+describe('modelPairCompatibilityDivergence', () => {
+  /** builder×adversary のペアで mergedCount 件を merged、残りを needs-human にした run 群を作る */
+  function makePairRuns(
+    startIteration: number,
+    builder: string,
+    adversary: string,
+    count: number,
+    mergedCount: number,
+  ): RunRecord[] {
+    return Array.from({ length: count }, (_, i) =>
+      makeRun({
+        iteration: startIteration + i,
+        verdict: i < mergedCount ? 'merged' : 'needs-human',
+        models: { builder, adversary, ideation: adversary },
+      }),
+    );
+  }
+
+  it('run が0件なら空配列を返す', () => {
+    expect(modelPairCompatibilityDivergence([])).toEqual([]);
+  });
+
+  it('builder が常に同じ adversary としか組んでいない（交絡）場合、identifiable=false かつ divergencePt は0になり isDivergent は常にfalse', () => {
+    const runs = makePairRuns(1, 'b1', 'a1', 3, 2);
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(1);
+    const [row] = result;
+    expect(row.builder).toBe('b1');
+    expect(row.adversary).toBe('a1');
+    expect(row.count).toBe(3);
+    expect(row.mergedCount).toBe(2);
+    expect(row.actualMergeRatePct).toBeCloseTo((2 / 3) * 100, 10);
+    expect(row.builderMarginalMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.adversaryMarginalMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.expectedMergeRatePct).toBeCloseTo(row.actualMergeRatePct, 10);
+    expect(row.divergencePt).toBeCloseTo(0, 10);
+    expect(row.identifiable).toBe(false);
+    expect(row.isDivergent).toBe(false);
+  });
+
+  it('2x2クロス設計で各セルの実測が単体成績からの期待値と一致しない場合、全セルを乖離として検知し、乖離度|同点は builder→adversary名順でソートする', () => {
+    // (B1,A1)=100%, (B1,A2)=25%, (B2,A1)=25%, (B2,A2)=25% の 2x2、各セル4件
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 4, 4),
+      ...makePairRuns(5, 'B1', 'A2', 4, 1),
+      ...makePairRuns(9, 'B2', 'A1', 4, 1),
+      ...makePairRuns(13, 'B2', 'A2', 4, 1),
+    ];
+    // baseline = 7/16 = 43.75%
+    // builderMarginal(B1) = 5/8 = 62.5%, builderMarginal(B2) = 2/8 = 25%
+    // adversaryMarginal(A1) = 5/8 = 62.5%, adversaryMarginal(A2) = 2/8 = 25%
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(4);
+    expect(result.every((r) => r.identifiable)).toBe(true);
+    expect(result.every((r) => r.count === 4)).toBe(true);
+    expect(result.every((r) => r.isDivergent)).toBe(true);
+
+    const byKey = new Map(result.map((r) => [`${r.builder}-${r.adversary}`, r]));
+    const b1a1 = byKey.get('B1-A1')!;
+    const b1a2 = byKey.get('B1-A2')!;
+    const b2a1 = byKey.get('B2-A1')!;
+    const b2a2 = byKey.get('B2-A2')!;
+
+    expect(b1a1.baselineMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b1a1.actualMergeRatePct).toBeCloseTo(100, 10);
+    expect(b1a1.expectedMergeRatePct).toBeCloseTo(81.25, 10);
+    expect(b1a1.divergencePt).toBeCloseTo(18.75, 10);
+
+    expect(b1a2.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b1a2.expectedMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b1a2.divergencePt).toBeCloseTo(-18.75, 10);
+
+    expect(b2a1.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b2a1.expectedMergeRatePct).toBeCloseTo(43.75, 10);
+    expect(b2a1.divergencePt).toBeCloseTo(-18.75, 10);
+
+    expect(b2a2.actualMergeRatePct).toBeCloseTo(25, 10);
+    expect(b2a2.expectedMergeRatePct).toBeCloseTo(6.25, 10);
+    expect(b2a2.divergencePt).toBeCloseTo(18.75, 10);
+
+    // 全て |divergencePt|=18.75pt で同点 → builder名昇順、同builder内はadversary名昇順
+    expect(result.map((r) => `${r.builder}-${r.adversary}`)).toEqual(['B1-A1', 'B1-A2', 'B2-A1', 'B2-A2']);
+  });
+
+  it(`サンプル数が MODEL_PAIR_MIN_SAMPLE(${MODEL_PAIR_MIN_SAMPLE})未満だと、乖離幅が閾値を超えていても isDivergent は false`, () => {
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 2, 2), // 100%, count=2 < MIN_SAMPLE
+      ...makePairRuns(3, 'b1', 'a2', 1, 0), // b1をクロス設計にするための最小限の相方
+      ...makePairRuns(4, 'b2', 'a1', 1, 0), // a1をクロス設計にするための最小限の相方
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'b1' && r.adversary === 'a1')!;
+    expect(target.count).toBe(2);
+    expect(target.count).toBeLessThan(MODEL_PAIR_MIN_SAMPLE);
+    expect(target.identifiable).toBe(true);
+    expect(Math.abs(target.divergencePt)).toBeGreaterThanOrEqual(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(target.isDivergent).toBe(false);
+  });
+
+  it('乖離幅が閾値未満なら、サンプル数が十分でも isDivergent は false', () => {
+    // 全ペアが同じ 50% 前後の実測率になるよう揃え、乖離をほぼ0に保つ
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 4, 2),
+      ...makePairRuns(5, 'b1', 'a2', 4, 2),
+      ...makePairRuns(9, 'b2', 'a1', 4, 2),
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'b1' && r.adversary === 'a1')!;
+    expect(target.count).toBeGreaterThanOrEqual(MODEL_PAIR_MIN_SAMPLE);
+    expect(target.identifiable).toBe(true);
+    expect(Math.abs(target.divergencePt)).toBeLessThan(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(target.isDivergent).toBe(false);
+  });
+
+  it('期待値が100%を超える組み合わせでは100%にクランプされる（実測が既に100%なら乖離は0扱い）', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 2, 2), // 100%
+      ...makePairRuns(3, 'B1', 'A2', 1, 1), // 100%、B1をクロス設計にする
+      ...makePairRuns(4, 'B2', 'A1', 1, 1), // 100%、A1をクロス設計にする
+      ...makePairRuns(5, 'BX', 'AX', 10, 0), // baseline を大きく引き下げるダミー群
+    ];
+    // baseline = 4/14 = 28.571...%
+    // builderMarginal(B1) = 3/3 = 100%, adversaryMarginal(A1) = 3/3 = 100%
+    // raw expected = 100 + 100 - 28.571... = 171.43...% → 100%にクランプ
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'B1' && r.adversary === 'A1')!;
+    expect(target.builderMarginalMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.adversaryMarginalMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.expectedMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.actualMergeRatePct).toBeCloseTo(100, 10);
+    expect(target.divergencePt).toBeCloseTo(0, 10);
+  });
+
+  it('期待値が0%を下回る組み合わせでは0%にクランプされる（実測が既に0%なら乖離は0扱い）', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 2, 0), // 0%
+      ...makePairRuns(3, 'B1', 'A2', 1, 0), // 0%、B1をクロス設計にする
+      ...makePairRuns(4, 'B2', 'A1', 1, 0), // 0%、A1をクロス設計にする
+      ...makePairRuns(5, 'BX', 'AX', 10, 10), // baseline を大きく引き上げるダミー群
+    ];
+    const result = modelPairCompatibilityDivergence(runs);
+    const target = result.find((r) => r.builder === 'B1' && r.adversary === 'A1')!;
+    expect(target.builderMarginalMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.adversaryMarginalMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.expectedMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.actualMergeRatePct).toBeCloseTo(0, 10);
+    expect(target.divergencePt).toBeCloseTo(0, 10);
+  });
+
+  it('identifiable=false のペアは乖離幅が閾値を超えていても isDivergent にならず、乖離検知済みペアより後ろにソートされる', () => {
+    const runs = [
+      ...makePairRuns(1, 'B1', 'A1', 3, 3), // 100%
+      ...makePairRuns(4, 'B1', 'A2', 3, 0), // 0%
+      ...makePairRuns(7, 'B2', 'A1', 3, 3), // 100%
+      ...makePairRuns(10, 'B3', 'A1', 3, 0), // 0%、B3はA1としか組んでいない（交絡）
+    ];
+    // baseline = 6/12 = 50%
+    // builderMarginal(B1)=3/6=50%, builderMarginal(B2)=3/3=100%, builderMarginal(B3)=0/3=0%
+    // adversaryMarginal(A1)=6/9=66.67%, adversaryMarginal(A2)=0/3=0%
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(4);
+
+    const byKey = new Map(result.map((r) => [`${r.builder}-${r.adversary}`, r]));
+    const b1a1 = byKey.get('B1-A1')!;
+    const b3a1 = byKey.get('B3-A1')!;
+
+    expect(b1a1.identifiable).toBe(true);
+    expect(b1a1.divergencePt).toBeCloseTo(33.3333, 3);
+    expect(b1a1.isDivergent).toBe(true);
+
+    expect(b3a1.identifiable).toBe(false);
+    expect(b3a1.divergencePt).toBeCloseTo(-16.6667, 3);
+    expect(Math.abs(b3a1.divergencePt)).toBeGreaterThanOrEqual(MODEL_PAIR_DIVERGENCE_THRESHOLD_PT);
+    expect(b3a1.isDivergent).toBe(false);
+
+    // isDivergent=true が常に先頭。B3-A1 は乖離幅こそ閾値超えだが identifiable=false のため
+    // isDivergent=false 側（非乖離グループの中では乖離幅降順で先頭）に位置する。
+    expect(result[0].builder).toBe('B1');
+    expect(result[0].adversary).toBe('A1');
+    expect(result[0].isDivergent).toBe(true);
+    expect(result[1].builder).toBe('B3');
+    expect(result[1].adversary).toBe('A1');
+    expect(result[1].isDivergent).toBe(false);
+  });
+
+  it('入力順が iteration 順でなくても集計結果は変わらない', () => {
+    const runs = [
+      ...makePairRuns(1, 'b1', 'a1', 3, 2),
+    ].reverse();
+    const result = modelPairCompatibilityDivergence(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0].count).toBe(3);
+    expect(result[0].mergedCount).toBe(2);
+    expect(result[0].iterations).toEqual([1, 2, 3]);
   });
 });

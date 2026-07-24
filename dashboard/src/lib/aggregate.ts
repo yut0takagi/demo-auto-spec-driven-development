@@ -1520,6 +1520,53 @@ export function gateReasonUnificationPatterns(runs: RunRecord[]): GateReasonUnif
   });
 }
 
+export interface GateReasonRecoveryStep {
+  reasonCategory: GateReasonCategory;
+  /** 同じ根本原因が連続した反復番号（古い→新しい順、unifiedRunLength件） */
+  iterations: number[];
+  /** 同一理由での再試行回数（gateReasonUnificationPatternsのunifiedRunLengthと同義） */
+  retryCount: number;
+  /** 連続の直後に来た反復番号。データ終端で次反復が無ければnull */
+  nextIteration: number | null;
+  /** 直後の反復のverdict。nextIterationがnullならnull */
+  nextVerdict: Verdict | null;
+  /** 直後の反復がmergedだったか（同理由の連続から回復できたか） */
+  recovered: boolean;
+  /** 回復した場合、同一理由が始まった反復から成功反復までの総ステップ数（retryCount + 1）。未回復ならnull */
+  stepsToSuccess: number | null;
+}
+
+/**
+ * gateReasonUnificationPatterns が「streakの末尾で根本原因が一つに絞られたか」を判定する
+ * ところまでで止まっているのに対し、こちらは「その絞られた同一理由の連続が、実際に何ステップで
+ * 成功（merged）にたどり着いたか」を可視化する。not-unified（末尾まで原因が入れ替わり続けた）は
+ * 「同一理由の再試行」自体が存在しないため対象外。unifiedRunLength件の同一理由連続の直後の
+ * 反復がmergedならrecovered=trueとし、stepsToSuccessに「同一理由の初回失敗から成功反復まで」の
+ * 総試行数（unifiedRunLength + 1）を記録する。直後の反復がmerged以外、またはデータ終端で
+ * 直後の反復が無ければrecovered=falseでstepsToSuccessはnull（まだ回復できていない、または
+ * このデータの範囲では結末が分からない）。新しい反復から返す。
+ */
+export function gateReasonRecoverySteps(runs: RunRecord[]): GateReasonRecoveryStep[] {
+  const byIteration = new Map(runs.map((r) => [r.iteration, r]));
+
+  return gateReasonUnificationPatterns(runs)
+    .filter((p) => p.pattern !== 'not-unified')
+    .map((p) => {
+      const reasonIterations = p.iterations.slice(p.length - p.unifiedRunLength);
+      const next = byIteration.get(p.endIteration + 1) ?? null;
+      const recovered = next !== null && next.verdict === 'merged';
+      return {
+        reasonCategory: p.unifiedRootCause as GateReasonCategory,
+        iterations: reasonIterations,
+        retryCount: p.unifiedRunLength,
+        nextIteration: next ? next.iteration : null,
+        nextVerdict: next ? next.verdict : null,
+        recovered,
+        stepsToSuccess: recovered ? p.unifiedRunLength + 1 : null,
+      };
+    });
+}
+
 /** count 同値のときの表示順（クラッシュ→自動見送り→旧経路、の深刻度順）。 */
 const GATE_FAILURE_TYPE_ORDER: readonly Verdict[] = ['failed', 'abandoned', 'needs-human', 'paused', 'dry-run'];
 
@@ -2406,6 +2453,85 @@ export function issueLabelSuccessRates(runs: RunRecord[]): IssueLabelSuccessRate
       if (b.successRate !== a.successRate) return b.successRate - a.successRate;
       return a.label.localeCompare(b.label);
     });
+}
+
+export interface ModelIssueLabelSuccessCell {
+  label: string;
+  /** このmodel×labelの組み合わせを扱った反復数 */
+  count: number;
+  mergedCount: number;
+  /** 0..1 */
+  successRate: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+export interface ModelIssueLabelSuccessRow {
+  model: string;
+  /** このmodelがbuilderとして扱った、label付きissueの反復数（cellsのcount合計とは、1反復が複数labelを持てば一致しない） */
+  totalCount: number;
+  /** 実際に出現した(model,label)の組み合わせだけを、成功率降順（同値はlabel名昇順）で持つ */
+  cells: ModelIssueLabelSuccessCell[];
+}
+
+/**
+ * builder モデル × issue label の2次元クロス集計。modelEffectiveness が builder モデル別、
+ * issueLabelSuccessRates が issue label 別と、それぞれ1次元でしか見ていなかった成功率
+ * （developへのマージ率）を掛け合わせ、「どのモデルが、どの課題型（label）で強い/弱いか」を
+ * 一望できるようにする。issueLabelSuccessRates と同じ理由で、labelが空配列の反復
+ * （例外でissueを特定できなかった反復。data/runs/0018.json等）はどの(model,label)セルにも
+ * 属さない。この関数ではさらにmodel行自体からも除外する。もし含めてしまうと、その反復が
+ * どのcellにも現れないのにtotalCountだけ加算され、「内訳(cells)の合計と行全体の総数が
+ * 食い違う行」に見えてしまうため。
+ * 行はtotalCount降順（同値はmodel名昇順）。各行内のセルは成功率降順（同値はlabel名昇順）で、
+ * issueLabelSuccessRatesと同じ並び方を踏襲する。
+ */
+export function modelIssueLabelSuccessMatrix(runs: RunRecord[]): ModelIssueLabelSuccessRow[] {
+  const byModel = new Map<string, RunRecord[]>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (run.issue.labels.length === 0) continue;
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const byLabel = new Map<string, RunRecord[]>();
+      for (const run of modelRuns) {
+        for (const label of run.issue.labels) {
+          const list = byLabel.get(label);
+          if (list) {
+            list.push(run);
+          } else {
+            byLabel.set(label, [run]);
+          }
+        }
+      }
+
+      const cells: ModelIssueLabelSuccessCell[] = [...byLabel.entries()]
+        .map(([label, labelRuns]) => {
+          const mergedCount = labelRuns.filter((r) => r.verdict === 'merged').length;
+          return {
+            label,
+            count: labelRuns.length,
+            mergedCount,
+            successRate: mergedCount / labelRuns.length,
+            iterations: labelRuns.map((r) => r.iteration),
+          };
+        })
+        .sort((a, b) =>
+          b.successRate !== a.successRate ? b.successRate - a.successRate : a.label.localeCompare(b.label),
+        );
+
+      return { model, totalCount: modelRuns.length, cells };
+    })
+    .sort((a, b) => (b.totalCount !== a.totalCount ? b.totalCount - a.totalCount : a.model.localeCompare(b.model)));
 }
 
 export interface ModelConfidenceWeightedScore {
@@ -4713,4 +4839,146 @@ export function approvedButBuilderFailedSummary(runs: RunRecord[]): ApprovedButB
     topCategory,
     topCategoryCount,
   };
+}
+
+/** modelPairCompatibilityDivergence が「乖離あり」と判定するために必要な最小サンプル数 */
+export const MODEL_PAIR_MIN_SAMPLE = 3;
+/** 乖離ありと判定する |実測 - 期待| の閾値(pt)。ノイズと区別できる程度の幅を確保する */
+export const MODEL_PAIR_DIVERGENCE_THRESHOLD_PT = 15;
+
+export interface ModelPairCompatibilityRow {
+  builder: string;
+  adversary: string;
+  /** このペアの反復数（verdict に関係なく全件） */
+  count: number;
+  mergedCount: number;
+  /** このペアの実測マージ率(pt, 0..100) */
+  actualMergeRatePct: number;
+  /** builder 単体（相手のadversaryを問わず全反復）のマージ率(pt) */
+  builderMarginalMergeRatePct: number;
+  /** adversary 単体（相手のbuilderを問わず全反復）のマージ率(pt) */
+  adversaryMarginalMergeRatePct: number;
+  /** 全反復に対するマージ率(pt) */
+  baselineMergeRatePct: number;
+  /**
+   * 「builder と adversary の間に相互作用が無い」と仮定した場合の期待マージ率(pt, 0..100)。
+   * builderMarginalMergeRatePct + adversaryMarginalMergeRatePct - baselineMergeRatePct
+   * （二元配置の加法モデル。両モデルの単体効果を baseline からの差分として足し合わせる）を
+   * 0..100 にクランプする。
+   */
+  expectedMergeRatePct: number;
+  /** actualMergeRatePct - expectedMergeRatePct（pt）。正なら期待以上に相性が良い、負なら相性が悪い */
+  divergencePt: number;
+  /**
+   * この builder が当該 adversary 以外とも組んだ実績があり、かつこの adversary も当該 builder
+   * 以外とも組んだ実績があるか。どちらか一方でも false だと、単体効果とペア固有の効果が
+   * 完全に交絡し（このペアの実測値がそのまま単体マージ率になる）、divergencePt は統計的に
+   * 意味を持たない（常に0近辺になる）。isDivergent の判定はこれが true の行に限る。
+   */
+  identifiable: boolean;
+  /** identifiable && count >= MODEL_PAIR_MIN_SAMPLE && |divergencePt| >= MODEL_PAIR_DIVERGENCE_THRESHOLD_PT */
+  isDivergent: boolean;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+function clampPct(value: number): number {
+  return Math.min(100, Math.max(0, value));
+}
+
+function mergeRatePct(runs: RunRecord[]): number {
+  if (runs.length === 0) return 0;
+  return (runs.filter((r) => r.verdict === 'merged').length / runs.length) * 100;
+}
+
+/**
+ * builder モデルと adversary モデルの「組み合わせ」単位で、実測マージ率が両モデルの単体成績
+ * から期待される水準からどれだけ乖離しているかを検知する。modelEffectiveness や
+ * adversaryOutcomeDivergence がモデルを builder/adversary それぞれ単独の軸で評価するのに対し、
+ * こちらは「特定の builder × 特定の adversary という組み合わせ自体に、単体成績の合算では
+ * 説明できない相性（相互作用）があるか」を二元配置の加法モデル（期待値 = builder単体率 +
+ * adversary単体率 - 全体平均）で検出する。期待値との差が大きい組み合わせほど、
+ * その2モデルの相性が（良い方にも悪い方にも）通常の想定から外れていることを示す。
+ * builder が常に同じ adversary としか組んだことが無い（交絡）場合は identifiable=false とし、
+ * isDivergent の対象から外す（このとき divergencePt は定義上0になる）。
+ * 乖離度（isDivergent true を優先し、その中で |divergencePt| 降順）で並べる。
+ */
+export function modelPairCompatibilityDivergence(runs: RunRecord[]): ModelPairCompatibilityRow[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+
+  const baseline = mergeRatePct(sorted);
+
+  const byBuilder = new Map<string, RunRecord[]>();
+  const byAdversary = new Map<string, RunRecord[]>();
+  const byPair = new Map<string, RunRecord[]>();
+  const adversariesByBuilder = new Map<string, Set<string>>();
+  const buildersByAdversary = new Map<string, Set<string>>();
+
+  for (const run of sorted) {
+    const { builder, adversary } = run.models;
+    const pairKey = `${builder}:${adversary}`;
+
+    for (const [map, key] of [
+      [byBuilder, builder],
+      [byAdversary, adversary],
+    ] as const) {
+      const list = map.get(key);
+      if (list) list.push(run);
+      else map.set(key, [run]);
+    }
+
+    const pairList = byPair.get(pairKey);
+    if (pairList) pairList.push(run);
+    else byPair.set(pairKey, [run]);
+
+    const advSet = adversariesByBuilder.get(builder);
+    if (advSet) advSet.add(adversary);
+    else adversariesByBuilder.set(builder, new Set([adversary]));
+
+    const builderSet = buildersByAdversary.get(adversary);
+    if (builderSet) builderSet.add(builder);
+    else buildersByAdversary.set(adversary, new Set([builder]));
+  }
+
+  const rows: ModelPairCompatibilityRow[] = [...byPair.values()].map((pairRuns) => {
+    const { builder, adversary } = pairRuns[0].models;
+    const count = pairRuns.length;
+    const mergedCount = pairRuns.filter((r) => r.verdict === 'merged').length;
+    const actualMergeRatePct = mergeRatePct(pairRuns);
+    const builderMarginalMergeRatePct = mergeRatePct(byBuilder.get(builder) ?? []);
+    const adversaryMarginalMergeRatePct = mergeRatePct(byAdversary.get(adversary) ?? []);
+    const expectedMergeRatePct = clampPct(
+      builderMarginalMergeRatePct + adversaryMarginalMergeRatePct - baseline,
+    );
+    const divergencePt = actualMergeRatePct - expectedMergeRatePct;
+    const identifiable =
+      (adversariesByBuilder.get(builder)?.size ?? 0) >= 2 && (buildersByAdversary.get(adversary)?.size ?? 0) >= 2;
+    const isDivergent =
+      identifiable && count >= MODEL_PAIR_MIN_SAMPLE && Math.abs(divergencePt) >= MODEL_PAIR_DIVERGENCE_THRESHOLD_PT;
+
+    return {
+      builder,
+      adversary,
+      count,
+      mergedCount,
+      actualMergeRatePct,
+      builderMarginalMergeRatePct,
+      adversaryMarginalMergeRatePct,
+      baselineMergeRatePct: baseline,
+      expectedMergeRatePct,
+      divergencePt,
+      identifiable,
+      isDivergent,
+      iterations: pairRuns.map((r) => r.iteration),
+    };
+  });
+
+  return rows.sort((a, b) => {
+    if (a.isDivergent !== b.isDivergent) return a.isDivergent ? -1 : 1;
+    const diff = Math.abs(b.divergencePt) - Math.abs(a.divergencePt);
+    if (diff !== 0) return diff;
+    if (a.builder !== b.builder) return a.builder.localeCompare(b.builder);
+    return a.adversary.localeCompare(b.adversary);
+  });
 }

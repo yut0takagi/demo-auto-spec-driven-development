@@ -20,7 +20,9 @@ class Config:
     # gate（verify/e2e/adversary）を満たすまで builder に再試行させる上限。
     # 満たせなければ人間に振らず abandoned で見送る。
     max_revise_cycles: int = 3
-    max_changed_lines: int = 3000
+    #: 1 反復の変更行数の上限。人間ゲート(develop→main)と verify/e2e が本来の品質 backstop なので
+    #: 実質撤廃し、暴走（builder が異常な量を吐く事故）だけを止める天井として大きめの値を残す。
+    max_changed_lines: int = 200000
     circuit_breaker_fails: int = 3
     daily_cost_budget_usd: float = 5.0
     per_iter_cost_budget_usd: float = 0.5
@@ -46,7 +48,7 @@ class Config:
     def from_env(cls, env: Mapping[str, str]) -> "Config":
         return cls(
             max_revise_cycles=int(env.get("MAX_REVISE_CYCLES", 3)),
-            max_changed_lines=int(env.get("MAX_CHANGED_LINES", 3000)),
+            max_changed_lines=int(env.get("MAX_CHANGED_LINES", 200000)),
             circuit_breaker_fails=int(env.get("CIRCUIT_BREAKER_FAILS", 3)),
             daily_cost_budget_usd=float(env.get("DAILY_COST_BUDGET_USD", 5.0)),
             per_iter_cost_budget_usd=float(env.get("PER_ITER_COST_BUDGET_USD", 0.5)),
