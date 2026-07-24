@@ -10,6 +10,7 @@ import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrend
 import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratificationPanel';
 import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
 import { ModelIssueLabelSuccessMatrixPanel } from '@/components/ModelIssueLabelSuccessMatrixPanel';
+import { BuilderModelGateReasonCorrelationPanel } from '@/components/BuilderModelGateReasonCorrelationPanel';
 
 export default function ModelPage() {
   const { runs } = loadRuns();
@@ -35,6 +36,7 @@ export default function ModelPage() {
         <ModelSkillStratificationPanel runs={runs} />
         <ModelPairCompatibilityDivergencePanel runs={runs} />
         <ModelIssueLabelSuccessMatrixPanel runs={runs} />
+        <BuilderModelGateReasonCorrelationPanel runs={runs} />
       </div>
     </main>
   );
