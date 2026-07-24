@@ -81,3 +81,8 @@ def propose_plan(
         model=cfg.planner_model, cwd=cwd, runner=runner,
     )
     return parse_plan(out.text, cost=out.cost_usd)
+
+
+def plan_dict_from_result(result: "PlanResult") -> dict:
+    """propose_plan の PlanResult を run_iteration の planner フック dict 形に変換する。"""
+    return {"trivial": result.trivial, "plan_text": result.plan_text, "cost_usd": result.cost_usd}
