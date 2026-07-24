@@ -1,0 +1,46 @@
+{
+  "id": "20260724T082649Z-186",
+  "iteration": 115,
+  "issue": {
+    "number": 186,
+    "title": "モデル別 revise 打ち止めパターン：early-exit vs 枯渇",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/186-revise-early-exit-vs",
+  "startedAt": "2026-07-24T08:26:49Z",
+  "finishedAt": "2026-07-24T08:37:23Z",
+  "durationSec": 634,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 206,
+  "adversary": {
+    "approved": true,
+    "summary": "要件通りにモデル別の revise 打ち止めパターン（early-exit vs 枯渇）を実装。early-exit/exhausted の分類ロジック、exhaustionRate の計算・ソート、UI での視覚化・数値表示が全て正確。テストは実装を実質的に検証（計算値・レイアウト・ソート順序・境界値）。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 393,
+  "cost": {
+    "builderUsd": 2.714867,
+    "adversaryUsd": 0.139172,
+    "ideationUsd": 0.15561789999999998,
+    "plannerUsd": 0.0,
+    "totalUsd": 3.009657
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    203,
+    204,
+    205
+  ]
+}
