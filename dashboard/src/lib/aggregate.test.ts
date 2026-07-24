@@ -44,6 +44,7 @@ import {
   modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
+  modelCostRoleBias,
   builderModelSwitchComparisons,
   approvalRateTrendByModel,
   ideationFailureSummary,
@@ -4156,6 +4157,106 @@ describe('modelEfficiencyByRole', () => {
     const result = modelEfficiencyByRole(runs);
     const builder = result.find((r) => r.role === 'builder')!;
     expect(builder.entries.map((e) => e.model)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+describe('modelCostRoleBias', () => {
+  it('runs が0件なら空配列を返す', () => {
+    expect(modelCostRoleBias([])).toEqual([]);
+  });
+
+  it('同一モデルがbuilder/adversary双方で使われ平均コスト差が大きい場合、level=highかつbiasedRoleは高コスト側になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 3, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 3.05 },
+        models: { builder: 'shared-model', adversary: 'other-model', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 3, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 3.05 },
+        models: { builder: 'other-model', adversary: 'shared-model', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const shared = result.find((e) => e.model === 'shared-model')!;
+    expect(shared.builderCount).toBe(1);
+    expect(shared.builderAvgUsd).toBeCloseTo(3, 10);
+    expect(shared.adversaryCount).toBe(1);
+    expect(shared.adversaryAvgUsd).toBeCloseTo(0.05, 10);
+    expect(shared.ratio).toBeCloseTo(60, 10);
+    expect(shared.level).toBe('high');
+    expect(shared.biasedRole).toBe('builder');
+  });
+
+  it('平均コスト差が小さい場合はlevel=noneになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 1, adversaryUsd: 0.95, ideationUsd: 0, totalUsd: 1.95 },
+        models: { builder: 'shared-model', adversary: 'other-model', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 1, adversaryUsd: 0.95, ideationUsd: 0, totalUsd: 1.95 },
+        models: { builder: 'other-model', adversary: 'shared-model', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const shared = result.find((e) => e.model === 'shared-model')!;
+    expect(shared.ratio).toBeCloseTo(1 / 0.95, 10);
+    expect(shared.level).toBe('none');
+  });
+
+  it('片方の役割でしか登場しないモデルはratio=nullかつlevel=noneになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 5, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 5.1 },
+        models: { builder: 'builder-only', adversary: 'adversary-only', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const builderOnly = result.find((e) => e.model === 'builder-only')!;
+    expect(builderOnly.builderCount).toBe(1);
+    expect(builderOnly.adversaryCount).toBe(0);
+    expect(builderOnly.ratio).toBeNull();
+    expect(builderOnly.biasedRole).toBeNull();
+    expect(builderOnly.level).toBe('none');
+
+    const adversaryOnly = result.find((e) => e.model === 'adversary-only')!;
+    expect(adversaryOnly.adversaryCount).toBe(1);
+    expect(adversaryOnly.builderCount).toBe(0);
+    expect(adversaryOnly.ratio).toBeNull();
+    expect(adversaryOnly.level).toBe('none');
+  });
+
+  it('deltaUsdの絶対値降順でソートする', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 10, adversaryUsd: 0, ideationUsd: 0, totalUsd: 10 },
+        models: { builder: 'big-delta', adversary: 'other-a', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 1, adversaryUsd: 0.9, ideationUsd: 0, totalUsd: 1.9 },
+        models: { builder: 'small-delta', adversary: 'other-b', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 },
+        models: { builder: 'other-a', adversary: 'big-delta', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 4,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 },
+        models: { builder: 'other-b', adversary: 'small-delta', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const models = result.map((e) => e.model);
+    expect(models.indexOf('big-delta')).toBeLessThan(models.indexOf('small-delta'));
   });
 });
 
