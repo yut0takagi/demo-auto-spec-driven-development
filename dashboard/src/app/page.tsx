@@ -53,6 +53,7 @@ import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPane
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
+import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 import { IssueResolutionTimeTrendPanel } from '@/components/IssueResolutionTimeTrendPanel';
 import { IdeationToStartLeadTimePanel } from '@/components/IdeationToStartLeadTimePanel';
@@ -87,6 +88,7 @@ export default function Home() {
         <MetricCards summary={summary} />
         <CycleTimeTrendPanel runs={runs} />
         <TimeToFirstPrTrendPanel runs={runs} />
+        <BuilderUtilizationDeclinePanel runs={runs} />
         <IssueResolutionTimeTrendPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <TrendChart title="カバレッジ推移" points={coverageTrend(runs)} unit="%" />

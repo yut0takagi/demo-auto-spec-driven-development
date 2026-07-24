@@ -465,6 +465,116 @@ export function timeToFirstPrTrendSignal(runs: RunRecord[]): TimeToFirstPrTrendS
   };
 }
 
+/**
+ * 直近ウィンドウ平均が直前ウィンドウ平均よりこの割合(%)以上長くなって初めて
+ * 「逆転（悪化）」とみなす閾値。ノイズ的な微増を逆転として誤検知しないための下限。
+ * timeToFirstPrTrendSignal 等と同じ考え方・同じ値。
+ */
+export const LEAD_TIME_INVERSION_THRESHOLD_PCT = 5;
+
+/**
+ * PRが実際に作られた反復同士を iteration 昇順で隣接比較したときに、直後の反復の方が
+ * 所要時間(durationSec、= timeToFirstPrTrend の値)が悪化(TREND_THRESHOLD_PCT 以上増加)
+ * している箇所。「本来なら安定/短縮していくはずのリードタイムが、隣り合う反復間で
+ * 逆転して長期化した」ことを表す1件分の記録。
+ */
+export interface LeadTimeInversion {
+  /** 逆転が観測された側（後）の反復番号 */
+  iteration: number;
+  /** 比較元（前）の反復番号。timeToFirstPrTrend の母集団のみを対象にするため iteration との差が2以上になりうる */
+  previousIteration: number;
+  /** iteration 側の所要時間(秒) */
+  value: number;
+  /** previousIteration 側の所要時間(秒) */
+  previousValue: number;
+  /** value - previousValue（逆転なので必ず正） */
+  deltaSec: number;
+  /** deltaSec / previousValue * 100。previousValue が 0 のときは定義できないため null */
+  deltaPct: number | null;
+}
+
+function isLeadTimeInversion(deltaSec: number, previousValue: number): boolean {
+  if (previousValue === 0) return deltaSec > 0;
+  return (deltaSec / previousValue) * 100 >= LEAD_TIME_INVERSION_THRESHOLD_PCT;
+}
+
+/**
+ * timeToFirstPrTrend の点列（PRが実際に作られた反復のみ、iteration昇順）を隣接ペアで
+ * 走査し、リードタイムが逆転(悪化)した箇所を全て抽出する。cycleTimeTrendSignal 等の
+ * 「直近window vs 直前window」というブロック単位の比較とは異なり、こちらは隣接1件ずつの
+ * 局所的な逆転を漏れなく検出する（ブロック平均では相殺されてしまう単発の逆転も拾える）。
+ */
+export function leadTimeInversions(runs: RunRecord[]): LeadTimeInversion[] {
+  const points = timeToFirstPrTrend(runs);
+  const inversions: LeadTimeInversion[] = [];
+  for (let i = 1; i < points.length; i++) {
+    const prev = points[i - 1];
+    const cur = points[i];
+    const deltaSec = cur.value - prev.value;
+    if (isLeadTimeInversion(deltaSec, prev.value)) {
+      inversions.push({
+        iteration: cur.iteration,
+        previousIteration: prev.iteration,
+        value: cur.value,
+        previousValue: prev.value,
+        deltaSec,
+        deltaPct: prev.value === 0 ? null : (deltaSec / prev.value) * 100,
+      });
+    }
+  }
+  return inversions;
+}
+
+/** 何回連続でリードタイムが逆転したら「Builder稼働率低下」として発報するか。 */
+export const BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD = 2;
+
+export interface BuilderUtilizationDeclineSignal {
+  /** データ終端まで連続で逆転が続いている回数（0ならデータ終端は逆転していない） */
+  streak: number;
+  /** streak >= BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD */
+  triggered: boolean;
+  /** streak 分の逆転記録（iteration昇順） */
+  streakInversions: LeadTimeInversion[];
+  /** 全期間で観測された逆転の総数 */
+  totalInversions: number;
+  /** 全期間で比較した隣接ペアの総数（= timeToFirstPrTrend の点数 - 1） */
+  totalComparisons: number;
+  /** totalInversions / totalComparisons * 100。totalComparisons が 0 のときは null */
+  inversionRatePct: number | null;
+}
+
+/**
+ * Builder稼働率低下検知: 反復開始からPR作成までのリードタイムが、データ終端に向けて
+ * 連続で逆転(悪化)し続けているかを判定する。1〜2回程度の単発の逆転はノイズとして
+ * 許容し、BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD 回以上連続して初めて
+ * 「Builderの処理能力が継続的に落ちている（稼働率低下）」という強いシグナルとして扱う。
+ * 比較対象となる隣接ペアが1組も無い（PR作成反復が1件以下）場合は null。
+ */
+export function builderUtilizationDeclineSignal(runs: RunRecord[]): BuilderUtilizationDeclineSignal | null {
+  const points = timeToFirstPrTrend(runs);
+  if (points.length < 2) return null;
+
+  const inversions = leadTimeInversions(runs);
+  const inversionIterations = new Set(inversions.map((inv) => inv.iteration));
+
+  let streak = 0;
+  for (let i = points.length - 1; i >= 1; i--) {
+    if (!inversionIterations.has(points[i].iteration)) break;
+    streak++;
+  }
+  const streakInversions = streak === 0 ? [] : inversions.slice(inversions.length - streak);
+  const totalComparisons = points.length - 1;
+
+  return {
+    streak,
+    triggered: streak >= BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD,
+    streakInversions,
+    totalInversions: inversions.length,
+    totalComparisons,
+    inversionRatePct: totalComparisons === 0 ? null : (inversions.length / totalComparisons) * 100,
+  };
+}
+
 /** issue を「クローズした」とみなす verdict。types.ts の通り merged はマージで、abandoned は再試行しても満たせず自動で見送った（issue はクローズ）。 */
 const ISSUE_CLOSING_VERDICTS: readonly Verdict[] = ['merged', 'abandoned'];
 
