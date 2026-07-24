@@ -6,6 +6,7 @@ import { IdeationToStartLeadTimeDistributionPanel } from '@/components/IdeationT
 import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
 import { IdeationProposalQualityDropPanel } from '@/components/IdeationProposalQualityDropPanel';
 import { IdeationEarlyAbandonmentPanel } from '@/components/IdeationEarlyAbandonmentPanel';
+import { IdeationQualityDegradationPanel } from '@/components/IdeationQualityDegradationPanel';
 import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 
 export default function IdeationPage() {
@@ -21,6 +22,7 @@ export default function IdeationPage() {
       </header>
 
       <div className="space-y-6">
+        <IdeationQualityDegradationPanel runs={runs} />
         <IdeationFailurePanel runs={runs} />
         <IdeationCostQualityPanel runs={runs} />
         <IdeationToStartLeadTimePanel runs={runs} />

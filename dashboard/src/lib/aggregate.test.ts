@@ -134,6 +134,9 @@ import {
   backlogLowWaterEta,
   IDEATION_LOW_WATER,
   BACKLOG_ETA_WINDOW,
+  ideationQualityDegradationSignal,
+  IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
+  IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -8588,5 +8591,166 @@ describe('backlogLowWaterEta', () => {
     const r = backlogLowWaterEta([...makeRunRange(1, 3)].reverse());
     expect(r!.iterations).toEqual([1, 2, 3]);
     expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 3);
+  });
+});
+
+describe('ideationQualityDegradationSignal', () => {
+  function facet(
+    signal: NonNullable<ReturnType<typeof ideationQualityDegradationSignal>>,
+    key: string,
+  ) {
+    const found = signal.facets.find((f) => f.key === key);
+    expect(found, `面 ${key} が facets に存在しない`).toBeDefined();
+    return found!;
+  }
+
+  it('runsが空、またはideationが一度も提案していない場合はnull（境界値・判定できる面が1つも無い）', () => {
+    expect(ideationQualityDegradationSignal([])).toBeNull();
+    expect(ideationQualityDegradationSignal([makeRun({ iteration: 1, nextIssues: [] })])).toBeNull();
+  });
+
+  it('提案が1件だけでまだ猶予期間中の場合、ドロップ面だけ判定可能で他の3面はデータ不足、悪化面が無いのでnormal（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] })];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false, degraded: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: false, degraded: false });
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false, degraded: false });
+
+    expect(signal!.availableCount).toBe(1);
+    expect(signal!.degradedCount).toBe(0);
+    expect(signal!.level).toBe('normal');
+  });
+
+  it(`提案順末尾からIDEATION_DROP_RATE_STREAK_THRESHOLD件連続ドロップすると dropStreak 面だけが悪化しwatchになる`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen1', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen2', labels: [] }, nextIssues: [20] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS + 2,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: false });
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('着手リードタイムが悪化傾向のときは leadTime 面だけが悪化しwatchになる（他の面は判定可能だが正常）', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 200),
+      ...proposeAndStart(9, 10, 105, 200),
+      ...proposeAndStart(11, 12, 106, 200),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: true });
+    // 全て着手済みでドロップ0件、全てmergedで早期abandonmentも0件のため、
+    // 判定はできる(available)が悪化はしていない(degraded:false)はず
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: false });
+    // 提案6件がいずれも1件ずつのbatchで全てdropRate0(分散なし)のため相関は算出不可
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('直近の着手が早期abandonment(revise無しでabandoned)に偏ると earlyAbandonment 面だけが悪化しwatchになる', () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30, 40, 50, 60] }),
+    ];
+    for (const [i, n] of [10, 20, 30].entries()) {
+      runs.push(makeRun({ iteration: 2 + i, issue: { number: n, title: 'x', labels: [] }, verdict: 'merged' }));
+    }
+    for (const [i, n] of [40, 50, 60].entries()) {
+      runs.push(
+        makeRun({ iteration: 5 + i, issue: { number: n, title: 'x', labels: [] }, verdict: 'abandoned', reviseCycles: 0 }),
+      );
+    }
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    // 全てのstartedAt/finishedAtがデフォルト値で一定のためリードタイムの分散が無く flat 判定
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: false });
+    // 提案は1反復にまとめた1batchのみのため相関算出に必要な2batch以上が無い
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('提案規模が大きいbatchほどドロップ率が高い(強い正の相関)場合、batchSizeCorrelation 面が悪化する', () => {
+    expect(IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD).toBeGreaterThan(0);
+    const staleIteration = 2 + IDEATION_DROP_STALENESS_ITERATIONS;
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [20, 21] }),
+      makeRun({ iteration: 4, issue: { number: 10, title: 'started', labels: [] } }),
+      makeRun({ iteration: staleIteration, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: true, degraded: true });
+    // batch2(20,21)が末尾で連続ドロップするため dropStreak も同時に悪化する（2面が悪化するがcriticalの閾値には満たない）
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(2);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it(`悪化した面がIDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD(${IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD})件以上そろうとcriticalになる`, () => {
+    const runs: RunRecord[] = [
+      makeRun({
+        iteration: 1, issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z', nextIssues: [201, 202, 203, 204, 205, 206],
+      }),
+    ];
+    // 前半3件(短いリードタイム・merged) → 後半3件(長いリードタイム・revise無しでabandoned)
+    for (const [i, n] of [201, 202, 203].entries()) {
+      runs.push(makeRun({
+        iteration: 2 + i, issue: { number: n, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:01:40Z', verdict: 'merged',
+      }));
+    }
+    for (const [i, n] of [204, 205, 206].entries()) {
+      runs.push(makeRun({
+        iteration: 5 + i, issue: { number: n, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:03:20Z', verdict: 'abandoned', reviseCycles: 0,
+      }));
+    }
+    // 末尾で2件連続ドロップさせる別batch(dropStreak用)
+    runs.push(makeRun({ iteration: 8, issue: { number: 8, title: 'gen2', labels: [] }, nextIssues: [910, 920] }));
+    runs.push(makeRun({ iteration: 13, issue: { number: 999, title: 'filler', labels: [] } }));
+
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    // 6件提案(dropRate0)と2件提案(dropRate1)の2batch: 件数が少ないほうがドロップしているため負の相関で悪化ではない
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: true, degraded: false });
+
+    expect(signal!.availableCount).toBe(4);
+    expect(signal!.degradedCount).toBe(3);
+    expect(signal!.level).toBe('critical');
   });
 });
