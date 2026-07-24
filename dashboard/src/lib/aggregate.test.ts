@@ -94,6 +94,7 @@ import {
   ideationDropRateSignal,
   IDEATION_DROP_STALENESS_ITERATIONS,
   IDEATION_DROP_RATE_STREAK_THRESHOLD,
+  ideationProposalQualityDropCorrelation,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES,
@@ -5362,6 +5363,87 @@ describe('ideationDropRateSignal', () => {
     ];
     const signal = ideationDropRateSignal(runs);
     expect(signal!.droppedIssues.map((d) => d.issueNumber)).toEqual([10, 20, 30]);
+  });
+});
+
+describe('ideationProposalQualityDropCorrelation', () => {
+  it('runsが空なら batches 空・相関はnull・sampleSize 0（境界値）', () => {
+    const result = ideationProposalQualityDropCorrelation([]);
+    expect(result).toEqual({
+      batches: [],
+      batchSizeVsDropRateCorrelation: null,
+      costPerIssueVsDropRateCorrelation: null,
+      sampleSize: 0,
+    });
+  });
+
+  it('ideationUsd=0の反復、および提案0件（nextIssues空）の反復はどちらもbatchに含めない（境界値）', () => {
+    const noCost = [
+      makeRun({ iteration: 1, nextIssues: [10], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 } }),
+    ];
+    expect(ideationProposalQualityDropCorrelation(noCost).batches).toEqual([]);
+
+    const noProposal = [
+      makeRun({ iteration: 1, nextIssues: [], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(noProposal);
+    expect(result.batches).toEqual([]);
+    expect(result.sampleSize).toBe(0);
+  });
+
+  it('提案issueが全て猶予期間中(未判定)ならjudgedCount/droppedCountは0でdropRateはnull、相関もnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [10, 11], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+    expect(result.batches).toEqual([
+      { iteration: 1, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 0, droppedCount: 0, dropRate: null },
+    ]);
+    expect(result.batchSizeVsDropRateCorrelation).toBeNull();
+    expect(result.costPerIssueVsDropRateCorrelation).toBeNull();
+    expect(result.sampleSize).toBe(0);
+  });
+
+  it('提案元自身の自己参照issue、および後続batchでの再提案issueは、どちらも最初の提案元batchのみに帰属し二重計上しない（境界値）', () => {
+    const runs = [
+      // 10は自分自身のissue番号（自己参照）、50は後でbatch2に再提案される
+      makeRun({ iteration: 1, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10, 50], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      // 50 は iteration1 が既に提案済みのため、この反復の判定には帰属しない
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [50, 60], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      makeRun({ iteration: 2 + IDEATION_DROP_STALENESS_ITERATIONS, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+    const batch1 = result.batches.find((b) => b.iteration === 1);
+    const batch2 = result.batches.find((b) => b.iteration === 2);
+    // batch1: 10(自己参照)・50とも未着手→両方ドロップでjudgedCount=2
+    expect(batch1).toEqual({ iteration: 1, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 2, droppedCount: 2, dropRate: 1 });
+    // batch2.proposedCount(見た目の提案件数)は2件だが、50は既にbatch1に帰属しているため
+    // batch2のjudgedCount/droppedCountには60の1件分しか計上されない
+    expect(batch2).toEqual({ iteration: 2, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 1, droppedCount: 1, dropRate: 1 });
+  });
+
+  it('提案規模が大きいbatchほど・単価が安いbatchほどドロップ率が高い場合、それぞれ正/負の相関係数を実際に算出する（部分一致に頼らない）', () => {
+    const staleIteration = 2 + IDEATION_DROP_STALENESS_ITERATIONS;
+    const runs = [
+      // batch1: issue10 の1件を提案。単価0.02。着手されドロップ0件→dropRate 0
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      // batch2: issue20,21 の2件を提案。単価0.01（batch1より安い）。両方ドロップ→dropRate 1
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [20, 21], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      makeRun({ iteration: 4, issue: { number: 10, title: 'started', labels: [] } }),
+      makeRun({ iteration: staleIteration, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+
+    expect(result.batches.map((b) => [b.proposedCount, b.judgedCount, b.droppedCount, b.dropRate])).toEqual([
+      [1, 1, 0, 0],
+      [2, 2, 2, 1],
+    ]);
+    expect(result.batches[0].costPerIssueUsd).toBeCloseTo(0.02, 10);
+    expect(result.batches[1].costPerIssueUsd).toBeCloseTo(0.01, 10);
+    // 提案規模(1,2)とドロップ率(0,1)は増加、単価(0.02,0.01)は減少するので符号が逆になるはず
+    expect(result.batchSizeVsDropRateCorrelation).toBeCloseTo(1, 6);
+    expect(result.costPerIssueVsDropRateCorrelation).toBeCloseTo(-1, 6);
+    expect(result.sampleSize).toBe(2);
   });
 });
 

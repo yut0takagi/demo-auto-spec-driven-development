@@ -3526,6 +3526,107 @@ export function ideationDropRateSignal(runs: RunRecord[]): IdeationDropRateSigna
   };
 }
 
+export interface IdeationBatchDropQuality {
+  /** ideation を実行し issue を提案した反復番号 */
+  iteration: number;
+  /** この反復が提案した issue 数（nextIssues.length） */
+  proposedCount: number;
+  /** 提案 issue 1件あたりのideationコスト(USD) = cost.ideationUsd / proposedCount */
+  costPerIssueUsd: number;
+  /** この反復が最初に提案した(createdByで重複排除した)issueのうち、猶予期間を過ぎて着手/ドロップが確定した件数 */
+  judgedCount: number;
+  /** judgedCountのうちドロップと判定された件数 */
+  droppedCount: number;
+  /** droppedCount / judgedCount。judgedCountが0ならnull（まだ判定できるissueが無いだけで、品質が低いわけではない） */
+  dropRate: number | null;
+}
+
+export interface IdeationProposalQualityDropCorrelation {
+  /** ideation を実行し、かつ1件以上提案した反復ごとの内訳。iteration昇順 */
+  batches: IdeationBatchDropQuality[];
+  /** 提案バッチ規模(proposedCount)とそのbatchのドロップ率のPearson相関係数(-1..1)。算出可能なbatchが2件未満ならnull */
+  batchSizeVsDropRateCorrelation: number | null;
+  /** 提案issue1件あたりコスト(単価)とそのbatchのドロップ率のPearson相関係数(-1..1) */
+  costPerIssueVsDropRateCorrelation: number | null;
+  /** 相関算出に使ったbatch数(dropRateがnullでないbatch数) */
+  sampleSize: number;
+}
+
+/**
+ * ideationCostQualityCorrelation が「着手された提案の承認率・マージ率」という着手後の
+ * 品質を見るのに対し、こちらは ideationDropRateSignal と同じ着手/ドロップ判定を反復
+ * (=1回にまとめて提案したbatch)単位に集計し、提案の「量」(proposedCount)や「単価」が
+ * そもそも拾われる(着手される)かどうか自体と関係しているかを相関で見る。issue番号の
+ * 重複排除は ideationDropRateSignal と同じ createdBy（最初の提案元）を使い、同じissueが
+ * 複数回再提案されても最初の提案元batchにのみ帰属させ二重計上を避ける。
+ */
+export function ideationProposalQualityDropCorrelation(runs: RunRecord[]): IdeationProposalQualityDropCorrelation {
+  const sorted = byIterationAsc(runs);
+  const proposingRuns = sorted.filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0);
+  if (proposingRuns.length === 0) {
+    return {
+      batches: [],
+      batchSizeVsDropRateCorrelation: null,
+      costPerIssueVsDropRateCorrelation: null,
+      sampleSize: 0,
+    };
+  }
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+
+  const latestIteration = sorted[sorted.length - 1].iteration;
+  const startPoints = new Map(ideationToStartLeadTimes(runs).map((p) => [p.issueNumber, p]));
+
+  const judgedByIteration = new Map<number, { judged: number; dropped: number }>();
+  for (const [issueNumber, created] of createdBy.entries()) {
+    let entry = judgedByIteration.get(created.iteration);
+    if (!entry) {
+      entry = { judged: 0, dropped: 0 };
+      judgedByIteration.set(created.iteration, entry);
+    }
+    if (startPoints.has(issueNumber)) {
+      entry.judged++;
+      continue;
+    }
+    const age = latestIteration - created.iteration;
+    if (age < IDEATION_DROP_STALENESS_ITERATIONS) continue;
+    entry.judged++;
+    entry.dropped++;
+  }
+
+  const batches: IdeationBatchDropQuality[] = proposingRuns.map((r) => {
+    const entry = judgedByIteration.get(r.iteration) ?? { judged: 0, dropped: 0 };
+    return {
+      iteration: r.iteration,
+      proposedCount: r.nextIssues.length,
+      costPerIssueUsd: r.cost.ideationUsd / r.nextIssues.length,
+      judgedCount: entry.judged,
+      droppedCount: entry.dropped,
+      dropRate: entry.judged === 0 ? null : entry.dropped / entry.judged,
+    };
+  });
+
+  const samples = batches.filter((b) => b.dropRate !== null);
+
+  return {
+    batches,
+    batchSizeVsDropRateCorrelation: pearsonCorrelation(
+      samples.map((b) => b.proposedCount),
+      samples.map((b) => b.dropRate as number),
+    ),
+    costPerIssueVsDropRateCorrelation: pearsonCorrelation(
+      samples.map((b) => b.costPerIssueUsd),
+      samples.map((b) => b.dropRate as number),
+    ),
+    sampleSize: samples.length,
+  };
+}
+
 /**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で
