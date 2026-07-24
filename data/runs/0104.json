@@ -1,0 +1,45 @@
+{
+  "id": "20260724T055755Z-173",
+  "iteration": 104,
+  "issue": {
+    "number": 173,
+    "title": "ゲート回復分析：同理由の再試行から成功までのステップ",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/173-task",
+  "startedAt": "2026-07-24T05:57:55Z",
+  "finishedAt": "2026-07-24T06:14:50Z",
+  "durationSec": 1015,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 188,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件（同理由の再試行から成功までのステップを分析・可視化）を正確に実現。gateReasonUnificationPatterns の出力を加工する設計により既存挙動への副作用なし。テストは単一・複数・converged・終端など境界値を網羅し、実装の振る舞いを実質的に検証。変更行数も 400 行以内で完結。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 375,
+  "cost": {
+    "builderUsd": 5.153388,
+    "adversaryUsd": 0.057879,
+    "ideationUsd": 0.1641879,
+    "totalUsd": 5.375455
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    185,
+    186,
+    187
+  ]
+}
