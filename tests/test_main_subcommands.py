@@ -38,3 +38,19 @@ def test_gate_subcommand_dispatches_gate_phase(monkeypatch):
 def test_unknown_subcommand_returns_nonzero(monkeypatch):
     monkeypatch.setattr(sys, "argv", ["orchestrator", "bogus"])
     assert m.main() != 0
+
+
+def test_make_planner_hooks_off_by_default():
+    import orchestrator.__main__ as m
+    from orchestrator.config import Config
+    planner, reviewer = m._make_planner_hooks(Config.from_env({}))
+    assert planner is None and reviewer is None
+
+
+def test_make_planner_hooks_on_when_enabled():
+    import orchestrator.__main__ as m
+    from orchestrator.config import Config
+    from orchestrator.review import review_plan
+    planner, reviewer = m._make_planner_hooks(Config.from_env({"LOOP_PLANNING": "1"}))
+    assert callable(planner)
+    assert reviewer is review_plan

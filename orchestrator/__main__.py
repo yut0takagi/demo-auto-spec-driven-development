@@ -15,7 +15,9 @@ from orchestrator.github_ops import GitHubOps
 from orchestrator.ideation import propose_next_issues
 from orchestrator.loop import run_iteration
 from orchestrator.models import AdversaryVerdict, CostBreakdown, Issue, RunRecord, VerifyResult
+from orchestrator.plan import propose_plan, plan_dict_from_result
 from orchestrator.record import load_runs, next_iteration, write_run_record, write_status
+from orchestrator.review import review_plan
 from orchestrator.h5i_round import select_round_runner
 
 
@@ -107,6 +109,17 @@ def _run_gate_phase() -> int:
     return 0
 
 
+def _make_planner_hooks(cfg: Config):
+    """planning_enabled のとき (planner, plan_reviewer) を返す。無効なら (None, None)。"""
+    if not cfg.planning_enabled:
+        return None, None
+
+    def planner(*, task, cfg, cwd):
+        return plan_dict_from_result(propose_plan(task=task, cfg=cfg, cwd=cwd))
+
+    return planner, review_plan
+
+
 def _run_full_iteration() -> int:
     repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
     data_dir = repo_root / "data"
@@ -136,6 +149,7 @@ def _run_full_iteration() -> int:
     # 記録を残してから異常終了する。これが無いと、課金は発生したのにダッシュ
     # ボードには何も表示されない「消えた反復」が起きる。
     try:
+        planner_hook, plan_reviewer_hook = _make_planner_hooks(cfg)
         result = run_iteration(
             gh=gh,
             cfg=cfg,
@@ -145,6 +159,8 @@ def _run_full_iteration() -> int:
             kill_switch_reader=kill_switch_reader,
             round_runner=select_round_runner(cfg),
             ideation_runner=_ideate,
+            planner=planner_hook,
+            plan_reviewer=plan_reviewer_hook,
         )
     except Exception as exc:  # noqa: BLE001 — 無人実行では握りつぶさず記録して非ゼロ終了する
         _record_crash(data_dir, cfg, exc)

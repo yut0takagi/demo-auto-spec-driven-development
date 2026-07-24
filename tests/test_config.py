@@ -56,3 +56,9 @@ def test_dry_run_accepts_common_truthy_spellings():
         assert Config.from_env({"LOOP_DRY_RUN": value}).dry_run is True
     for value in ("0", "false", "", "no"):
         assert Config.from_env({"LOOP_DRY_RUN": value}).dry_run is False
+
+
+def test_planning_enabled_flag():
+    assert Config.from_env({}).planning_enabled is False
+    assert Config.from_env({"LOOP_PLANNING": "1"}).planning_enabled is True
+    assert Config.from_env({"LOOP_PLANNING": "true"}).planning_enabled is True
