@@ -1,36 +1,59 @@
 name: release
 
+# develop → main の「常設昇格 PR」を維持する（自動マージはしない）。
+# 自走ループが develop を更新し続けるので、常に develop→main の PR を 1 本開いておく。
+# GitHub は develop→main の PR を「常に develop 最新 vs main」で再計算するため、develop に
+# 新しいマージが積まれるたび、この PR の中身は自動で追記・更新される（ワークフローは PR の
+# 有無を保証し、タイトルの待ち commit 数を更新するだけ）。人間はこの PR を **ボタン 1 つで
+# マージ**すれば本番反映。マージ判断は人間に残す＝最後の砦は維持。
+
 on:
   schedule:
-    - cron: '0 0 * * 1'
+    - cron: '*/30 * * * *'   # 30 分ごと（best-effort）に常設 PR の存在を保証・件数を更新
   workflow_dispatch:
 
 permissions:
   contents: read
   pull-requests: write
 
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  promote:
+  standing-pr:
+    # キルスイッチ: 変数が false なら常設 PR を維持しない
+    if: vars.AUTO_PROMOTE_PR != 'false'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Open promotion PR if develop is ahead
+      - name: develop → main の常設昇格 PR を維持
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
-          AHEAD=$(git rev-list --count origin/main..origin/develop)
-          if [[ "$AHEAD" -eq 0 ]]; then
-            echo "develop は main と同じ。昇格 PR は不要。"
+          N=$(git rev-list --count origin/main..origin/develop)
+          if [ "$N" -eq 0 ]; then
+            echo "develop == main。昇格 PR は不要。"
             exit 0
           fi
-          if gh pr list --base main --head develop --state open --json number -q 'length' | grep -qv '^0$'; then
-            echo "昇格 PR は既に開いている。"
-            exit 0
+          TITLE="release: develop → main 昇格（${N} commits 待ち）"
+          BODY=$(printf '%s\n' \
+            "自走ループが develop に積んだ **${N} commits** を main（本番）へ。" \
+            "" \
+            "準備できたら、この PR を **マージするだけ**（ボタン 1 つ）で本番反映されます。" \
+            "develop 側は verify / e2e / adversary を毎マージ通過済みなので、中身は検証済みです。" \
+            "" \
+            "_この PR は release.yml が常設で維持し、develop が進むたび自動で最新化されます。_")
+          PR=$(gh pr list --base main --head develop --state open --json number --jq '.[0].number // empty')
+          if [ -z "$PR" ]; then
+            gh pr create --base main --head develop --title "$TITLE" --body "$BODY"
+            echo "常設 PR を新規作成した。"
+          else
+            gh pr edit "$PR" --title "$TITLE" --body "$BODY"
+            echo "常設 PR #${PR} を最新（${N} commits 待ち）に更新した。"
           fi
-          gh pr create --base main --head develop \
-            --title "release: develop を main に昇格 ($AHEAD commits)" \
-            --body "自走ループが develop に積んだ $AHEAD 件の変更を main へ昇格します。**マージは人間が判断してください。**"
