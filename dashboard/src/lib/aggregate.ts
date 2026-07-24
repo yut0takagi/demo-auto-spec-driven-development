@@ -6487,3 +6487,104 @@ export function backlogGenerationRateSignal(runs: RunRecord[]): BacklogGeneratio
     iterations: windowPoints.map((p) => p.iteration),
   };
 }
+
+/** コスト-品質弾性トレンドの比較に使う直近/直前ウィンドウの反復数。 */
+export const ELASTICITY_WINDOW = 5;
+/** 弾性(絶対値)の変化率(%)がこの値未満なら「横ばい」とする。cycleTimeTrendSignalの5%よりブレが大きいため緩めの10%。 */
+export const ELASTICITY_TREND_FLAT_THRESHOLD_PCT = 10;
+
+/** recentApprovalRate/previousApprovalRateは0..100。*ChangePctはゼロ除算/未定義になる場合null。 */
+export interface CostQualityElasticityPoint {
+  iteration: number;
+  recentAvgCostUsd: number;
+  previousAvgCostUsd: number;
+  costChangePct: number | null;
+  recentApprovalRate: number;
+  previousApprovalRate: number;
+  qualityChangePct: number | null;
+  /** qualityChangePct / costChangePct。costChangePctが0の場合もnull */
+  elasticity: number | null;
+}
+
+function avgApprovalRatePct(group: RunRecord[]): number {
+  return (group.filter((r) => r.adversary.approved).length / group.length) * 100;
+}
+/**
+ * コスト増加に対する品質向上の弾性率（Cost-Quality ROI）の推移。ELASTICITY_WINDOW幅の
+ * 「直前→直近」ウィンドウ平均のコスト変化率(%)と承認率変化率(%)の比を1反復ずつスライド
+ * させて点列を返す。完了反復数がELASTICITY_WINDOWの2倍未満なら空配列。
+ */
+export function costQualityElasticityTrend(runs: RunRecord[]): CostQualityElasticityPoint[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const w = ELASTICITY_WINDOW;
+  if (completed.length < w * 2) return [];
+  const points: CostQualityElasticityPoint[] = [];
+  for (let i = w * 2 - 1; i < completed.length; i++) {
+    const recent = completed.slice(i - w + 1, i + 1);
+    const previous = completed.slice(i - w * 2 + 1, i - w + 1);
+    const recentAvgCostUsd = mean(recent.map((r) => r.cost.totalUsd));
+    const previousAvgCostUsd = mean(previous.map((r) => r.cost.totalUsd));
+    const recentApprovalRate = avgApprovalRatePct(recent);
+    const previousApprovalRate = avgApprovalRatePct(previous);
+    const costChangePct =
+      previousAvgCostUsd === 0 ? null : ((recentAvgCostUsd - previousAvgCostUsd) / previousAvgCostUsd) * 100;
+    const qualityChangePct =
+      previousApprovalRate === 0 ? null : ((recentApprovalRate - previousApprovalRate) / previousApprovalRate) * 100;
+    const elasticity =
+      costChangePct === null || qualityChangePct === null || costChangePct === 0
+        ? null
+        : qualityChangePct / costChangePct;
+    points.push({
+      iteration: completed[i].iteration,
+      recentAvgCostUsd,
+      previousAvgCostUsd,
+      costChangePct,
+      recentApprovalRate,
+      previousApprovalRate,
+      qualityChangePct,
+      elasticity,
+    });
+  }
+  return points;
+}
+
+/** strengthening: 直近の弾性(絶対値)が過去平均より強含み。weakening: 弱含み。flat: 横ばい。 */
+export type CostQualityElasticityDirection = 'strengthening' | 'weakening' | 'flat';
+export interface CostQualityElasticityTrendSignal {
+  latestIteration: number;
+  latestElasticity: number;
+  /** 直近点を除く、elasticityが定義できた過去の点の平均。sampleSizeはその点数 */
+  historicalAvgElasticity: number;
+  sampleSize: number;
+  direction: CostQualityElasticityDirection;
+}
+
+function costQualityElasticityDirection(latest: number, historicalAvg: number): CostQualityElasticityDirection {
+  const latestMag = Math.abs(latest);
+  const historicalMag = Math.abs(historicalAvg);
+  if (historicalMag === 0) return latestMag === 0 ? 'flat' : 'strengthening';
+  const deltaPct = ((latestMag - historicalMag) / historicalMag) * 100;
+  if (Math.abs(deltaPct) < ELASTICITY_TREND_FLAT_THRESHOLD_PCT) return 'flat';
+  return deltaPct > 0 ? 'strengthening' : 'weakening';
+}
+
+/**
+ * costQualityElasticityTrend の最新点が過去平均より強含み/弱含み/横ばいかを判定する（絶対値で比較）。
+ * 最新点、または過去の点にelasticityが定義できたものが1つもない場合はnull。
+ */
+export function costQualityElasticityTrendSignal(runs: RunRecord[]): CostQualityElasticityTrendSignal | null {
+  const points = costQualityElasticityTrend(runs);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  if (latest.elasticity === null) return null;
+  const historical = points.slice(0, -1).filter((p) => p.elasticity !== null);
+  if (historical.length === 0) return null;
+  const historicalAvgElasticity = mean(historical.map((p) => p.elasticity as number));
+  return {
+    latestIteration: latest.iteration,
+    latestElasticity: latest.elasticity,
+    historicalAvgElasticity,
+    sampleSize: historical.length,
+    direction: costQualityElasticityDirection(latest.elasticity, historicalAvgElasticity),
+  };
+}
