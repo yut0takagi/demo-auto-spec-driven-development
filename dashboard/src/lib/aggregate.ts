@@ -5137,6 +5137,92 @@ export function dropoutStreaks(runs: RunRecord[]): DropoutStreak[] {
   return streaks;
 }
 
+export interface VerdictTransitionRootCauseCell {
+  category: GateReasonCategory;
+  /** (kind, category) の組み合わせがto側runのgateReasonsに出現した件数 */
+  count: number;
+  /** このkind内での、全カテゴリ出現数に占める category の割合 (0..100) */
+  withinKindSharePct: number;
+  /** 対象to側run集団全体での category の割合 (0..100)。kind軸を無視した基準値 */
+  baselineSharePct: number;
+  /** withinKindSharePct / baselineSharePct。1.0が「平均通り」、大きいほど過剰発生 */
+  lift: number;
+}
+
+export interface VerdictTransitionRootCauseRow {
+  kind: VerdictTransitionKind;
+  /** このkindのto側runがgateReasonsに持つ理由の総数（1runが複数理由を持てば重複計上） */
+  total: number;
+  /** 実際に出現した (kind, category) の組み合わせだけを lift 降順で持つ */
+  cells: VerdictTransitionRootCauseCell[];
+}
+
+/**
+ * verdict遷移の根本原因パターン分析。builderModelGateReasonCorrelation の model軸lift計算を
+ * kind軸に転用し、遷移の到達側(to)runのgateReasonsをclassifyGateReasonで分類・集計する。
+ * to.verdict==='merged'のrecovered/sustainedSuccessはgateReasonsが常に空なので自然に除外
+ * される。baselineは全runsではなく対象to-run集団限定（母集団の不整合を避ける）。
+ * 行はtotal降順（同値はVERDICT_TRANSITION_KIND_ORDER順）、セルはlift降順（同値count降順→
+ * GATE_REASON_CATEGORY_ORDER順）。
+ */
+export function verdictTransitionRootCauses(runs: RunRecord[]): VerdictTransitionRootCauseRow[] {
+  const transitions = verdictTransitions(runs);
+  const byIteration = new Map(runs.map((r) => [r.iteration, r]));
+
+  const overallCounts = new Map<GateReasonCategory, number>();
+  let overallTotal = 0;
+  const byKind = new Map<VerdictTransitionKind, Map<GateReasonCategory, number>>();
+  const kindTotals = new Map<VerdictTransitionKind, number>();
+
+  for (const t of transitions) {
+    const toRun = byIteration.get(t.toIteration);
+    if (!toRun || toRun.gateReasons.length === 0) continue;
+    for (const reason of toRun.gateReasons) {
+      const category = classifyGateReason(reason, toRun.adversary.summary);
+
+      overallCounts.set(category, (overallCounts.get(category) ?? 0) + 1);
+      overallTotal++;
+
+      let categories = byKind.get(t.kind);
+      if (!categories) {
+        categories = new Map();
+        byKind.set(t.kind, categories);
+      }
+      categories.set(category, (categories.get(category) ?? 0) + 1);
+      kindTotals.set(t.kind, (kindTotals.get(t.kind) ?? 0) + 1);
+    }
+  }
+
+  if (overallTotal === 0) return [];
+
+  return [...byKind.entries()]
+    .map(([kind, categories]) => {
+      const total = kindTotals.get(kind) ?? 0;
+      const cells: VerdictTransitionRootCauseCell[] = [...categories.entries()]
+        .map(([category, count]) => {
+          const withinKindSharePct = (count / total) * 100;
+          const baselineSharePct = ((overallCounts.get(category) ?? 0) / overallTotal) * 100;
+          return {
+            category,
+            count,
+            withinKindSharePct,
+            baselineSharePct,
+            lift: withinKindSharePct / baselineSharePct,
+          };
+        })
+        .sort((a, b) => {
+          if (b.lift !== a.lift) return b.lift - a.lift;
+          if (b.count !== a.count) return b.count - a.count;
+          return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+        });
+      return { kind, total, cells };
+    })
+    .sort((a, b) => {
+      if (b.total !== a.total) return b.total - a.total;
+      return VERDICT_TRANSITION_KIND_ORDER.indexOf(a.kind) - VERDICT_TRANSITION_KIND_ORDER.indexOf(b.kind);
+    });
+}
+
 /** モデルの成功率が「pressure(revise回数)が増えても崩れない」とみなす、bucket間の変化幅(pt)の下限。 */
 export const MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT = 5;
 

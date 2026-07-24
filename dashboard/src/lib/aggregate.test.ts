@@ -109,6 +109,7 @@ import {
   IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS,
   verdictTransitions,
   verdictTransitionSummary,
+  verdictTransitionRootCauses,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
   reviseSizeSuccessPatterns,
@@ -7620,6 +7621,67 @@ describe('verdictTransitions / verdictTransitionSummary', () => {
     ];
     // 3遷移すべてcount=1で同数 → 定義順
     expect(verdictTransitionSummary(runs).map((s) => s.kind)).toEqual(['sustainedSuccess', 'recovered', 'regressed']);
+  });
+});
+
+describe('verdictTransitionRootCauses', () => {
+  it('run が0/1件、またはrecovered/sustainedSuccessのみの遷移集合（to.verdict===merged）なら空配列', () => {
+    expect(verdictTransitionRootCauses([])).toEqual([]);
+    expect(verdictTransitionRootCauses([makeRun({ iteration: 1, verdict: 'merged' })])).toEqual([]);
+    const onlyGoodTransitions = [
+      makeRun({ iteration: 1, verdict: 'failed', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'merged', gateReasons: [] }), // recovered
+      makeRun({ iteration: 3, verdict: 'merged', gateReasons: [] }), // sustainedSuccess
+    ];
+    expect(verdictTransitionRootCauses(onlyGoodTransitions)).toEqual([]);
+  });
+
+  it('cells count合計はrow.totalと一致・row.total総和はto側runのgateReasons総数と一致。同一runの同一カテゴリは重複カウント。行/セルの並び順も検証する', () => {
+    const runs = [
+      // iteration1は最初のrunなのでどの遷移のto側にもならず、gateReasonsはbaseline母集団から除外される
+      makeRun({ iteration: 1, verdict: 'failed', gateReasons: ['変更行数 500 が上限 400 を超えている'] }),
+      makeRun({ iteration: 2, verdict: 'merged', gateReasons: [] }), // failed→merged: recovered, to gateReasons空
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+      }), // merged→abandoned: regressed, to=run3 (verifyFailed×1) total=1
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: [
+          '保護パスを変更している: .github/workflows/x.yml',
+          '保護パスを変更している: orchestrator/y.py',
+          'e2e(Playwright) が失敗している',
+        ],
+      }), // abandoned→abandoned: repeatedFailure, to=run4 (protectedPathViolation×2・重複カウント, e2eFailed×1) total=3
+      makeRun({ iteration: 5, verdict: 'failed', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      // abandoned→failed: shiftedFailure, to=run5 (e2eFailed×1) total=1
+    ];
+    const rows = verdictTransitionRootCauses(runs);
+
+    // to-run母集団はrun2(空)/run3/run4/run5のみ（run1は除外）→ 総数 1+3+1=5
+    expect(rows.reduce((sum, r) => sum + r.total, 0)).toBe(5);
+    for (const row of rows) {
+      expect(row.cells.reduce((sum, c) => sum + c.count, 0)).toBe(row.total);
+    }
+    // 悪化系kindのみが対象（recovered/sustainedSuccessは行として存在しない）
+    // total: repeatedFailure=3が先頭。regressed/shiftedFailureはtotal=1で同値
+    // → VERDICT_TRANSITION_KIND_ORDER（sustainedSuccess→recovered→repeatedFailure→shiftedFailure→regressed）順
+    expect(rows.map((r) => r.kind)).toEqual(['repeatedFailure', 'shiftedFailure', 'regressed']);
+
+    const repeated = rows.find((r) => r.kind === 'repeatedFailure')!;
+    expect(repeated.cells.find((c) => c.category === 'protectedPathViolation')!.count).toBe(2);
+    // count降順(2>1)でprotectedPathViolationが先
+    expect(repeated.cells.map((c) => c.category)).toEqual(['protectedPathViolation', 'e2eFailed']);
+
+    // regressed行のverifyFailed: to-run母集団(run3/4/5=5件)のうちverifyFailedは1件のみ →自シェア100%/全体シェア20%
+    // run1のchangedLinesExceededを含めた全run母集団なら異なる値になってしまうはず
+    const regressed = rows.find((r) => r.kind === 'regressed')!;
+    const verifyCell = regressed.cells.find((c) => c.category === 'verifyFailed')!;
+    expect(verifyCell.withinKindSharePct).toBeCloseTo(100, 5);
+    expect(verifyCell.baselineSharePct).toBeCloseTo(20, 5);
+    expect(verifyCell.lift).toBeCloseTo(5, 5);
   });
 });
 
