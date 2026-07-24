@@ -4583,6 +4583,80 @@ export function gatePauseSummary(runs: RunRecord[]): GatePauseSummary {
   return { count: classifications.length, patterns, abandonment, mostAtRisk };
 }
 
+interface PausedDryRunResumeDetail {
+  iteration: number;
+  /** 同じissueが後続反復で再実行(再開)されていれば true */
+  resumed: boolean;
+  /** resumed=true かつ、再実行のいずれかが最終的に merged に至っていれば true。まだ再実行されていなければ false */
+  resumeSucceeded: boolean;
+}
+
+/**
+ * paused/dry-run 反復ごとに「同じissueが後続反復で再実行(再開)されたか」「再開が最終的に
+ * mergedに至ったか(再開成功)」を判定する。gatePauseClassifications の reattemptedAtIterations
+ * と同じ検出方法（同じissue.numberを持つ後続反復の有無）をpaused/dry-run両方に適用するが、
+ * gatePauseClassifications が「離脱したか」(reattempted/stalled/pending)だけを見るのに対し、
+ * こちらは再実行後の実際の結末（マージまで漕ぎ着けたか）まで踏み込む。複数回再実行されて
+ * いても、runs全体でそのうち1件でもmergedに至っていれば成功とみなす。
+ */
+function pausedDryRunResumeDetails(runs: RunRecord[]): PausedDryRunResumeDetail[] {
+  const sorted = byIterationAsc(runs);
+  return sorted
+    .filter((r): r is RunRecord & { verdict: PausedDryRunStopReason } => r.verdict === 'paused' || r.verdict === 'dry-run')
+    .map((r) => {
+      const later = sorted.filter((other) => other.issue.number === r.issue.number && other.iteration > r.iteration);
+      return {
+        iteration: r.iteration,
+        resumed: later.length > 0,
+        resumeSucceeded: later.some((o) => o.verdict === 'merged'),
+      };
+    });
+}
+
+export interface PausedDryRunResumeSummary {
+  /** paused/dry-runだった反復数の合計。pausedDryRunSummary.countと同じ母集団 */
+  totalCount: number;
+  /** うち同じissueが後続反復で再実行された件数 */
+  resumedCount: number;
+  /** resumedCountのうち最終的にmergedに至った件数 */
+  resumeSucceededCount: number;
+  /** resumeSucceededCount / resumedCount * 100。resumedCount=0のときは0（再開自体がまだ無く定義できないため） */
+  resumeSuccessRatePct: number;
+  /** まだ一度も再実行されていない件数 */
+  notResumedCount: number;
+}
+
+export function pausedDryRunResumeSummary(runs: RunRecord[]): PausedDryRunResumeSummary {
+  const details = pausedDryRunResumeDetails(runs);
+  const resumed = details.filter((d) => d.resumed);
+  const succeeded = resumed.filter((d) => d.resumeSucceeded);
+  return {
+    totalCount: details.length,
+    resumedCount: resumed.length,
+    resumeSucceededCount: succeeded.length,
+    resumeSuccessRatePct: resumed.length === 0 ? 0 : (succeeded.length / resumed.length) * 100,
+    notResumedCount: details.length - resumed.length,
+  };
+}
+
+/**
+ * 再開された(resumed=true)paused/dry-run反復に絞り、その累積再開成功率(0..100)の推移を
+ * 元のiteration昇順で返す。approvalRateTrend等と同じ「対象母集団に絞ってからの累積割合」
+ * という考え方だが、母集団は「再開された反復」のみ: まだ再開されていない反復を分母に
+ * 含めると「再開すらされていない」ことと「再開したが失敗した」ことが区別できず、率が
+ * 見かけ上低く出てしまうため。
+ */
+export function pausedDryRunResumeSuccessTrend(runs: RunRecord[]): TrendPoint[] {
+  const resumed = pausedDryRunResumeDetails(runs)
+    .filter((d) => d.resumed)
+    .sort((a, b) => a.iteration - b.iteration);
+  let successCount = 0;
+  return resumed.map((d, i) => {
+    if (d.resumeSucceeded) successCount++;
+    return { iteration: d.iteration, value: (successCount / (i + 1)) * 100 };
+  });
+}
+
 export interface AdversaryOutcomeDivergenceSummary {
   model: string;
   /** adversary の判定対象になった件数（verify に到達した run のみ。failed はレビュー自体に未到達のため除く） */

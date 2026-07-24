@@ -88,6 +88,8 @@ import {
   gatePauseClassifications,
   gatePauseSummary,
   GATE_PAUSE_STALE_THRESHOLD_ITERATIONS,
+  pausedDryRunResumeSummary,
+  pausedDryRunResumeSuccessTrend,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -6891,6 +6893,88 @@ describe('gatePauseSummary', () => {
     const s = gatePauseSummary(runs);
     expect(s.abandonment).toEqual([{ status: 'reattempted', count: 1 }]);
     expect(s.mostAtRisk).toBeNull();
+  });
+});
+
+describe('pausedDryRunResumeSummary', () => {
+  it('空配列は全項目0を返す（境界値。resumedCount=0のときresumeSuccessRatePctは0除算せず0）', () => {
+    expect(pausedDryRunResumeSummary([])).toEqual({
+      totalCount: 0,
+      resumedCount: 0,
+      resumeSucceededCount: 0,
+      resumeSuccessRatePct: 0,
+      notResumedCount: 0,
+    });
+  });
+
+  it('再開・成功・未再開の件数を正確に集計する（複数回再実行の末の成功、issue番号が異なる後続反復の除外も含む）', () => {
+    const runs = [
+      // issue1: 1回目再実行(abandoned)、2回目再実行(merged) → 複数回再実行でも成功扱い
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 1, title: 'a', labels: [] } }),
+      // issue2: 再実行されたがmergedに至らない → 再開失敗
+      makeRun({ iteration: 4, verdict: 'dry-run', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'abandoned', issue: { number: 2, title: 'b', labels: [] } }),
+      // issue3: 後続にissue番号が異なる反復しか無い → 未再開のまま
+      makeRun({ iteration: 6, verdict: 'paused', issue: { number: 3, title: 'c', labels: [] } }),
+      makeRun({ iteration: 7, verdict: 'merged', issue: { number: 99, title: 'other', labels: [] } }),
+    ];
+    const s = pausedDryRunResumeSummary(runs);
+    expect(s).toEqual({
+      totalCount: 3,
+      resumedCount: 2,
+      resumeSucceededCount: 1,
+      resumeSuccessRatePct: 50,
+      notResumedCount: 1,
+    });
+  });
+});
+
+describe('pausedDryRunResumeSuccessTrend', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(pausedDryRunResumeSuccessTrend([])).toEqual([]);
+  });
+
+  it('再開された反復が1件も無ければ空配列を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+    ];
+    expect(pausedDryRunResumeSuccessTrend(runs)).toEqual([]);
+  });
+
+  it('再開されていない反復は分母に含めず、再開された反復だけの累積成功率を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      // issue 1 は再開されない（分母に含めない）
+      makeRun({ iteration: 2, verdict: 'dry-run', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 4, verdict: 'paused', issue: { number: 3, title: 'c', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'abandoned', issue: { number: 3, title: 'c', labels: [] } }),
+    ];
+    const trend = pausedDryRunResumeSuccessTrend(runs);
+    // 再開されたのは iteration 2(成功) と iteration 4(失敗) の2件のみ
+    expect(trend).toEqual([
+      { iteration: 2, value: 100 },
+      { iteration: 4, value: 50 },
+    ]);
+  });
+
+  it('runsの並び順に関わらず、元のiteration昇順で累積する', () => {
+    const runs = [
+      // 入力はiteration降順（未ソート）で渡す
+      makeRun({ iteration: 4, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'paused', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 1, verdict: 'dry-run', issue: { number: 1, title: 'a', labels: [] } }),
+    ];
+    const trend = pausedDryRunResumeSuccessTrend(runs);
+    expect(trend.map((p) => p.iteration)).toEqual([1, 3]);
+    expect(trend).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 3, value: 50 },
+    ]);
   });
 });
 

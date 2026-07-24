@@ -47,6 +47,7 @@ import {
   pausedDryRunDetails,
   gatePauseSummary,
   gatePauseClassifications,
+  pausedDryRunResumeSummary,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -2364,6 +2365,43 @@ test('Gate通過後Pauseパターン分類・離脱検知パネルが実デー�
   const nonPausedIterations = runs.filter((r) => r.verdict !== 'paused').map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(nonPausedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ドライラン・一時停止の再開成功率トレンドパネルが実データから導出したサマリー・成功率推移を表示する', async ({ page }) => {
+  await page.goto('/gate');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = pausedDryRunResumeSummary(runs);
+  expect(
+    summary.totalCount,
+    'data/runs に paused/dry-run な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('paused-dryrun-resume-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは pausedDryRunResumeSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('paused-dryrun-resume-summary')).toHaveText(
+    `${summary.totalCount}件中${summary.resumedCount}件再開・成功${summary.resumeSucceededCount}件`,
+  );
+
+  if (summary.resumedCount === 0) {
+    // 実データにまだ再開されたpaused/dry-runが無い場合は「未再開」経路になる
+    await expect(page.getByTestId('paused-dryrun-resume-no-trend')).toContainText(
+      `未再開${summary.notResumedCount}件`,
+    );
+    await expect(panel.locator('svg')).toHaveCount(0);
+  } else {
+    await expect(page.getByTestId('paused-dryrun-resume-rate')).toHaveText(
+      `${summary.resumeSuccessRatePct.toFixed(1)}%`,
+    );
+    await expect(panel.locator('svg')).toHaveCount(1);
   }
 
   const body = await bodyTextExcludingFreeform(page);

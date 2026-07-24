@@ -15,6 +15,7 @@ import { AbandonedReasonBreakdownPanel } from '@/components/AbandonedReasonBreak
 import { ApprovedButBuilderFailedPanel } from '@/components/ApprovedButBuilderFailedPanel';
 import { PausedDryRunSurvivalPanel } from '@/components/PausedDryRunSurvivalPanel';
 import { GatePauseAbandonmentPanel } from '@/components/GatePauseAbandonmentPanel';
+import { PausedDryRunResumeTrendPanel } from '@/components/PausedDryRunResumeTrendPanel';
 
 export default function GatePage() {
   const { runs } = loadRuns();
@@ -47,6 +48,7 @@ export default function GatePage() {
         <ApprovedButBuilderFailedPanel runs={runs} />
         <PausedDryRunSurvivalPanel runs={runs} />
         <GatePauseAbandonmentPanel runs={runs} />
+        <PausedDryRunResumeTrendPanel runs={runs} />
       </div>
     </main>
   );
