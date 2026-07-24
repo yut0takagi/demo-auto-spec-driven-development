@@ -138,6 +138,7 @@ import {
   ideationQualityDegradationSignal,
   IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
   IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
+  backlogFlowByIteration,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -8921,5 +8922,40 @@ describe('ideationQualityDegradationSignal', () => {
     expect(signal!.availableCount).toBe(4);
     expect(signal!.degradedCount).toBe(3);
     expect(signal!.level).toBe('critical');
+  });
+});
+
+describe('backlogFlowByIteration', () => {
+  it('runsが空なら空配列（境界値）', () => {
+    expect(backlogFlowByIteration([])).toEqual([]);
+  });
+
+  it('1件、補充0件なら1件消費のみでnetは-1、残量はIDEATION_LOW_WATER-1', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [] })];
+    const points = backlogFlowByIteration(runs);
+    expect(points).toEqual([
+      { iteration: 1, inflow: 0, outflow: 1, net: -1, balance: IDEATION_LOW_WATER - 1 },
+    ]);
+  });
+
+  it('1件、補充3件なら inflow=3, outflow=1, net=+2、残量は基準線+2', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [101, 102, 103] })];
+    const points = backlogFlowByIteration(runs);
+    expect(points).toEqual([
+      { iteration: 1, inflow: 3, outflow: 1, net: 2, balance: IDEATION_LOW_WATER + 2 },
+    ]);
+  });
+
+  it('複数反復にわたりnetを累積してbalanceを算出し、iteration昇順で返す（入力順に依存しない）', () => {
+    const runs = [
+      makeRun({ iteration: 2, nextIssues: [201] }), // net 0
+      makeRun({ iteration: 1, nextIssues: [101, 102] }), // net +1
+      makeRun({ iteration: 3, nextIssues: [] }), // net -1
+    ];
+    const points = backlogFlowByIteration(runs);
+    expect(points.map((p) => p.iteration)).toEqual([1, 2, 3]);
+    expect(points[0]).toMatchObject({ inflow: 2, outflow: 1, net: 1, balance: IDEATION_LOW_WATER + 1 });
+    expect(points[1]).toMatchObject({ inflow: 1, outflow: 1, net: 0, balance: IDEATION_LOW_WATER + 1 });
+    expect(points[2]).toMatchObject({ inflow: 0, outflow: 1, net: -1, balance: IDEATION_LOW_WATER });
   });
 });

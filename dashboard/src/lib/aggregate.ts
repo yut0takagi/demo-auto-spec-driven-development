@@ -5905,3 +5905,32 @@ export function backlogLowWaterEta(runs: RunRecord[]): BacklogLowWaterEta | null
     iterations: sorted.slice(sorted.length - windowSize).map((r) => r.iteration),
   };
 }
+
+export interface BacklogFlowPoint {
+  iteration: number;
+  /** この反復が ideation で生成した issue 数（nextIssues.length）。 */
+  inflow: number;
+  /** この反復が処理した issue 数。1反復は必ず1件を消費するため常に1。 */
+  outflow: number;
+  /** inflow - outflow。正なら純増、負なら純減、0なら収支ゼロ。 */
+  net: number;
+  /** backlogLowWaterEta と同じ基準（IDEATION_LOW_WATER 起点）で net を積算した相対残量。 */
+  balance: number;
+}
+
+/**
+ * 反復ごとのバックログ増減フロー。backlogLowWaterEta が直近window分の集計値
+ * （速度・ETA）のみを返すのに対し、こちらは全反復それぞれの inflow/outflow/net/balance
+ * を古い→新しい順で返し、フロー可視化（増減の推移）に使う。runs が空なら空配列。
+ */
+export function backlogFlowByIteration(runs: RunRecord[]): BacklogFlowPoint[] {
+  const sorted = byIterationAsc(runs);
+  let balance = IDEATION_LOW_WATER;
+  return sorted.map((run) => {
+    const inflow = run.nextIssues.length;
+    const outflow = 1;
+    const net = inflow - outflow;
+    balance += net;
+    return { iteration: run.iteration, inflow, outflow, net, balance };
+  });
+}

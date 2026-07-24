@@ -75,6 +75,7 @@ import {
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
+  backlogFlowByIteration,
   ideationQualityDegradationSignal,
 } from '../src/lib/aggregate';
 
@@ -1779,6 +1780,41 @@ test('バックログ枯渇予測パネルが実データから導出した残�
   }
 
   await expect(panel).toContainText(`対象iteration: ${eta!.iterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('反復ごとのバックログ増減フローパネルが実データから導出したinflow/outflow/純増減・残量を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = backlogFlowByIteration(runs);
+  expect(points.length).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('backlog-flow-panel');
+  await expect(panel).toBeVisible();
+
+  // 集計値は backlogFlowByIteration()（別の計算経路）と一致するはず
+  const totalInflow = points.reduce((sum, p) => sum + p.inflow, 0);
+  const totalOutflow = points.reduce((sum, p) => sum + p.outflow, 0);
+  const totalNet = totalInflow - totalOutflow;
+  const currentBalance = points[points.length - 1].balance;
+
+  await expect(page.getByTestId('backlog-flow-total-inflow')).toHaveText(String(totalInflow));
+  await expect(page.getByTestId('backlog-flow-total-outflow')).toHaveText(String(totalOutflow));
+  await expect(page.getByTestId('backlog-flow-total-net')).toHaveText(
+    totalNet > 0 ? `+${totalNet}` : `${totalNet}`,
+  );
+  await expect(page.getByTestId('backlog-flow-balance')).toHaveText(String(currentBalance));
+  await expect(panel).toContainText(`対象iteration: ${points.map((p) => p.iteration).join(', ')}`);
+
+  // 反復ごとのバーが1本ずつ、過不足なく描画されているはず
+  await expect(page.locator('[data-testid^="backlog-flow-bar-"]')).toHaveCount(points.length);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
