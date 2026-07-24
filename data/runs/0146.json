@@ -1,0 +1,42 @@
+{
+  "id": "20260724T154040Z-240",
+  "iteration": 146,
+  "issue": {
+    "number": 240,
+    "title": "ループ自身のToken消費効率トレンド観測パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/240-token",
+  "startedAt": "2026-07-24T15:40:40Z",
+  "finishedAt": "2026-07-24T15:59:25Z",
+  "durationSec": 1125,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 251,
+  "adversary": {
+    "approved": true,
+    "summary": "issue #240 のToken消費効率トレンドパネルが完全に実装され、cycleTimeTrendSignal と同じ設計パターンで統一性がある。ロジック・UI・テスト・統合が全て揃っており、境界値・失敗系・正常系を網羅したテストが実装を実質的に検証している。既存機能への破壊なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 384,
+  "cost": {
+    "builderUsd": 5.543136,
+    "adversaryUsd": 0.131995,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.6512346000000001,
+    "totalUsd": 6.326366
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
