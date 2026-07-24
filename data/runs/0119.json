@@ -1,0 +1,42 @@
+{
+  "id": "20260724T090124Z-193",
+  "iteration": 119,
+  "issue": {
+    "number": 193,
+    "title": "Verdict遷移の根本原因パターン化パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/193-verdict",
+  "startedAt": "2026-07-24T09:01:24Z",
+  "finishedAt": "2026-07-24T09:14:54Z",
+  "durationSec": 810,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 211,
+  "adversary": {
+    "approved": true,
+    "summary": "Verdict遷移の根本原因パターン化パネルが要件通り実装され、全遷移種別（regressed/repeatedFailure/shiftedFailure/recovered）で正しくgateReasonsから根本原因カテゴリを抽出・集計している。テストは4つのシナリオ（データなし・複数種別クロス集計・gateReasons空の除外・件数降順表示）を実質的に検証し、既存機能への影響もない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 352,
+  "cost": {
+    "builderUsd": 4.91312,
+    "adversaryUsd": 0.215124,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 5.128244
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
