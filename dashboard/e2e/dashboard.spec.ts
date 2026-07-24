@@ -26,6 +26,7 @@ import {
   ideationCostQualityCorrelation,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
+  e2eFailureBuilderWorkloadSeparation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
   timeToFirstPrTrend,
@@ -73,6 +74,7 @@ import {
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
+  ideationQualityDegradationSignal,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1509,6 +1511,46 @@ test('Ideation→着手までのリードタイム・着手成功率観測パネ
   expect(body).not.toContain('undefined');
 });
 
+test('Ideation提案品質低下の多面的早期検知パネルが実データから導出したレベル・各面の判定を表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationQualityDegradationSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation が1件も提案を行っておらず、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-quality-degradation-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-level', signal!.level);
+  await expect(page.getByTestId('ideation-quality-degradation-counts')).toContainText(
+    `${signal!.degradedCount}/${signal!.availableCount}`,
+  );
+
+  // 各面の available/degraded は ideationQualityDegradationSignal()（別の計算経路）と一致するはず
+  for (const facet of signal!.facets) {
+    const facetEl = page.getByTestId(`ideation-quality-degradation-facet-${facet.key}`);
+    await expect(facetEl).toHaveAttribute('data-available', String(facet.available));
+    await expect(facetEl).toHaveAttribute('data-degraded', String(facet.degraded));
+    await expect(facetEl).toContainText(!facet.available ? 'データ不足' : facet.degraded ? '悪化' : '正常');
+  }
+
+  // 回帰防止（不変量）: レベルは degradedCount としきい値の関係から一意に決まる
+  if (signal!.degradedCount >= signal!.criticalThreshold) {
+    expect(signal!.level).toBe('critical');
+  } else if (signal!.degradedCount > 0) {
+    expect(signal!.level).toBe('watch');
+  } else {
+    expect(signal!.level).toBe('normal');
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
 test('Issue提案→初着手のドロップレート検知パネルが実データから導出したドロップ率・連続ドロップ・対象issueを表示する', async ({
   page,
 }) => {
@@ -1768,6 +1810,44 @@ test('E2E失敗と変更行数(diff size)の相関パネルが実データから
   const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+/** E2eBuilderWorkloadSeparationPanel と同じ丸め規則（浮動小数点誤差による-0.00表示を防ぐ正規化）。 */
+function fmtSeparation(r: number | null): string {
+  if (r === null) return '算出不可';
+  return `r = ${(Math.round(r * 100) / 100 || 0).toFixed(2)}`;
+}
+
+test('E2E失敗相関のBuilder稼働量分離パネルが実データから導出した単純相関・偏相関・verdictを表示する', async ({ page }) => {
+  await page.goto('/revise');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = e2eFailureBuilderWorkloadSeparation(runs);
+  expect(
+    stats.sampleSize,
+    'data/runs に verify 到達済みの反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  await expect(page.getByTestId('e2e-builder-workload-separation-panel')).toBeVisible();
+
+  // 単純相関・偏相関はいずれも e2eFailureBuilderWorkloadSeparation()（別の計算経路）と一致するはず
+  const fields: [string, number | null][] = [
+    ['e2e-builder-workload-diffsize-raw', stats.diffSizeCorrelation],
+    ['e2e-builder-workload-workload-raw', stats.builderWorkloadCorrelation],
+    ['e2e-builder-workload-diffsize-workload', stats.diffSizeWorkloadCorrelation],
+    ['e2e-builder-workload-diffsize-partial', stats.diffSizePartialCorrelation],
+    ['e2e-builder-workload-workload-partial', stats.builderWorkloadPartialCorrelation],
+  ];
+  for (const [testId, value] of fields) {
+    await expect(page.getByTestId(testId)).toHaveText(fmtSeparation(value));
+  }
+
+  await expect(page.getByTestId('e2e-builder-workload-verdict')).toHaveAttribute('data-verdict', stats.verdict);
+
+  const body3 = await bodyTextExcludingFreeform(page);
+  expect(body3).not.toContain('NaN');
+  expect(body3).not.toContain('undefined');
 });
 
 test('CI/ゲート通過時間のトレンド観測パネルが実データから導出した傾向・直近直前平均を表示する', async ({ page }) => {

@@ -1,0 +1,42 @@
+{
+  "id": "20260724T094210Z-195",
+  "iteration": 122,
+  "issue": {
+    "number": 195,
+    "title": "Ideation 提案の品質低下を早期検知する多面体パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/195-ideation",
+  "startedAt": "2026-07-24T09:42:10Z",
+  "finishedAt": "2026-07-24T10:04:02Z",
+  "durationSec": 1312,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 218,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation 提案の4つの異なる品質指標（ドロップ連続・リードタイム悪化・早期abandonment・提案規模とドロップ率の相関）を「面」として束ね、複数面が同時に悪化したときに早期警戒するマルチディメンショナルシグナル実装。既存シグナルの再利用で安全性が高く、テストが全分岐をカバーしており、変更サイズも基準内。要件を正しく満たし、既存挙動を壊していません。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 461,
+  "cost": {
+    "builderUsd": 8.113942,
+    "adversaryUsd": 0.142899,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 8.256841
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

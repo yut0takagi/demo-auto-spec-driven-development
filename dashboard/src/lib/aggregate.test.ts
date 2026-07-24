@@ -48,6 +48,7 @@ import {
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
+  e2eFailureBuilderWorkloadSeparation,
   builderVolumeApprovalCoupling,
   cycleTimeTrend,
   cycleTimeTrendSignal,
@@ -133,6 +134,9 @@ import {
   backlogLowWaterEta,
   IDEATION_LOW_WATER,
   BACKLOG_ETA_WINDOW,
+  ideationQualityDegradationSignal,
+  IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
+  IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -963,10 +967,10 @@ describe('e2eFailureRateTrend', () => {
 });
 
 describe('costBreakdown', () => {
-  it('空配列では totalUsd=0、byRole は3ロール分すべて0、byModel は空配列を返す（NaN を出さない）', () => {
+  it('空配列では totalUsd=0、byRole は4ロール分すべて0、byModel は空配列を返す（NaN を出さない）', () => {
     const b = costBreakdown([]);
     expect(b.totalUsd).toBe(0);
-    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
     for (const r of b.byRole) {
       expect(r.totalUsd).toBe(0);
       expect(r.pct).toBe(0);
@@ -984,7 +988,7 @@ describe('costBreakdown', () => {
     ];
     const b = costBreakdown(runs);
     expect(b.totalUsd).toBeCloseTo(1.0);
-    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation']);
+    expect(b.byRole.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
     expect(b.byRole[0].totalUsd).toBeCloseTo(0.6);
     expect(b.byRole[0].pct).toBeCloseTo(60);
     expect(b.byRole[1].totalUsd).toBeCloseTo(0.3);
@@ -993,6 +997,54 @@ describe('costBreakdown', () => {
     expect(b.byRole[2].pct).toBeCloseTo(10);
     // 内訳の合計は totalUsd の100%と一致するはず
     expect(b.byRole.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100);
+  });
+
+  it('plannerUsd を byRole の planner 役割に反映し、pct 合計は planner 込みで 100% になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, plannerUsd: 0.2, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    const planner = b.byRole.find((r) => r.role === 'planner');
+    expect(planner).toBeDefined();
+    expect(planner!.totalUsd).toBeCloseTo(0.2);
+    expect(planner!.pct).toBeCloseTo(20);
+    // planner を含めて4役割の pct 合計が 100% になる（planner を取りこぼしていない証拠）
+    expect(b.byRole.reduce((s, r) => s + r.pct, 0)).toBeCloseTo(100);
+  });
+
+  it('plannerUsd 未記録（旧レコード）でも planner 役割は 0 で存在し、NaN やクラッシュを出さない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.6, adversaryUsd: 0.3, ideationUsd: 0.1, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-b' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    const planner = b.byRole.find((r) => r.role === 'planner');
+    expect(planner).toBeDefined();
+    expect(planner!.totalUsd).toBe(0);
+    expect(planner!.pct).toBe(0);
+  });
+
+  it('planner はモデル名が記録されないため byModel（モデル別）には含めない（undefined モデル行を作らない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.4, adversaryUsd: 0.2, ideationUsd: 0.1, plannerUsd: 0.3, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-a', ideation: 'model-a' },
+      }),
+    ];
+    const b = costBreakdown(runs);
+    // byModel はモデル帰属可能な役割（builder/adversary/ideation）のみ = 0.7。planner の 0.3 は含まない。
+    expect(b.byModel.map((m) => m.model)).toEqual(['model-a']);
+    expect(b.byModel[0].totalUsd).toBeCloseTo(0.7);
+    // undefined をキーにした行が混入していないこと
+    expect(b.byModel.some((m) => m.model === undefined || m.model === 'undefined')).toBe(false);
   });
 
   it('同じモデルが複数ロール（adversary と ideation）で使われている場合は合算する', () => {
@@ -4569,6 +4621,90 @@ describe('e2eFailureDiffSizeCorrelation', () => {
     const result = e2eFailureDiffSizeCorrelation(runs);
     expect(result.delta).toBeCloseTo(-400, 10);
     expect(result.correlationCoefficient!).toBeLessThan(0);
+  });
+});
+
+function makeWorkloadRun(iteration: number, e2ePassed: boolean, changedLines: number, builderUsd: number): RunRecord {
+  return makeRun({
+    iteration,
+    verify: { unitPassed: true, e2ePassed, coveragePct: 80 },
+    changedLines,
+    cost: { builderUsd, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: builderUsd + 0.01 },
+  });
+}
+
+describe('e2eFailureBuilderWorkloadSeparation', () => {
+  it('run が0件なら全て0/null、verdictはundetermined（境界値）', () => {
+    expect(e2eFailureBuilderWorkloadSeparation([])).toEqual({
+      sampleSize: 0,
+      diffSizeCorrelation: null,
+      builderWorkloadCorrelation: null,
+      diffSizeWorkloadCorrelation: null,
+      diffSizePartialCorrelation: null,
+      builderWorkloadPartialCorrelation: null,
+      verdict: 'undetermined',
+    });
+  });
+
+  it('verify に到達していない failed run は母集団から除外する', () => {
+    const failedRun = makeWorkloadRun(1, false, 0, 0);
+    failedRun.verdict = 'failed';
+    failedRun.verify = { unitPassed: false, e2ePassed: false, coveragePct: 0 };
+    const result = e2eFailureBuilderWorkloadSeparation([failedRun, makeWorkloadRun(2, true, 50, 0.1)]);
+    expect(result.sampleSize).toBe(1);
+  });
+
+  it('diffSizeとBuilder稼働量が完全連動(相関1)だと偏相関の分母が0になりundetermined（境界値）', () => {
+    const runs = [1, 2, 3, 4].map((i) => makeWorkloadRun(i, i > 2, i * 100, i));
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.sampleSize).toBe(4);
+    expect(result.diffSizeWorkloadCorrelation).toBeCloseTo(1, 10);
+    expect(result.diffSizePartialCorrelation).toBeNull();
+    expect(result.builderWorkloadPartialCorrelation).toBeNull();
+    expect(result.verdict).toBe('undetermined');
+  });
+
+  it('changedLinesが全run同値（分散0）だと単純相関・偏相関ともnull、verdictはundetermined（境界値）', () => {
+    const runs = [makeWorkloadRun(1, true, 42, 0.1), makeWorkloadRun(2, false, 42, 0.5)];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation).toBeNull();
+    expect(result.diffSizePartialCorrelation).toBeNull();
+    expect(result.verdict).toBe('undetermined');
+  });
+
+  it('diffSizeがBuilder稼働量と独立にe2e失敗と関係している場合、偏相関はあまり縮まずindependent判定になる', () => {
+    // 手計算検算済み: x=e2eFail[0,0,1,1], y=changedLines[100,200,300,400], z=builderUsd[0.3,0.1,0.2,0.4]
+    // → rXY=2/√5, rXZ=1/√5, rYZ=0.4、偏相関の閉形式解は4/√21・1/√21。
+    const runs = [
+      makeWorkloadRun(1, true, 100, 0.3),
+      makeWorkloadRun(2, true, 200, 0.1),
+      makeWorkloadRun(3, false, 300, 0.2),
+      makeWorkloadRun(4, false, 400, 0.4),
+    ];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation!).toBeCloseTo(0.894427, 5);
+    expect(result.builderWorkloadCorrelation!).toBeCloseTo(0.447214, 5);
+    expect(result.diffSizeWorkloadCorrelation!).toBeCloseTo(0.4, 10);
+    expect(result.diffSizePartialCorrelation!).toBeCloseTo(4 / Math.sqrt(21), 6);
+    expect(result.builderWorkloadPartialCorrelation!).toBeCloseTo(1 / Math.sqrt(21), 6);
+    expect(result.verdict).toBe('independent');
+  });
+
+  it('diffSizeの単純相関がBuilder稼働量による交絡で説明し尽くされる場合、偏相関は0に潰れconfounded判定になる', () => {
+    // 手計算検算済み: x=e2eFail[0,0,1,1], y=changedLines[98,98,100,104], z=builderUsd[0.2,0.4,0.6,0.8]
+    // → rXY=2/√6, rXZ=2/√5, rYZ=5/√30 で rXY=rXZ*rYZ が厳密成立し偏相関は厳密に0。
+    const runs = [
+      makeWorkloadRun(1, true, 98, 0.2),
+      makeWorkloadRun(2, true, 98, 0.4),
+      makeWorkloadRun(3, false, 100, 0.6),
+      makeWorkloadRun(4, false, 104, 0.8),
+    ];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation!).toBeCloseTo(2 / Math.sqrt(6), 6);
+    expect(result.diffSizeWorkloadCorrelation!).toBeCloseTo(5 / Math.sqrt(30), 6);
+    expect(result.diffSizePartialCorrelation!).toBeCloseTo(0, 6);
+    expect(result.builderWorkloadPartialCorrelation!).toBeCloseTo(Math.sqrt(0.4), 6);
+    expect(result.verdict).toBe('confounded');
   });
 });
 
@@ -8503,5 +8639,166 @@ describe('backlogLowWaterEta', () => {
     const r = backlogLowWaterEta([...makeRunRange(1, 3)].reverse());
     expect(r!.iterations).toEqual([1, 2, 3]);
     expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 3);
+  });
+});
+
+describe('ideationQualityDegradationSignal', () => {
+  function facet(
+    signal: NonNullable<ReturnType<typeof ideationQualityDegradationSignal>>,
+    key: string,
+  ) {
+    const found = signal.facets.find((f) => f.key === key);
+    expect(found, `面 ${key} が facets に存在しない`).toBeDefined();
+    return found!;
+  }
+
+  it('runsが空、またはideationが一度も提案していない場合はnull（境界値・判定できる面が1つも無い）', () => {
+    expect(ideationQualityDegradationSignal([])).toBeNull();
+    expect(ideationQualityDegradationSignal([makeRun({ iteration: 1, nextIssues: [] })])).toBeNull();
+  });
+
+  it('提案が1件だけでまだ猶予期間中の場合、ドロップ面だけ判定可能で他の3面はデータ不足、悪化面が無いのでnormal（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] })];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false, degraded: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: false, degraded: false });
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false, degraded: false });
+
+    expect(signal!.availableCount).toBe(1);
+    expect(signal!.degradedCount).toBe(0);
+    expect(signal!.level).toBe('normal');
+  });
+
+  it(`提案順末尾からIDEATION_DROP_RATE_STREAK_THRESHOLD件連続ドロップすると dropStreak 面だけが悪化しwatchになる`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen1', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen2', labels: [] }, nextIssues: [20] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS + 2,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: false });
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('着手リードタイムが悪化傾向のときは leadTime 面だけが悪化しwatchになる（他の面は判定可能だが正常）', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 200),
+      ...proposeAndStart(9, 10, 105, 200),
+      ...proposeAndStart(11, 12, 106, 200),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: true });
+    // 全て着手済みでドロップ0件、全てmergedで早期abandonmentも0件のため、
+    // 判定はできる(available)が悪化はしていない(degraded:false)はず
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: false });
+    // 提案6件がいずれも1件ずつのbatchで全てdropRate0(分散なし)のため相関は算出不可
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('直近の着手が早期abandonment(revise無しでabandoned)に偏ると earlyAbandonment 面だけが悪化しwatchになる', () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30, 40, 50, 60] }),
+    ];
+    for (const [i, n] of [10, 20, 30].entries()) {
+      runs.push(makeRun({ iteration: 2 + i, issue: { number: n, title: 'x', labels: [] }, verdict: 'merged' }));
+    }
+    for (const [i, n] of [40, 50, 60].entries()) {
+      runs.push(
+        makeRun({ iteration: 5 + i, issue: { number: n, title: 'x', labels: [] }, verdict: 'abandoned', reviseCycles: 0 }),
+      );
+    }
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: false });
+    // 全てのstartedAt/finishedAtがデフォルト値で一定のためリードタイムの分散が無く flat 判定
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: false });
+    // 提案は1反復にまとめた1batchのみのため相関算出に必要な2batch以上が無い
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(1);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it('提案規模が大きいbatchほどドロップ率が高い(強い正の相関)場合、batchSizeCorrelation 面が悪化する', () => {
+    expect(IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD).toBeGreaterThan(0);
+    const staleIteration = 2 + IDEATION_DROP_STALENESS_ITERATIONS;
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [20, 21] }),
+      makeRun({ iteration: 4, issue: { number: 10, title: 'started', labels: [] } }),
+      makeRun({ iteration: staleIteration, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: true, degraded: true });
+    // batch2(20,21)が末尾で連続ドロップするため dropStreak も同時に悪化する（2面が悪化するがcriticalの閾値には満たない）
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: false });
+
+    expect(signal!.degradedCount).toBe(2);
+    expect(signal!.level).toBe('watch');
+  });
+
+  it(`悪化した面がIDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD(${IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD})件以上そろうとcriticalになる`, () => {
+    const runs: RunRecord[] = [
+      makeRun({
+        iteration: 1, issue: { number: 1, title: 'gen', labels: [] },
+        finishedAt: '2026-07-20T00:00:00Z', nextIssues: [201, 202, 203, 204, 205, 206],
+      }),
+    ];
+    // 前半3件(短いリードタイム・merged) → 後半3件(長いリードタイム・revise無しでabandoned)
+    for (const [i, n] of [201, 202, 203].entries()) {
+      runs.push(makeRun({
+        iteration: 2 + i, issue: { number: n, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:01:40Z', verdict: 'merged',
+      }));
+    }
+    for (const [i, n] of [204, 205, 206].entries()) {
+      runs.push(makeRun({
+        iteration: 5 + i, issue: { number: n, title: 'x', labels: [] },
+        startedAt: '2026-07-20T00:03:20Z', verdict: 'abandoned', reviseCycles: 0,
+      }));
+    }
+    // 末尾で2件連続ドロップさせる別batch(dropStreak用)
+    runs.push(makeRun({ iteration: 8, issue: { number: 8, title: 'gen2', labels: [] }, nextIssues: [910, 920] }));
+    runs.push(makeRun({ iteration: 13, issue: { number: 999, title: 'filler', labels: [] } }));
+
+    const signal = ideationQualityDegradationSignal(runs);
+    expect(signal).not.toBeNull();
+
+    expect(facet(signal!, 'leadTime')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'earlyAbandonment')).toMatchObject({ available: true, degraded: true });
+    expect(facet(signal!, 'dropStreak')).toMatchObject({ available: true, degraded: true });
+    // 6件提案(dropRate0)と2件提案(dropRate1)の2batch: 件数が少ないほうがドロップしているため負の相関で悪化ではない
+    expect(facet(signal!, 'batchSizeCorrelation')).toMatchObject({ available: true, degraded: false });
+
+    expect(signal!.availableCount).toBe(4);
+    expect(signal!.degradedCount).toBe(3);
+    expect(signal!.level).toBe('critical');
   });
 });

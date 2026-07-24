@@ -1878,9 +1878,21 @@ export function gateReasonSeveritySpectrum(runs: RunRecord[]): GateReasonSeverit
     });
 }
 
-export type CostRole = 'builder' | 'adversary' | 'ideation';
+export type CostRole = 'builder' | 'adversary' | 'ideation' | 'planner';
 
-const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation'];
+const COST_ROLES: readonly CostRole[] = ['builder', 'adversary', 'ideation', 'planner'];
+
+/**
+ * byModel（モデル別内訳）に含める役割。planner はコストは記録されるが、どのモデルが
+ * 計画したかを RunRecord.models に持たない（models は builder/adversary/ideation の固定キー）。
+ * そのため byModel はモデル帰属可能なこの3役割のみを対象にする（byRole には planner も含む）。
+ * 将来 models に planner を記録したら、ここに planner を足すだけで byModel も点灯する。
+ */
+const MODEL_ATTRIBUTED_ROLES: readonly Exclude<CostRole, 'planner'>[] = [
+  'builder',
+  'adversary',
+  'ideation',
+];
 
 export interface RoleCostBreakdown {
   role: CostRole;
@@ -1898,7 +1910,7 @@ export interface ModelCostEntry {
 
 export interface CostBreakdown {
   totalUsd: number;
-  /** builder → adversary → ideation の固定順。Summary.totalCostUsd と一致する合計の内訳。 */
+  /** builder → adversary → ideation → planner の固定順。Summary.totalCostUsd と一致する合計の内訳。 */
   byRole: RoleCostBreakdown[];
   /** モデル名でまとめた内訳。同じモデルが複数の役割（例: adversary と ideation）で
    *  使われている場合は合算する。totalUsd 降順。 */
@@ -1913,7 +1925,7 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
   const totalUsd = runs.reduce((sum, r) => sum + r.cost.totalUsd, 0);
   const pctOf = (value: number) => (totalUsd === 0 ? 0 : (value / totalUsd) * 100);
 
-  const roleTotals: Record<CostRole, number> = { builder: 0, adversary: 0, ideation: 0 };
+  const roleTotals: Record<CostRole, number> = { builder: 0, adversary: 0, ideation: 0, planner: 0 };
   const modelTotals = new Map<string, number>();
 
   for (const r of runs) {
@@ -1921,9 +1933,14 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
       builder: r.cost.builderUsd,
       adversary: r.cost.adversaryUsd,
       ideation: r.cost.ideationUsd,
+      // plannerUsd は任意フィールド（planner 休眠時の旧レコードには無い）。?? 0 で NaN を防ぐ。
+      planner: r.cost.plannerUsd ?? 0,
     };
     for (const role of COST_ROLES) {
       roleTotals[role] += roleCost[role];
+    }
+    // byModel はモデル名が記録されている役割のみ。planner は models に対応キーが無いため除外。
+    for (const role of MODEL_ATTRIBUTED_ROLES) {
       const model = r.models[role];
       modelTotals.set(model, (modelTotals.get(model) ?? 0) + roleCost[role]);
     }
@@ -2934,6 +2951,8 @@ function roleCostOf(run: RunRecord, role: CostRole): number {
       return run.cost.adversaryUsd;
     case 'ideation':
       return run.cost.ideationUsd;
+    case 'planner':
+      return run.cost.plannerUsd ?? 0;
   }
 }
 
@@ -2954,7 +2973,9 @@ export function modelEfficiencyByRole(runs: RunRecord[]): ModelEfficiencyByRole[
 
   const sorted = byIterationAsc(runs);
 
-  return COST_ROLES.map((role) => {
+  // モデル別（run.models[role]）に集計するため、モデル名が記録されている役割のみ対象。
+  // planner は models に対応キーを持たないので含めない（byRole 総額には costBreakdown で計上済み）。
+  return MODEL_ATTRIBUTED_ROLES.map((role) => {
     const byModel = new Map<
       string,
       { count: number; mergedCount: number; costUsd: number; iterations: number[] }
@@ -3246,6 +3267,73 @@ export function e2eFailureDiffSizeCorrelation(runs: RunRecord[]): E2eDiffSizeCor
     delta: failedMeanChangedLines - passedMeanChangedLines,
     correlationCoefficient: pearsonCorrelation(xs, ys),
     failedIterations: failed.map((r) => r.iteration),
+  };
+}
+
+/** 偏相関が単純相関のこの割合未満に縮んだら「Builder稼働量による見かけ上の相関(交絡)」とみなす閾値。 */
+export const E2E_BUILDER_WORKLOAD_SEPARATION_CONFOUND_RATIO = 0.5;
+
+export type E2eBuilderWorkloadSeparationVerdict = 'independent' | 'confounded' | 'undetermined';
+
+export interface E2eBuilderWorkloadSeparation {
+  sampleSize: number;
+  /** e2e失敗(1)/成功(0)と変更行数(changedLines)の単純Pearson相関(-1..1)。分散0ならnull。 */
+  diffSizeCorrelation: number | null;
+  /** e2e失敗(1)/成功(0)とBuilder稼働量(cost.builderUsd)の単純Pearson相関(-1..1)。分散0ならnull。 */
+  builderWorkloadCorrelation: number | null;
+  /** changedLinesとcost.builderUsdの単純Pearson相関(-1..1)。交絡の強さの目安。分散0ならnull。 */
+  diffSizeWorkloadCorrelation: number | null;
+  /**
+   * Builder稼働量を固定した上でのe2e失敗とdiff sizeの偏相関。diffSizeCorrelationとほぼ同じなら
+   * diff sizeは独立要因、0に近づくほど交絡（見かけ上の相関）だった疑いが強い。単純相関のいずれかが
+   * null、またはrXZ/rYZが±1にごく近く分母が不安定な場合はnull。
+   */
+  diffSizePartialCorrelation: number | null;
+  /** diff sizeを固定した上でのe2e失敗とBuilder稼働量の偏相関。同様の解釈。 */
+  builderWorkloadPartialCorrelation: number | null;
+  /** diffSizePartialCorrelation/diffSizeCorrelation の縮み幅による判定。算出不能ならundetermined。 */
+  verdict: E2eBuilderWorkloadSeparationVerdict;
+}
+
+function partialCorrelation(rXY: number | null, rXZ: number | null, rYZ: number | null): number | null {
+  if (rXY === null || rXZ === null || rYZ === null) return null;
+  // rXZ/rYZ が±1にごく近い(ほぼ完全な共線性)だと浮動小数点誤差でradicandが不安定になるため、閾値未満はnull。
+  const radicand = (1 - rXZ * rXZ) * (1 - rYZ * rYZ);
+  return radicand < 1e-9 ? null : (rXY - rXZ * rYZ) / Math.sqrt(radicand);
+}
+
+function e2eBuilderWorkloadSeparationVerdict(rXY: number | null, partial: number | null): E2eBuilderWorkloadSeparationVerdict {
+  if (rXY === null || partial === null || Math.abs(rXY) < 1e-9) return 'undetermined';
+  const shrinkRatio = Math.abs(partial) / Math.abs(rXY);
+  return shrinkRatio >= E2E_BUILDER_WORKLOAD_SEPARATION_CONFOUND_RATIO ? 'independent' : 'confounded';
+}
+
+/**
+ * e2eFailureDiffSizeCorrelationが示す「diff sizeが大きいほどe2eが失敗しやすい」相関が、実は
+ * Builder稼働量(cost.builderUsd)という別軸に引きずられた見かけ上の関係でないかを、偏相関係数
+ * （もう一方を統計的に固定した相関）で切り分ける。母集団はreachedVerifyで絞る（failed runは
+ * changedLines/builderUsdが測定されなかったsentinel値のため）。
+ */
+export function e2eFailureBuilderWorkloadSeparation(runs: RunRecord[]): E2eBuilderWorkloadSeparation {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const e2eFail = completed.map((r) => (r.verify.e2ePassed ? 0 : 1));
+  const diffSize = completed.map((r) => r.changedLines);
+  const workload = completed.map((r) => r.cost.builderUsd);
+
+  const diffSizeCorrelation = pearsonCorrelation(e2eFail, diffSize);
+  const builderWorkloadCorrelation = pearsonCorrelation(e2eFail, workload);
+  const diffSizeWorkloadCorrelation = pearsonCorrelation(diffSize, workload);
+  const diffSizePartialCorrelation = partialCorrelation(diffSizeCorrelation, builderWorkloadCorrelation, diffSizeWorkloadCorrelation);
+  const builderWorkloadPartialCorrelation = partialCorrelation(builderWorkloadCorrelation, diffSizeCorrelation, diffSizeWorkloadCorrelation);
+
+  return {
+    sampleSize: completed.length,
+    diffSizeCorrelation,
+    builderWorkloadCorrelation,
+    diffSizeWorkloadCorrelation,
+    diffSizePartialCorrelation,
+    builderWorkloadPartialCorrelation,
+    verdict: e2eBuilderWorkloadSeparationVerdict(diffSizeCorrelation, diffSizePartialCorrelation),
   };
 }
 
@@ -4183,6 +4271,102 @@ export function ideationEarlyAbandonmentSignal(runs: RunRecord[]): IdeationEarly
     direction,
     triggered: direction === 'increasing',
     runs: ideationRuns,
+  };
+}
+
+/** 面が同時に何件以上悪化を示すとcriticalに引き上げるか。 */
+export const IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD = 3;
+/** batchSizeVsDropRateCorrelationがこの値以上(強い正の相関)ならbatchSizeCorrelation面を悪化とみなす。 */
+export const IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD = 0.5;
+
+export type IdeationQualityDegradationLevel = 'critical' | 'watch' | 'normal';
+
+export type IdeationQualityDegradationFacetKey =
+  | 'dropStreak'
+  | 'leadTime'
+  | 'earlyAbandonment'
+  | 'batchSizeCorrelation';
+
+export interface IdeationQualityDegradationFacet {
+  key: IdeationQualityDegradationFacetKey;
+  label: string;
+  /** この面の判定に必要なデータが揃っているか */
+  available: boolean;
+  /** 品質低下の兆候を示しているか(available=falseなら常にfalse) */
+  degraded: boolean;
+}
+
+export interface IdeationQualityDegradationSignal {
+  level: IdeationQualityDegradationLevel;
+  facets: IdeationQualityDegradationFacet[];
+  /** available=trueな面のうちdegraded=trueな数 */
+  degradedCount: number;
+  /** available=trueな面の数 */
+  availableCount: number;
+  criticalThreshold: number;
+}
+
+/**
+ * Ideation提案の品質低下を、生成側(dropStreak: 提案が拾われない)・消化の遅さ
+ * (leadTime: 着手が遅れる)・消化後の早期離脱(earlyAbandonment: 着手直後に見送られる)・
+ * 構造的傾向(batchSizeCorrelation: まとめて提案するほど質が落ちる)という性質の異なる
+ * 4つの既存シグナルを「面」として束ね、何面が同時に悪化しているかで早期警戒レベルを
+ * 算出する。単一指標だけではノイズと本当の劣化を区別しにくいが、複数面が同時に悪化して
+ * いれば劣化の可能性が高いと判断できる。各面は元シグナルがデータ不足でnullを返す場合
+ * availableをfalseにし悪化判定から除外する。全ての面が判定不可能な場合のみnullを返す。
+ */
+export function ideationQualityDegradationSignal(runs: RunRecord[]): IdeationQualityDegradationSignal | null {
+  const dropSignal = ideationDropRateSignal(runs);
+  const leadTimeSignal = ideationToStartLeadTimeTrendSignal(runs);
+  const abandonmentSignal = ideationEarlyAbandonmentSignal(runs);
+  const dropCorrelation = ideationProposalQualityDropCorrelation(runs);
+
+  const facets: IdeationQualityDegradationFacet[] = [
+    {
+      key: 'dropStreak',
+      label: '提案ドロップの連続',
+      available: dropSignal !== null,
+      degraded: dropSignal?.triggered ?? false,
+    },
+    {
+      key: 'leadTime',
+      label: '着手リードタイムの悪化傾向',
+      available: leadTimeSignal !== null,
+      degraded: leadTimeSignal?.direction === 'increasing',
+    },
+    {
+      key: 'earlyAbandonment',
+      label: '早期abandonmentの悪化傾向',
+      available: abandonmentSignal !== null,
+      degraded: abandonmentSignal?.triggered ?? false,
+    },
+    {
+      key: 'batchSizeCorrelation',
+      label: '提案規模とドロップ率の相関',
+      available: dropCorrelation.batchSizeVsDropRateCorrelation !== null,
+      degraded:
+        (dropCorrelation.batchSizeVsDropRateCorrelation ?? 0) >=
+        IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
+    },
+  ];
+
+  const availableFacets = facets.filter((f) => f.available);
+  if (availableFacets.length === 0) return null;
+
+  const degradedCount = availableFacets.filter((f) => f.degraded).length;
+  const level: IdeationQualityDegradationLevel =
+    degradedCount >= IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD
+      ? 'critical'
+      : degradedCount > 0
+        ? 'watch'
+        : 'normal';
+
+  return {
+    level,
+    facets,
+    degradedCount,
+    availableCount: availableFacets.length,
+    criticalThreshold: IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
   };
 }
 

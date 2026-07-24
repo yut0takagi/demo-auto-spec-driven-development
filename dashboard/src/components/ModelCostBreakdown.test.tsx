@@ -128,6 +128,31 @@ describe('ModelCostBreakdown', () => {
     expect(rows[1].getAttribute('data-testid')).toBe('model-cost-row-small-model');
   });
 
+  it('plannerUsd がある run では Planner のラベルとセグメントを描画する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, plannerUsd: 0.2, totalUsd: 1.0 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-c' },
+      }),
+    ];
+    const { container } = render(<ModelCostBreakdown runs={runs} />);
+    expect(screen.getByText(/Planner: \$0\.20 \(20\.0%\)/)).toBeInTheDocument();
+    expect(container.querySelector('[data-testid="role-cost-segment-planner"]')).not.toBeNull();
+  });
+
+  it('plannerUsd が無い（0）run では Planner セグメントを描画しない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+        models: { builder: 'model-a', adversary: 'model-b', ideation: 'model-c' },
+      }),
+    ];
+    const { container } = render(<ModelCostBreakdown runs={runs} />);
+    expect(container.querySelector('[data-testid="role-cost-segment-planner"]')).toBeNull();
+  });
+
   it('failed run のコストも合算に含める（金は実際に消費されている）', () => {
     const runs = [
       makeRun({ iteration: 1, verdict: 'merged', cost: { builderUsd: 0.1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.1 } }),

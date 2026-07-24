@@ -1,0 +1,44 @@
+{
+  "id": "20260724T100403Z-195",
+  "iteration": 123,
+  "issue": {
+    "number": 195,
+    "title": "Ideation 提案の品質低下を早期検知する多面体パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/195-ideation",
+  "startedAt": "2026-07-24T10:04:03Z",
+  "finishedAt": "2026-07-24T10:08:34Z",
+  "durationSec": 271,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation提案品質低下を4つの面（ドロップ連続・リードタイム悪化・早期abandonment・規模とドロップ率の相関）から多面的に判定し、複数面の同時悪化で警戒レベルを引き上げるロジックを正確に実装。テストが仕様の key な前提（面の独立判定・利用可能な面のカウント・critical閾値）をすべてカバーし、既存シグナル関数との統合も正当。実装要件を正しく満たしており、既存の挙動を壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.454648,
+    "adversaryUsd": 0.206456,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 0.661104
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
