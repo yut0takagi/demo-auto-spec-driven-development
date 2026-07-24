@@ -339,6 +339,36 @@ class TestNoWork:
         assert gh.actions == []
 
 
+class TestFairOrdering:
+    """給油が新しい雑務 Issue を注ぎ続けても、先に頼まれた古い Issue が餓死しないこと。
+
+    素朴な `ready[0]`（gh 既定＝新しい順の先頭）だと最新 Issue を毎回拾い、古い依頼
+    （例: 複数ページ化 #176）が後続の給油で永久に後回しになる。反復は最古（最小番号）を
+    拾うべき。abandon 時に loop:ready が剥がれる（列から抜ける）ので詰まった Issue の
+    無限再選択は起きない。
+    """
+
+    def test_picks_oldest_ready_issue_even_when_listed_newest_first(self, tmp_path):
+        gh = FakeGh(issues=[
+            Issue(number=181, title="new filler", labels=["loop:ready"]),
+            Issue(number=180, title="new filler two", labels=["loop:ready"]),
+            Issue(number=176, title="user requested feature", labels=["loop:ready"]),
+        ])
+        # proposals=() で給油が新規 Issue を作らないようにし、順序だけを検証する。
+        result = run(tmp_path, gh=gh, proposals=())
+        assert result.issue_number == 176
+        assert "branch:loop/176-user-requested-feature" in gh.actions
+
+    def test_newly_refueled_issue_does_not_jump_ahead_of_existing_backlog(self, tmp_path):
+        # 低水位で給油が走り新しい Issue(#901) が積まれても、既存の最古 #10 を先に拾う。
+        gh = FakeGh(issues=[
+            Issue(number=50, title="mid", labels=["loop:ready"]),
+            Issue(number=10, title="oldest", labels=["loop:ready"]),
+        ])
+        result = run(tmp_path, gh=gh, proposals=("fresh idea",))
+        assert result.issue_number == 10
+
+
 class TestDryRun:
     def test_dry_run_never_merges(self, tmp_path):
         gh = FakeGh()
