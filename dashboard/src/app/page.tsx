@@ -30,6 +30,7 @@ import { GateReasonConsecutiveFailureChaosPanel } from '@/components/GateReasonC
 import { GateReasonUnificationPanel } from '@/components/GateReasonUnificationPanel';
 import { AdversaryReasonModelPanel } from '@/components/AdversaryReasonModelPanel';
 import { AbandonedIterationsPanel } from '@/components/AbandonedIterationsPanel';
+import { AbandonedReasonBreakdownPanel } from '@/components/AbandonedReasonBreakdownPanel';
 import { ApprovedButBuilderFailedPanel } from '@/components/ApprovedButBuilderFailedPanel';
 import { PausedDryRunSurvivalPanel } from '@/components/PausedDryRunSurvivalPanel';
 import { GatePauseAbandonmentPanel } from '@/components/GatePauseAbandonmentPanel';
@@ -56,6 +57,7 @@ import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratifica
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
+import { BuilderVolumeApprovalCouplingPanel } from '@/components/BuilderVolumeApprovalCouplingPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
@@ -134,6 +136,7 @@ export default function Home() {
         <GateReasonUnificationPanel runs={runs} />
         <AdversaryReasonModelPanel runs={runs} />
         <AbandonedIterationsPanel runs={runs} />
+        <AbandonedReasonBreakdownPanel runs={runs} />
         <ApprovedButBuilderFailedPanel runs={runs} />
         <PausedDryRunSurvivalPanel runs={runs} />
         <GatePauseAbandonmentPanel runs={runs} />
@@ -148,6 +151,7 @@ export default function Home() {
         <VerdictTransitionPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
+        <BuilderVolumeApprovalCouplingPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <ModelConfidenceWeightedScorePanel runs={runs} />
         <ModelEfficiencyPanel runs={runs} />

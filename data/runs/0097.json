@@ -1,0 +1,41 @@
+{
+  "id": "20260724T040106Z-161",
+  "iteration": 97,
+  "issue": {
+    "number": 161,
+    "title": "Revise 打ち止めの原因分類パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/161-revise",
+  "startedAt": "2026-07-24T04:01:06Z",
+  "finishedAt": "2026-07-24T04:10:49Z",
+  "durationSec": 583,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 168,
+  "adversary": {
+    "approved": true,
+    "summary": "abandonedのみを対象とした原因分類パネルが正確に実装され、境界値・filteredのこり・UI表示・E2E統合まで多層的に検証されている。README仕様との一致も確認。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 269,
+  "cost": {
+    "builderUsd": 3.120232,
+    "adversaryUsd": 0.073684,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.193916
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

@@ -2830,6 +2830,117 @@ export function e2eFailureDiffSizeCorrelation(runs: RunRecord[]): E2eDiffSizeCor
   };
 }
 
+/** カップリング判定に使う直近/直前ウィンドウの反復数（既定値）。 */
+export const BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW = 3;
+/** 直近/直前ウィンドウの平均変更行数の変化率(%)がこの値未満なら生成量は「変化なし」として扱う。 */
+export const BUILDER_VOLUME_APPROVAL_COUPLING_VOLUME_FLAT_THRESHOLD_PCT = 5;
+/** 直近/直前ウィンドウの承認率の変化幅(0..1スケール)がこの値未満なら承認率は「変化なし」として扱う。 */
+export const BUILDER_VOLUME_APPROVAL_COUPLING_APPROVAL_FLAT_THRESHOLD = 0.05;
+
+/**
+ * direct:  生成量(changedLines)と承認率が直近/直前ウィンドウ間で同方向に動いている（両方増加/両方減少）。
+ * inverse: 生成量と承認率が逆方向に動いている（例: 生成量が増えるほど承認率が下がる、またはその逆）。
+ * flat:    生成量・承認率のどちらか（または両方）の変化が閾値未満で、方向を判定するには小さすぎる。
+ */
+export type BuilderVolumeApprovalCouplingDirection = 'direct' | 'inverse' | 'flat';
+
+export interface BuilderVolumeApprovalCouplingSignal {
+  /** 相関係数算出に使った verify到達 run 数 */
+  sampleSize: number;
+  /**
+   * verify到達run全体を対象にした changedLines と adversary.approved(1/0) の
+   * Pearson相関係数(-1..1)。どちらかの分散が0（全run同じ変更行数、または全run同じ
+   * 承認結果）だと定義できないためnull。
+   */
+  correlationCoefficient: number | null;
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  recentAvgChangedLines: number;
+  previousAvgChangedLines: number;
+  /** 0..1 */
+  recentApprovalRate: number;
+  /** 0..1 */
+  previousApprovalRate: number;
+  /** (recentAvgChangedLines - previousAvgChangedLines) / previousAvgChangedLines * 100。previousAvgChangedLinesが0ならnull */
+  volumeDeltaPct: number | null;
+  /** recentApprovalRate - previousApprovalRate（0..1スケール） */
+  approvalRateDelta: number;
+  direction: BuilderVolumeApprovalCouplingDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function builderVolumeApprovalCouplingDirection(
+  volumeDeltaPct: number | null,
+  approvalRateDelta: number,
+): BuilderVolumeApprovalCouplingDirection {
+  if (volumeDeltaPct === null) return 'flat';
+  if (
+    Math.abs(volumeDeltaPct) < BUILDER_VOLUME_APPROVAL_COUPLING_VOLUME_FLAT_THRESHOLD_PCT ||
+    Math.abs(approvalRateDelta) < BUILDER_VOLUME_APPROVAL_COUPLING_APPROVAL_FLAT_THRESHOLD
+  ) {
+    return 'flat';
+  }
+  return Math.sign(volumeDeltaPct) === Math.sign(approvalRateDelta) ? 'direct' : 'inverse';
+}
+
+/**
+ * Builderが1反復あたりに生成するコード量(changedLines)と、その反復がAdversaryに承認
+ * された割合(承認率)のカップリング（連動）分析。
+ * e2eFailureDiffSizeCorrelation が changedLines と2値結果(e2e成功/失敗)の相関を反復
+ * 横断で1つの係数に集約するのに対し、こちらは cycleTimeTrendSignal と同じローリング窓
+ * （直近window反復 vs 直前window反復）で「生成量が増えている時期に承認率も一緒に
+ * 動いているか」を時系列の方向として捉える。あわせて関係の強さの目安として、
+ * verify到達run全体でのPearson相関係数（changedLinesとadversary.approvedの0/1）も返す。
+ * reachedVerifyで絞るのは他のchangedLines系関数と同じ理由（failed runはchangedLinesが
+ * 測定されなかったsentinel 0のため）。比較対象となる「直前」ウィンドウが取れない
+ * （run が1件以下）場合はnull。
+ */
+export function builderVolumeApprovalCoupling(runs: RunRecord[]): BuilderVolumeApprovalCouplingSignal | null {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  if (completed.length < 2) return null;
+
+  const xs = completed.map((r) => r.changedLines);
+  const ys = completed.map((r) => (r.adversary.approved ? 1 : 0));
+  const correlationCoefficient = pearsonCorrelation(xs, ys);
+
+  const windowSize = Math.min(BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW, Math.floor(completed.length / 2));
+  const recent = completed.slice(completed.length - windowSize);
+  const previous = completed.slice(completed.length - windowSize * 2, completed.length - windowSize);
+
+  const approvalRateOf = (group: RunRecord[]) => group.filter((r) => r.adversary.approved).length / group.length;
+
+  const recentAvgChangedLines = mean(recent.map((r) => r.changedLines));
+  const previousAvgChangedLines = mean(previous.map((r) => r.changedLines));
+  const recentApprovalRate = approvalRateOf(recent);
+  const previousApprovalRate = approvalRateOf(previous);
+  const volumeDeltaPct =
+    previousAvgChangedLines === 0
+      ? null
+      : ((recentAvgChangedLines - previousAvgChangedLines) / previousAvgChangedLines) * 100;
+  const approvalRateDelta = recentApprovalRate - previousApprovalRate;
+
+  return {
+    sampleSize: completed.length,
+    correlationCoefficient,
+    windowSize,
+    partial: windowSize < BUILDER_VOLUME_APPROVAL_COUPLING_WINDOW,
+    recentAvgChangedLines,
+    previousAvgChangedLines,
+    recentApprovalRate,
+    previousApprovalRate,
+    volumeDeltaPct,
+    approvalRateDelta,
+    direction: builderVolumeApprovalCouplingDirection(volumeDeltaPct, approvalRateDelta),
+    recentIterations: recent.map((r) => r.iteration),
+    previousIterations: previous.map((r) => r.iteration),
+  };
+}
+
 /**
  * Adversary承認コメント(adversary.summary)の実効文字数。表示上意味を持たない前後の
  * 空白は VerdictSummaryBubble の bubbleText と同じく trim してから数える。
@@ -3658,6 +3769,19 @@ export function abandonedIterationDetails(runs: RunRecord[]): AbandonedIteration
       durationSec: r.durationSec,
       builderModel: r.models.builder,
     }));
+}
+
+/**
+ * abandoned（打ち止め）反復だけに絞り込んだゲート不通過理由のカテゴリ内訳。
+ * abandonedSummary.topGateReasonCategory は最多カテゴリ1件しか持たないため、
+ * 「abandonedの中でカテゴリがどう分布しているか」（例: adversary未承認が過半数を
+ * 占めるのか、複数原因に分散しているのか）は表現できない。こちらは
+ * gateReasonBreakdown をabandonedのみに絞ったrun集合へ適用し、全カテゴリの内訳
+ * （count降順、他は評価順で安定）をそのまま返す。gateReasonBreakdown自身が空配列に
+ * 対して空配列を返すため、abandonedが0件でも空配列になる。
+ */
+export function abandonedReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummary[] {
+  return gateReasonBreakdown(runs.filter((r) => r.verdict === 'abandoned'));
 }
 
 /**
