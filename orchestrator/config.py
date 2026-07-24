@@ -26,7 +26,8 @@ class Config:
     per_iter_cost_budget_usd: float = 0.5
     ideation_max_issues: int = 3
     #: ready がこの件数未満なら反復先頭で ideation を先回り実行して補充する（枯れ防止）。
-    ideation_low_water: int = 2
+    #: 大きいほど常時のバックログ在庫が厚くなる（見やすさ・ideation 失敗耐性が上がる）。
+    ideation_low_water: int = 6
     builder_model: str = "claude-sonnet-5"
     adversary_model: str = "claude-haiku-4-5"
     ideation_model: str = "claude-haiku-4-5"
@@ -50,7 +51,7 @@ class Config:
             daily_cost_budget_usd=float(env.get("DAILY_COST_BUDGET_USD", 5.0)),
             per_iter_cost_budget_usd=float(env.get("PER_ITER_COST_BUDGET_USD", 0.5)),
             ideation_max_issues=int(env.get("IDEATION_MAX_ISSUES", 3)),
-            ideation_low_water=int(env.get("IDEATION_LOW_WATER", 2)),
+            ideation_low_water=int(env.get("IDEATION_LOW_WATER", 6)),
             builder_model=env.get("BUILDER_MODEL", "claude-sonnet-5"),
             adversary_model=env.get("ADVERSARY_MODEL", "claude-haiku-4-5"),
             ideation_model=env.get("IDEATION_MODEL", "claude-haiku-4-5"),

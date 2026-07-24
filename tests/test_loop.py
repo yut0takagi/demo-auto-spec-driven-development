@@ -271,10 +271,12 @@ class TestSelfRefuel:
         assert result.status == "merged"
 
     def test_no_refuel_when_backlog_at_or_above_low_water(self, tmp_path):
-        # ready が閾値(2)以上なら給油しない。merge 後 ideation も廃止したので生成は 0 件。
+        # ready が閾値以上なら給油しない。merge 後 ideation も廃止したので生成は 0 件。
+        # 閾値のデフォルト値に依存しないよう、ちょうど low_water 件の ready を用意する。
+        cfg = Config.from_env({})
         gh = FakeGh(issues=[
-            Issue(number=1, title="a", labels=["loop:ready"]),
-            Issue(number=2, title="b", labels=["loop:ready"]),
+            Issue(number=i, title=f"t{i}", labels=["loop:ready"])
+            for i in range(1, cfg.ideation_low_water + 1)
         ])
         calls = {"n": 0}
 
@@ -282,7 +284,7 @@ class TestSelfRefuel:
             calls["n"] += 1
             return ([{"title": "x", "body": "b"}], 0.01)
 
-        run(tmp_path, gh=gh, ideation_runner=ideation)
+        run(tmp_path, gh=gh, cfg=cfg, ideation_runner=ideation)
         assert calls["n"] == 0
         assert gh.created_issues == []
 
