@@ -2029,6 +2029,73 @@ export function reviseCyclesByModel(runs: RunRecord[]): ModelReviseCyclesSummary
     });
 }
 
+export interface ModelReviseStopPatternSummary {
+  model: string;
+  /** この model が builder として使われ、かつ verify に到達した反復数 */
+  count: number;
+  /** adversary が approve し、revise 上限を使い切る前に打ち止めた件数（early-exit） */
+  earlyExitCount: number;
+  /** revise 上限まで使い切っても承認されないまま打ち止めた件数（枯渇） */
+  exhaustedCount: number;
+  /** exhaustedCount / count。0件のときは0 */
+  exhaustionRate: number;
+  /** early-exit した反復の平均revise回数 */
+  earlyExitMeanReviseCycles: number;
+  /** 枯渇した反復の平均revise回数 */
+  exhaustedMeanReviseCycles: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * Builder に使われたモデル別に、revise ループがどう打ち止まったかを分類する。
+ * round.py の retry-to-comply ループは (verify・e2e・adversary が全て通って承認された)
+ * か (revise 上限 max_revise_cycles を使い切った) のいずれかでしか止まらないため、
+ * `adversary.approved` の真偽だけで「早期に承認されて止まった(early-exit)」か
+ * 「承認されないまま上限を使い切って止まった(枯渇)」かを一意に判定できる
+ * （reachedVerify を通した母集団のみ。failed run は打ち止め理由が「途中クラッシュ」で
+ * 意味が異なるため除外する）。枯渇率(exhaustionRate)の降順で、粘っても承認されにくい
+ * モデルから並べる。
+ */
+export function reviseStopPatternByModel(runs: RunRecord[]): ModelReviseStopPatternSummary[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const byModel = new Map<string, { early: number[]; exhausted: number[]; iterations: number[] }>();
+
+  for (const run of completed) {
+    const model = run.models.builder;
+    let entry = byModel.get(model);
+    if (!entry) {
+      entry = { early: [], exhausted: [], iterations: [] };
+      byModel.set(model, entry);
+    }
+    if (run.adversary.approved) {
+      entry.early.push(run.reviseCycles);
+    } else {
+      entry.exhausted.push(run.reviseCycles);
+    }
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byModel.entries()]
+    .map(([model, entry]) => {
+      const count = entry.early.length + entry.exhausted.length;
+      return {
+        model,
+        count,
+        earlyExitCount: entry.early.length,
+        exhaustedCount: entry.exhausted.length,
+        exhaustionRate: count === 0 ? 0 : entry.exhausted.length / count,
+        earlyExitMeanReviseCycles: mean(entry.early),
+        exhaustedMeanReviseCycles: mean(entry.exhausted),
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => {
+      if (b.exhaustionRate !== a.exhaustionRate) return b.exhaustionRate - a.exhaustionRate;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 export interface VerdictReviseCyclesSummary {
   verdict: Verdict;
   /** この verdict に該当した反復数 */
