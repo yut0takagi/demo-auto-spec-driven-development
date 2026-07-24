@@ -3526,6 +3526,107 @@ export function ideationDropRateSignal(runs: RunRecord[]): IdeationDropRateSigna
   };
 }
 
+export interface IdeationBatchDropQuality {
+  /** ideation を実行し issue を提案した反復番号 */
+  iteration: number;
+  /** この反復が提案した issue 数（nextIssues.length） */
+  proposedCount: number;
+  /** 提案 issue 1件あたりのideationコスト(USD) = cost.ideationUsd / proposedCount */
+  costPerIssueUsd: number;
+  /** この反復が最初に提案した(createdByで重複排除した)issueのうち、猶予期間を過ぎて着手/ドロップが確定した件数 */
+  judgedCount: number;
+  /** judgedCountのうちドロップと判定された件数 */
+  droppedCount: number;
+  /** droppedCount / judgedCount。judgedCountが0ならnull（まだ判定できるissueが無いだけで、品質が低いわけではない） */
+  dropRate: number | null;
+}
+
+export interface IdeationProposalQualityDropCorrelation {
+  /** ideation を実行し、かつ1件以上提案した反復ごとの内訳。iteration昇順 */
+  batches: IdeationBatchDropQuality[];
+  /** 提案バッチ規模(proposedCount)とそのbatchのドロップ率のPearson相関係数(-1..1)。算出可能なbatchが2件未満ならnull */
+  batchSizeVsDropRateCorrelation: number | null;
+  /** 提案issue1件あたりコスト(単価)とそのbatchのドロップ率のPearson相関係数(-1..1) */
+  costPerIssueVsDropRateCorrelation: number | null;
+  /** 相関算出に使ったbatch数(dropRateがnullでないbatch数) */
+  sampleSize: number;
+}
+
+/**
+ * ideationCostQualityCorrelation が「着手された提案の承認率・マージ率」という着手後の
+ * 品質を見るのに対し、こちらは ideationDropRateSignal と同じ着手/ドロップ判定を反復
+ * (=1回にまとめて提案したbatch)単位に集計し、提案の「量」(proposedCount)や「単価」が
+ * そもそも拾われる(着手される)かどうか自体と関係しているかを相関で見る。issue番号の
+ * 重複排除は ideationDropRateSignal と同じ createdBy（最初の提案元）を使い、同じissueが
+ * 複数回再提案されても最初の提案元batchにのみ帰属させ二重計上を避ける。
+ */
+export function ideationProposalQualityDropCorrelation(runs: RunRecord[]): IdeationProposalQualityDropCorrelation {
+  const sorted = byIterationAsc(runs);
+  const proposingRuns = sorted.filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0);
+  if (proposingRuns.length === 0) {
+    return {
+      batches: [],
+      batchSizeVsDropRateCorrelation: null,
+      costPerIssueVsDropRateCorrelation: null,
+      sampleSize: 0,
+    };
+  }
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+
+  const latestIteration = sorted[sorted.length - 1].iteration;
+  const startPoints = new Map(ideationToStartLeadTimes(runs).map((p) => [p.issueNumber, p]));
+
+  const judgedByIteration = new Map<number, { judged: number; dropped: number }>();
+  for (const [issueNumber, created] of createdBy.entries()) {
+    let entry = judgedByIteration.get(created.iteration);
+    if (!entry) {
+      entry = { judged: 0, dropped: 0 };
+      judgedByIteration.set(created.iteration, entry);
+    }
+    if (startPoints.has(issueNumber)) {
+      entry.judged++;
+      continue;
+    }
+    const age = latestIteration - created.iteration;
+    if (age < IDEATION_DROP_STALENESS_ITERATIONS) continue;
+    entry.judged++;
+    entry.dropped++;
+  }
+
+  const batches: IdeationBatchDropQuality[] = proposingRuns.map((r) => {
+    const entry = judgedByIteration.get(r.iteration) ?? { judged: 0, dropped: 0 };
+    return {
+      iteration: r.iteration,
+      proposedCount: r.nextIssues.length,
+      costPerIssueUsd: r.cost.ideationUsd / r.nextIssues.length,
+      judgedCount: entry.judged,
+      droppedCount: entry.dropped,
+      dropRate: entry.judged === 0 ? null : entry.dropped / entry.judged,
+    };
+  });
+
+  const samples = batches.filter((b) => b.dropRate !== null);
+
+  return {
+    batches,
+    batchSizeVsDropRateCorrelation: pearsonCorrelation(
+      samples.map((b) => b.proposedCount),
+      samples.map((b) => b.dropRate as number),
+    ),
+    costPerIssueVsDropRateCorrelation: pearsonCorrelation(
+      samples.map((b) => b.costPerIssueUsd),
+      samples.map((b) => b.dropRate as number),
+    ),
+    sampleSize: samples.length,
+  };
+}
+
 /**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で
@@ -3782,6 +3883,53 @@ export function abandonedIterationDetails(runs: RunRecord[]): AbandonedIteration
  */
 export function abandonedReasonBreakdown(runs: RunRecord[]): GateReasonCategorySummary[] {
   return gateReasonBreakdown(runs.filter((r) => r.verdict === 'abandoned'));
+}
+
+/** abandonedSharePct と overallSharePct の差（ポイント）がこの値以上なら偏りありと判定する。 */
+export const ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT = 10;
+
+export interface AbandonedReasonOverrepresentation extends GateReasonCategorySummary {
+  /** このカテゴリが abandoned 内訳全体に占める割合(%) */
+  abandonedSharePct: number;
+  /** このカテゴリが「gateReasonsを持つ全反復」の内訳全体に占める割合(%)。abandonedもこの母集団に含まれる */
+  overallSharePct: number;
+  /** abandonedSharePct - overallSharePct（パーセントポイント） */
+  deltaPct: number;
+  /** deltaPct が閾値を超えて偏っているかどうか */
+  signal: 'overrepresented' | 'underrepresented' | 'neutral';
+}
+
+/**
+ * abandonedReasonBreakdown が「abandonedの中でカテゴリがどう分布しているか」しか
+ * 示さないのに対し、こちらは各カテゴリの abandoned内での占有率を、gateReasons を
+ * 持つ全反復（abandoned以外のfailed/needs-human等も含む母集団）での占有率と比較し、
+ * abandonedで相対的に突出している原因（例: 他の非マージ類型では稀だが abandoned では
+ * 過半数を占める、等）を検出する。「原因カテゴリの分布」自体は abandonedReasonBreakdown
+ * と同じ計算結果を使い、そこに相対比較の軸を1つ足すだけなので、カテゴリの集合・count・
+ * iterations・examples はそのまま引き継ぐ（GateReasonCategorySummary を拡張）。
+ * abandoned が0件なら空配列を返す（abandonedReasonBreakdown が空配列を返すため）。
+ */
+export function abandonedReasonOverrepresentation(runs: RunRecord[]): AbandonedReasonOverrepresentation[] {
+  const abandonedBreakdown = abandonedReasonBreakdown(runs);
+  if (abandonedBreakdown.length === 0) return [];
+
+  const abandonedTotal = abandonedBreakdown.reduce((sum, b) => sum + b.count, 0);
+  const overallBreakdown = gateReasonBreakdown(runs);
+  const overallTotal = overallBreakdown.reduce((sum, b) => sum + b.count, 0);
+  const overallCountByCategory = new Map(overallBreakdown.map((b) => [b.category, b.count]));
+
+  return abandonedBreakdown.map((b) => {
+    const abandonedSharePct = (b.count / abandonedTotal) * 100;
+    const overallSharePct = overallTotal > 0 ? ((overallCountByCategory.get(b.category) ?? 0) / overallTotal) * 100 : 0;
+    const deltaPct = abandonedSharePct - overallSharePct;
+    const signal: AbandonedReasonOverrepresentation['signal'] =
+      deltaPct >= ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT
+        ? 'overrepresented'
+        : deltaPct <= -ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT
+          ? 'underrepresented'
+          : 'neutral';
+    return { ...b, abandonedSharePct, overallSharePct, deltaPct, signal };
+  });
 }
 
 /**

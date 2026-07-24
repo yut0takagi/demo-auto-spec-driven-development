@@ -88,4 +88,49 @@ describe('AbandonedReasonBreakdownPanel', () => {
     expect(rows[0].getAttribute('data-testid')).toBe('abandoned-reason-row-adversaryNotApproved');
     expect(rows[1].getAttribute('data-testid')).toBe('abandoned-reason-row-noChanges');
   });
+
+  it('abandonedで全体より突出して多いカテゴリにoverrepresentedバッジとサマリー文を表示し、そうでないカテゴリはunderrepresented/neutralを表示する', () => {
+    const runs = [
+      // abandoned: adversaryNotApproved 1件(50%) / crashed 1件(50%)
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      // failed側にcrashedを8件足す -> 全体10件中 crashedが9件(90%)、adversaryNotApprovedが1件(10%)
+      ...Array.from({ length: 8 }, (_, i) =>
+        makeRun({ iteration: 3 + i, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      ),
+    ];
+    const { container } = render(<AbandonedReasonBreakdownPanel runs={runs} />);
+
+    // adversaryNotApproved: abandoned内50% vs 全体10% -> +40pt で overrepresented
+    const adversarySignal = container.querySelector('[data-testid="abandoned-reason-signal-adversaryNotApproved"]');
+    expect(adversarySignal?.textContent).toBe('全体より突出 (+40.0pt)');
+
+    // crashed: abandoned内50% vs 全体90% -> -40pt で underrepresented
+    const crashedSignal = container.querySelector('[data-testid="abandoned-reason-signal-crashed"]');
+    expect(crashedSignal?.textContent).toBe('全体より少ない (-40.0pt)');
+
+    // 最も突出したカテゴリ(adversaryNotApproved)のサマリー文が表示される
+    const summary = container.querySelector('[data-testid="abandoned-reason-top-overrepresented"]');
+    expect(summary?.textContent).toContain('adversary未承認');
+    expect(summary?.textContent).toContain('+40.0pt');
+  });
+
+  it('abandonedしか無くgateReasonsを持つ他反復が無ければ、全カテゴリがneutralでサマリー文は表示されない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const { container } = render(<AbandonedReasonBreakdownPanel runs={runs} />);
+
+    const signals = Array.from(container.querySelectorAll('[data-testid^="abandoned-reason-signal-"]'));
+    expect(signals).toHaveLength(2);
+    for (const s of signals) {
+      expect(s.textContent).toContain('全体と同程度 (+0.0pt)');
+    }
+    expect(container.querySelector('[data-testid="abandoned-reason-top-overrepresented"]')).toBeNull();
+  });
 });

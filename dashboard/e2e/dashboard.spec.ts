@@ -40,6 +40,7 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   abandonedReasonBreakdown,
+  abandonedReasonOverrepresentation,
   adversaryApprovalByReasonAndModel,
   pausedDryRunSummary,
   pausedDryRunDetails,
@@ -51,6 +52,7 @@ import {
   ideationToStartLeadTimeTrendSignal,
   ideationStartSuccessSummary,
   ideationDropRateSignal,
+  ideationProposalQualityDropCorrelation,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   verdictTransitions,
@@ -1409,6 +1411,50 @@ test('Issue提案→初着手のドロップレート検知パネルが実デー
   expect(body).not.toContain('undefined');
 });
 
+test('Ideation提案品質（規模・単価）とドロップ率の関連分析パネルが実データから導出したbatch内訳・相関係数を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = ideationProposalQualityDropCorrelation(runs);
+  expect(
+    stats.batches.length,
+    'data/runs に ideation が提案を行った反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-proposal-quality-drop-panel');
+  await expect(panel).toBeVisible();
+
+  const batchSizeEl = page.getByTestId('ideation-proposal-quality-drop-correlation-batchsize');
+  const costEl = page.getByTestId('ideation-proposal-quality-drop-correlation-cost');
+  if (stats.sampleSize < 2) {
+    // 判定確定済み(dropRateがnullでない)batchが2件未満なら、相関はどちらも算出不可のはず
+    await expect(batchSizeEl).toHaveText('算出不可');
+    await expect(costEl).toHaveText('算出不可');
+  } else {
+    expect(stats.batchSizeVsDropRateCorrelation).not.toBeNull();
+    expect(stats.costPerIssueVsDropRateCorrelation).not.toBeNull();
+    await expect(batchSizeEl).toHaveText(`r = ${stats.batchSizeVsDropRateCorrelation!.toFixed(2)}`);
+    await expect(costEl).toHaveText(`r = ${stats.costPerIssueVsDropRateCorrelation!.toFixed(2)}`);
+  }
+
+  // batch行は ideationProposalQualityDropCorrelation()（別の計算経路）と同数・同iterationで存在するはず
+  const rows = page.locator('[data-testid^="ideation-proposal-quality-drop-row-"]');
+  await expect(rows).toHaveCount(stats.batches.length);
+  const lastBatch = stats.batches[stats.batches.length - 1];
+  const lastRow = page.getByTestId(`ideation-proposal-quality-drop-row-${lastBatch.iteration}`);
+  await expect(lastRow).toContainText(`$${lastBatch.costPerIssueUsd.toFixed(3)}`);
+  await expect(lastRow).toContainText(
+    lastBatch.dropRate === null ? '未判定' : `${(lastBatch.dropRate * 100).toFixed(0)}%`,
+  );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
 test('E2E失敗とrevise回数の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
   await page.goto('/');
 
@@ -1855,6 +1901,30 @@ test('打ち止め（abandoned）の原因分類パネルが実データから�
     for (const it of b.iterations) {
       expect(nonAbandonedIterations.has(it)).toBe(false);
     }
+  }
+
+  // 各行のoverrepresented/underrepresented/neutralバッジが abandonedReasonOverrepresentation（別の計算経路）と一致する
+  const overrep = abandonedReasonOverrepresentation(runs);
+  const signalLabel = { overrepresented: '全体より突出', underrepresented: '全体より少ない', neutral: '全体と同程度' };
+  for (const o of overrep) {
+    const sign = o.deltaPct >= 0 ? '+' : '';
+    const signalEl = page.getByTestId(`abandoned-reason-signal-${o.category}`);
+    await expect(signalEl).toHaveText(`${signalLabel[o.signal]} (${sign}${o.deltaPct.toFixed(1)}pt)`);
+  }
+
+  // 最も突出したカテゴリが存在する場合、そのカテゴリ名(行に表示されているのと同じラベル文字列)がサマリー文に含まれる
+  const topOverrepresented = overrep.filter((o) => o.signal === 'overrepresented').sort((a, b) => b.deltaPct - a.deltaPct)[0];
+  const summaryEl = page.getByTestId('abandoned-reason-top-overrepresented');
+  if (topOverrepresented) {
+    const topLabel = await page
+      .getByTestId(`abandoned-reason-row-${topOverrepresented.category}`)
+      .locator('span')
+      .first()
+      .textContent();
+    await expect(summaryEl).toBeVisible();
+    await expect(summaryEl).toContainText(topLabel!);
+  } else {
+    await expect(summaryEl).toHaveCount(0);
   }
 
   const body = await bodyTextExcludingFreeform(page);

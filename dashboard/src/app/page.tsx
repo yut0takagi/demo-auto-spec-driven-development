@@ -67,6 +67,7 @@ import { IssueLabelSuccessRatePanel } from '@/components/IssueLabelSuccessRatePa
 import { IdeationToStartLeadTimePanel } from '@/components/IdeationToStartLeadTimePanel';
 import { IdeationToStartLeadTimeDistributionPanel } from '@/components/IdeationToStartLeadTimeDistributionPanel';
 import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
+import { IdeationProposalQualityDropPanel } from '@/components/IdeationProposalQualityDropPanel';
 
 const REPO_URL =
   process.env.NEXT_PUBLIC_REPO_URL ??
@@ -123,6 +124,7 @@ export default function Home() {
         <IdeationToStartLeadTimePanel runs={runs} />
         <IdeationToStartLeadTimeDistributionPanel runs={runs} />
         <IdeationDropRatePanel runs={runs} />
+        <IdeationProposalQualityDropPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <GateReasonsPanel runs={runs} />
           <GateFailureTypesPanel runs={runs} />

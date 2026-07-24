@@ -67,6 +67,8 @@ import {
   ideationCostQualityCorrelation,
   abandonedSummary,
   abandonedReasonBreakdown,
+  abandonedReasonOverrepresentation,
+  ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT,
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
@@ -92,6 +94,7 @@ import {
   ideationDropRateSignal,
   IDEATION_DROP_STALENESS_ITERATIONS,
   IDEATION_DROP_RATE_STREAK_THRESHOLD,
+  ideationProposalQualityDropCorrelation,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES,
@@ -5363,6 +5366,87 @@ describe('ideationDropRateSignal', () => {
   });
 });
 
+describe('ideationProposalQualityDropCorrelation', () => {
+  it('runsが空なら batches 空・相関はnull・sampleSize 0（境界値）', () => {
+    const result = ideationProposalQualityDropCorrelation([]);
+    expect(result).toEqual({
+      batches: [],
+      batchSizeVsDropRateCorrelation: null,
+      costPerIssueVsDropRateCorrelation: null,
+      sampleSize: 0,
+    });
+  });
+
+  it('ideationUsd=0の反復、および提案0件（nextIssues空）の反復はどちらもbatchに含めない（境界値）', () => {
+    const noCost = [
+      makeRun({ iteration: 1, nextIssues: [10], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 } }),
+    ];
+    expect(ideationProposalQualityDropCorrelation(noCost).batches).toEqual([]);
+
+    const noProposal = [
+      makeRun({ iteration: 1, nextIssues: [], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(noProposal);
+    expect(result.batches).toEqual([]);
+    expect(result.sampleSize).toBe(0);
+  });
+
+  it('提案issueが全て猶予期間中(未判定)ならjudgedCount/droppedCountは0でdropRateはnull、相関もnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [10, 11], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+    expect(result.batches).toEqual([
+      { iteration: 1, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 0, droppedCount: 0, dropRate: null },
+    ]);
+    expect(result.batchSizeVsDropRateCorrelation).toBeNull();
+    expect(result.costPerIssueVsDropRateCorrelation).toBeNull();
+    expect(result.sampleSize).toBe(0);
+  });
+
+  it('提案元自身の自己参照issue、および後続batchでの再提案issueは、どちらも最初の提案元batchのみに帰属し二重計上しない（境界値）', () => {
+    const runs = [
+      // 10は自分自身のissue番号（自己参照）、50は後でbatch2に再提案される
+      makeRun({ iteration: 1, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10, 50], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      // 50 は iteration1 が既に提案済みのため、この反復の判定には帰属しない
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [50, 60], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      makeRun({ iteration: 2 + IDEATION_DROP_STALENESS_ITERATIONS, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+    const batch1 = result.batches.find((b) => b.iteration === 1);
+    const batch2 = result.batches.find((b) => b.iteration === 2);
+    // batch1: 10(自己参照)・50とも未着手→両方ドロップでjudgedCount=2
+    expect(batch1).toEqual({ iteration: 1, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 2, droppedCount: 2, dropRate: 1 });
+    // batch2.proposedCount(見た目の提案件数)は2件だが、50は既にbatch1に帰属しているため
+    // batch2のjudgedCount/droppedCountには60の1件分しか計上されない
+    expect(batch2).toEqual({ iteration: 2, proposedCount: 2, costPerIssueUsd: 0.01, judgedCount: 1, droppedCount: 1, dropRate: 1 });
+  });
+
+  it('提案規模が大きいbatchほど・単価が安いbatchほどドロップ率が高い場合、それぞれ正/負の相関係数を実際に算出する（部分一致に頼らない）', () => {
+    const staleIteration = 2 + IDEATION_DROP_STALENESS_ITERATIONS;
+    const runs = [
+      // batch1: issue10 の1件を提案。単価0.02。着手されドロップ0件→dropRate 0
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      // batch2: issue20,21 の2件を提案。単価0.01（batch1より安い）。両方ドロップ→dropRate 1
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [20, 21], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 } }),
+      makeRun({ iteration: 4, issue: { number: 10, title: 'started', labels: [] } }),
+      makeRun({ iteration: staleIteration, issue: { number: 999, title: 'filler', labels: [] } }),
+    ];
+    const result = ideationProposalQualityDropCorrelation(runs);
+
+    expect(result.batches.map((b) => [b.proposedCount, b.judgedCount, b.droppedCount, b.dropRate])).toEqual([
+      [1, 1, 0, 0],
+      [2, 2, 2, 1],
+    ]);
+    expect(result.batches[0].costPerIssueUsd).toBeCloseTo(0.02, 10);
+    expect(result.batches[1].costPerIssueUsd).toBeCloseTo(0.01, 10);
+    // 提案規模(1,2)とドロップ率(0,1)は増加、単価(0.02,0.01)は減少するので符号が逆になるはず
+    expect(result.batchSizeVsDropRateCorrelation).toBeCloseTo(1, 6);
+    expect(result.costPerIssueVsDropRateCorrelation).toBeCloseTo(-1, 6);
+    expect(result.sampleSize).toBe(2);
+  });
+});
+
 function proposeAndStart(
   proposeIteration: number,
   startIteration: number,
@@ -5632,6 +5716,93 @@ describe('abandonedReasonBreakdown', () => {
 
     // gateReasonBreakdown(runs) をそのまま使うと failed のカテゴリ(crashed)が混入してしまう
     expect(breakdown.some((b) => b.category === 'crashed')).toBe(false);
+  });
+});
+
+describe('abandonedReasonOverrepresentation', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(abandonedReasonOverrepresentation([])).toEqual([]);
+  });
+
+  it('abandonedが1件も無ければ空配列を返す（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', gateReasons: ['反復が例外で異常終了した: boom'] })];
+    expect(abandonedReasonOverrepresentation(runs)).toEqual([]);
+  });
+
+  it('abandoned以外にgateReasonsを持つ反復が無ければ、abandoned内の占有率=全体の占有率となりすべてneutral', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+      }),
+    ];
+    const result = abandonedReasonOverrepresentation(runs);
+    expect(result).toHaveLength(2);
+    for (const r of result) {
+      expect(r.deltaPct).toBeCloseTo(0, 5);
+      expect(r.signal).toBe('neutral');
+      expect(r.abandonedSharePct).toBeCloseTo(r.overallSharePct, 5);
+    }
+  });
+
+  it('abandonedで占有率が全体より閾値以上高いカテゴリはoverrepresented、低いカテゴリはunderrepresentedと判定する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['反復が例外で異常終了した: boom'] }),
+      ...Array.from({ length: 8 }, (_, i) =>
+        makeRun({
+          iteration: 3 + i,
+          verdict: 'failed',
+          gateReasons: ['反復が例外で異常終了した: boom'],
+        }),
+      ),
+    ];
+    // abandoned内: adversaryNotApproved 1件(50%) / crashed 1件(50%)
+    // 全体: adversaryNotApproved 1件(10%) / crashed 9件(90%)
+    const result = abandonedReasonOverrepresentation(runs);
+
+    const adversaryEntry = result.find((r) => r.category === 'adversaryNotApproved')!;
+    expect(adversaryEntry.abandonedSharePct).toBeCloseTo(50, 5);
+    expect(adversaryEntry.overallSharePct).toBeCloseTo(10, 5);
+    expect(adversaryEntry.deltaPct).toBeCloseTo(40, 5);
+    expect(adversaryEntry.signal).toBe('overrepresented');
+
+    const crashedEntry = result.find((r) => r.category === 'crashed')!;
+    expect(crashedEntry.abandonedSharePct).toBeCloseTo(50, 5);
+    expect(crashedEntry.overallSharePct).toBeCloseTo(90, 5);
+    expect(crashedEntry.deltaPct).toBeCloseTo(-40, 5);
+    expect(crashedEntry.signal).toBe('underrepresented');
+
+    // 母集団側の crashed の count(9件) が混ざらず、abandoned側の count(1件)のまま
+    expect(crashedEntry.count).toBe(1);
+    expect(crashedEntry.iterations).toEqual([2]);
+  });
+
+  it('deltaPctが閾値(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT)未満ならneutralと判定する', () => {
+    expect(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT).toBe(10);
+
+    const runs = [
+      // abandoned: adversaryNotApproved 6件 / changedLinesExceeded 4件 (60% / 40%)
+      ...Array.from({ length: 6 }, (_, i) =>
+        makeRun({ iteration: i + 1, verdict: 'abandoned', gateReasons: ['adversary が approve していない'] }),
+      ),
+      ...Array.from({ length: 4 }, (_, i) =>
+        makeRun({
+          iteration: 7 + i,
+          verdict: 'abandoned',
+          gateReasons: ['変更行数 500 が上限 400 を超えている'],
+        }),
+      ),
+      // failed側に adversaryNotApproved を1件だけ足す(全体: 7件/11件 ≈ 63.6% > abandoned内の60%)
+      // -> delta = 60 - 63.6... ≈ -3.6pt で閾値10未満なのでneutral
+      makeRun({ iteration: 11, verdict: 'failed', gateReasons: ['adversary が approve していない'] }),
+    ];
+    const result = abandonedReasonOverrepresentation(runs);
+    const adversaryEntry = result.find((r) => r.category === 'adversaryNotApproved')!;
+    expect(Math.abs(adversaryEntry.deltaPct)).toBeLessThan(ABANDONED_REASON_OVERREPRESENTATION_THRESHOLD_PT);
+    expect(adversaryEntry.signal).toBe('neutral');
   });
 });
 
