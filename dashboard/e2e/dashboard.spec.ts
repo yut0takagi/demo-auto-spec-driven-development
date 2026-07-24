@@ -47,6 +47,7 @@ import {
   pausedDryRunDetails,
   gatePauseSummary,
   gatePauseClassifications,
+  pausedDryRunResumeSummary,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -54,6 +55,7 @@ import {
   ideationStartSuccessSummary,
   ideationDropRateSignal,
   ideationProposalQualityDropCorrelation,
+  ideationEarlyAbandonmentSignal,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   verdictTransitions,
@@ -69,6 +71,7 @@ import {
   reviseCycleCostRecovery,
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
+  backlogLowWaterEta,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1601,6 +1604,91 @@ test('Ideation提案品質（規模・単価）とドロップ率の関連分析
   expect(body).not.toContain('undefined');
 });
 
+test('Ideation生成Issueの早期abandonment率パネルが実データから導出した率・trend・対象issueを表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationEarlyAbandonmentSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation起源issueの着手が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-early-abandonment-panel');
+  await expect(panel).toBeVisible();
+
+  // 率・件数は ideationEarlyAbandonmentSignal()（別の計算経路）と一致するはず
+  const ratePct = signal!.earlyAbandonmentRate * 100;
+  await expect(page.getByTestId('ideation-early-abandonment-value')).toHaveText(`${ratePct.toFixed(1)}%`);
+  await expect(page.getByTestId('ideation-early-abandonment-counts')).toContainText(
+    `着手 ${signal!.startedTotal}件中 ${signal!.earlyAbandonedCount}件が早期abandonment`,
+  );
+
+  const signalBlock = page.getByTestId('ideation-early-abandonment-signal');
+  await expect(signalBlock).toHaveAttribute('data-triggered', String(signal!.triggered));
+  await expect(page.getByTestId('ideation-early-abandonment-status')).toContainText(
+    signal!.triggered ? '発報' : '未発報',
+  );
+
+  // 直近10件（着手の新しい順）は個別に表示され、isEarlyAbandonmentがrose色で強調されるはず
+  const shown = [...signal!.runs].slice(Math.max(0, signal!.runs.length - 10)).reverse();
+  for (const r of shown) {
+    const row = page.getByTestId(`ideation-early-abandonment-issue-${r.issueNumber}`);
+    await expect(row).toBeVisible();
+    const verdictEl = page.getByTestId(`ideation-early-abandonment-verdict-${r.issueNumber}`);
+    await expect(verdictEl).toHaveText(r.verdict);
+    if (r.isEarlyAbandonment) {
+      expect(await verdictEl.getAttribute('class')).toContain('text-rose-400');
+    }
+  }
+
+  // 回帰防止（不変量）: 早期abandonmentと判定されたrunは必ずverdict===abandoned かつ
+  // reviseCycles <= maxReviseCycles
+  for (const r of signal!.runs.filter((x) => x.isEarlyAbandonment)) {
+    expect(r.verdict).toBe('abandoned');
+    expect(r.reviseCycles).toBeLessThanOrEqual(signal!.maxReviseCycles);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('バックログ枯渇予測パネルが実データから導出した残量・消費速度・ETAを表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const eta = backlogLowWaterEta(runs);
+  expect(eta, 'runsが1件以上あればbacklogLowWaterEtaはnullを返さないはず').not.toBeNull();
+
+  const panel = page.getByTestId('backlog-low-water-eta-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-below-low-water', String(eta!.belowLowWater));
+
+  // 残量・ETAは backlogLowWaterEta()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('backlog-low-water-eta-balance')).toHaveText(String(eta!.currentBalance));
+  await expect(page.getByTestId('backlog-low-water-eta-value')).toHaveText(
+    eta!.etaIterations === null ? '—' : String(eta!.etaIterations),
+  );
+
+  const status = page.getByTestId('backlog-low-water-eta-status');
+  if (eta!.belowLowWater) {
+    await expect(status).toContainText('低水位に到達済み');
+  } else if (eta!.etaIterations === null) {
+    await expect(status).toContainText('減少傾向なし');
+  }
+
+  await expect(panel).toContainText(`対象iteration: ${eta!.iterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
 test('E2E失敗とrevise回数の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
   await page.goto('/revise');
 
@@ -2277,6 +2365,43 @@ test('Gate通過後Pauseパターン分類・離脱検知パネルが実デー�
   const nonPausedIterations = runs.filter((r) => r.verdict !== 'paused').map((r) => r.iteration);
   for (const it of renderedIterations) {
     expect(nonPausedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ドライラン・一時停止の再開成功率トレンドパネルが実データから導出したサマリー・成功率推移を表示する', async ({ page }) => {
+  await page.goto('/gate');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = pausedDryRunResumeSummary(runs);
+  expect(
+    summary.totalCount,
+    'data/runs に paused/dry-run な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('paused-dryrun-resume-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは pausedDryRunResumeSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('paused-dryrun-resume-summary')).toHaveText(
+    `${summary.totalCount}件中${summary.resumedCount}件再開・成功${summary.resumeSucceededCount}件`,
+  );
+
+  if (summary.resumedCount === 0) {
+    // 実データにまだ再開されたpaused/dry-runが無い場合は「未再開」経路になる
+    await expect(page.getByTestId('paused-dryrun-resume-no-trend')).toContainText(
+      `未再開${summary.notResumedCount}件`,
+    );
+    await expect(panel.locator('svg')).toHaveCount(0);
+  } else {
+    await expect(page.getByTestId('paused-dryrun-resume-rate')).toHaveText(
+      `${summary.resumeSuccessRatePct.toFixed(1)}%`,
+    );
+    await expect(panel.locator('svg')).toHaveCount(1);
   }
 
   const body = await bodyTextExcludingFreeform(page);

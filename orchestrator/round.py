@@ -21,12 +21,15 @@ BUILDER_PROMPT_TEMPLATE = """\
 
 ## タスク
 {task}
+{plan_block}
+## 進め方（テスト駆動）
+- まず失敗するテストを書き、失敗を確認してから最小実装で通す（見せかけのテスト・実装は禁止）
+- テストは振る舞いを実質的に検証する（通すためだけのテストは禁止）
 
 ## 必ず守ること
 - 変更は `dashboard/` と `data/` の中だけに限る。`.github/`, `orchestrator/`, `tests/` は絶対に変更しない
-- 実装だけでなく、その振る舞いを**実質的に検証する**テストを書く（通すためだけのテストは禁止）
 - `cd dashboard && npm run verify` と `npm run test:e2e` が緑になること
-- 変更は最小限に保つ（3000 行以内）
+- 変更は必要最小限に保つ
 """
 
 REVISE_PROMPT_TEMPLATE = """\
@@ -47,6 +50,20 @@ REVISE_PROMPT_TEMPLATE = """\
 _UNREVIEWED = "verify/e2e が未通過のためレビュー未実施"
 
 
+def _builder_model(cycles: int, cfg: Config, plan: str) -> str:
+    """revise が escalate_after_cycles に達したら上位モデルへ昇格する。
+    ただし plan フェーズが有効（plan 非空）なときだけ昇格する。plan 無し（現行ライブ経路）は
+    従来どおり builder_model のまま — 無人ループのモデル/コストを不用意に変えない。"""
+    if plan and cycles >= cfg.escalate_after_cycles:
+        return cfg.builder_escalation_model
+    return cfg.builder_model
+
+
+def _builder_prompt(task: str, plan: str) -> str:
+    block = f"\n## 実装計画（これに沿って進める）\n{plan}\n" if plan else "\n"
+    return BUILDER_PROMPT_TEMPLATE.format(task=task, plan_block=block)
+
+
 @dataclass(frozen=True)
 class RoundOutcome:
     adversary: AdversaryVerdict
@@ -55,6 +72,7 @@ class RoundOutcome:
     e2e_passed: bool
     builder_cost_usd: float
     adversary_cost_usd: float
+    builder_model_used: str = ""
 
 
 def _tail(result: CommandResult | None, limit: int = 2000) -> str:
@@ -98,14 +116,16 @@ def run_native_round(
     cwd: str,
     cfg: Config,
     runner: Runner = real_runner,
+    plan: str = "",
 ) -> RoundOutcome:
     dashboard = f"{cwd}/dashboard"
     builder_cost = 0.0
     adversary_cost = 0.0
 
+    model_used = _builder_model(0, cfg, plan)
     work = run_agent(
-        BUILDER_PROMPT_TEMPLATE.format(task=task),
-        model=cfg.builder_model, cwd=cwd, runner=runner,
+        _builder_prompt(task, plan),
+        model=model_used, cwd=cwd, runner=runner,
     )
     builder_cost += work.cost_usd
 
@@ -143,9 +163,10 @@ def run_native_round(
             verify_ok=verify_ok, verify_res=verify_res,
             e2e_ok=e2e_ok, e2e_res=e2e_res, verdict=verdict,
         )
+        model_used = _builder_model(cycles, cfg, plan)
         revise = run_agent(
             REVISE_PROMPT_TEMPLATE.format(task=task, feedback=feedback),
-            model=cfg.builder_model, cwd=cwd, runner=runner,
+            model=model_used, cwd=cwd, runner=runner,
         )
         builder_cost += revise.cost_usd
 
@@ -156,4 +177,5 @@ def run_native_round(
         e2e_passed=e2e_ok,
         builder_cost_usd=round(builder_cost, 6),
         adversary_cost_usd=round(adversary_cost, 6),
+        builder_model_used=model_used,
     )

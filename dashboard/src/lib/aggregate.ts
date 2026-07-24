@@ -3896,6 +3896,146 @@ export function ideationProposalQualityDropCorrelation(runs: RunRecord[]): Ideat
   };
 }
 
+/** 着手した反復の revise 回数がこれ以下で abandoned になった場合を「早期abandonment」とみなす。0回=一度もreviseせず即見送り。 */
+export const EARLY_ABANDONMENT_MAX_REVISE_CYCLES = 0;
+/** トレンド判定に使う直近/直前ウィンドウの着手件数。他のTrendSignal系と揃えている。 */
+export const EARLY_ABANDONMENT_TREND_WINDOW = 3;
+/** 直近ウィンドウの早期abandonment率が直前ウィンドウよりこのpt以上変化して初めて増加/減少と判定する。 */
+export const EARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT = 5;
+
+export type EarlyAbandonmentTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface IdeationEarlyAbandonmentRun {
+  issueNumber: number;
+  /** issue を提案した(nextIssuesに含めた)反復番号 */
+  proposedIteration: number;
+  /** issue.number として実際に着手された反復番号 */
+  startIteration: number;
+  verdict: Verdict;
+  reviseCycles: number;
+  durationSec: number;
+  /** verdict === 'abandoned' かつ reviseCycles <= EARLY_ABANDONMENT_MAX_REVISE_CYCLES */
+  isEarlyAbandonment: boolean;
+}
+
+export interface IdeationEarlyAbandonmentSignal {
+  maxReviseCycles: number;
+  /** ideation提案経由で着手されたissue数（着手順、= startIteration昇順） */
+  startedTotal: number;
+  earlyAbandonedCount: number;
+  earlyAbandonmentRate: number;
+  /** 比較用: ideation提案が起源でない(人間作成等の)issueのうち着手された件数 */
+  baselineStartedTotal: number;
+  baselineEarlyAbandonedCount: number;
+  /** baselineStartedTotalが0ならnull */
+  baselineEarlyAbandonmentRate: number | null;
+  windowSize: number;
+  partial: boolean;
+  recentRate: number | null;
+  previousRate: number | null;
+  deltaPt: number | null;
+  direction: EarlyAbandonmentTrendDirection;
+  /** direction === 'increasing'（早期abandonment率が悪化傾向） */
+  triggered: boolean;
+  /** ideation提案経由で着手された全run（着手順） */
+  runs: IdeationEarlyAbandonmentRun[];
+}
+
+function earlyAbandonmentDirection(deltaPt: number): EarlyAbandonmentTrendDirection {
+  if (Math.abs(deltaPt) < EARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT) return 'flat';
+  return deltaPt > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * ideationDropRateSignal が「提案されてから一度も着手されない」ドロップを検知するのに
+ * 対し、こちらは「着手はしたのに、ほぼreviseもせず(EARLY_ABANDONMENT_MAX_REVISE_CYCLES回以下)
+ * すぐabandonedになった」早期abandonmentを検知する。着手直後に見送られるのは、issue自体の
+ * 記述が曖昧/実装不能などideation生成物の品質問題を示唆するため、着手済みissueの中でも
+ * 「粘って revise を重ねた末の abandoned」とは区別する。ideation提案が起源でないissueの
+ * 同じ指標(baseline)も併記し、ideation起源のissueだけが悪化しているのか、ゲート全体が
+ * 厳しくなっているだけなのかを切り分けられるようにする。トレンドは他のTrendSignal系と
+ * 同じ直近/直前ウィンドウ比較（着手順）。ideation提案が1件も無い、または1件も着手されて
+ * いない場合はnull。
+ */
+export function ideationEarlyAbandonmentSignal(runs: RunRecord[]): IdeationEarlyAbandonmentSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+  if (createdBy.size === 0) return null;
+
+  const isEarly = (r: RunRecord) => r.verdict === 'abandoned' && r.reviseCycles <= EARLY_ABANDONMENT_MAX_REVISE_CYCLES;
+
+  const seenIdeation = new Set<number>();
+  const ideationRuns: IdeationEarlyAbandonmentRun[] = [];
+  const seenBaseline = new Set<number>();
+  let baselineStartedTotal = 0;
+  let baselineEarlyAbandonedCount = 0;
+
+  for (const r of sorted) {
+    const created = createdBy.get(r.issue.number);
+    if (created && created.iteration < r.iteration) {
+      if (seenIdeation.has(r.issue.number)) continue;
+      seenIdeation.add(r.issue.number);
+      ideationRuns.push({
+        issueNumber: r.issue.number,
+        proposedIteration: created.iteration,
+        startIteration: r.iteration,
+        verdict: r.verdict,
+        reviseCycles: r.reviseCycles,
+        durationSec: r.durationSec,
+        isEarlyAbandonment: isEarly(r),
+      });
+    } else {
+      if (seenBaseline.has(r.issue.number)) continue;
+      seenBaseline.add(r.issue.number);
+      baselineStartedTotal++;
+      if (isEarly(r)) baselineEarlyAbandonedCount++;
+    }
+  }
+
+  if (ideationRuns.length === 0) return null;
+
+  const earlyAbandonedCount = ideationRuns.filter((r) => r.isEarlyAbandonment).length;
+
+  const windowSize = Math.min(EARLY_ABANDONMENT_TREND_WINDOW, Math.floor(ideationRuns.length / 2));
+  let recentRate: number | null = null;
+  let previousRate: number | null = null;
+  let deltaPt: number | null = null;
+  let direction: EarlyAbandonmentTrendDirection = 'flat';
+  if (windowSize > 0) {
+    const recent = ideationRuns.slice(ideationRuns.length - windowSize);
+    const previous = ideationRuns.slice(ideationRuns.length - windowSize * 2, ideationRuns.length - windowSize);
+    recentRate = recent.filter((r) => r.isEarlyAbandonment).length / recent.length;
+    previousRate = previous.filter((r) => r.isEarlyAbandonment).length / previous.length;
+    deltaPt = (recentRate - previousRate) * 100;
+    direction = earlyAbandonmentDirection(deltaPt);
+  }
+
+  return {
+    maxReviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+    startedTotal: ideationRuns.length,
+    earlyAbandonedCount,
+    earlyAbandonmentRate: earlyAbandonedCount / ideationRuns.length,
+    baselineStartedTotal,
+    baselineEarlyAbandonedCount,
+    baselineEarlyAbandonmentRate: baselineStartedTotal === 0 ? null : baselineEarlyAbandonedCount / baselineStartedTotal,
+    windowSize,
+    partial: windowSize < EARLY_ABANDONMENT_TREND_WINDOW,
+    recentRate,
+    previousRate,
+    deltaPt,
+    direction,
+    triggered: direction === 'increasing',
+    runs: ideationRuns,
+  };
+}
+
 /**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で
@@ -4441,6 +4581,80 @@ export function gatePauseSummary(runs: RunRecord[]): GatePauseSummary {
       : stalled.reduce((worst, c) => (c.survivalIterations > worst.survivalIterations ? c : worst));
 
   return { count: classifications.length, patterns, abandonment, mostAtRisk };
+}
+
+interface PausedDryRunResumeDetail {
+  iteration: number;
+  /** 同じissueが後続反復で再実行(再開)されていれば true */
+  resumed: boolean;
+  /** resumed=true かつ、再実行のいずれかが最終的に merged に至っていれば true。まだ再実行されていなければ false */
+  resumeSucceeded: boolean;
+}
+
+/**
+ * paused/dry-run 反復ごとに「同じissueが後続反復で再実行(再開)されたか」「再開が最終的に
+ * mergedに至ったか(再開成功)」を判定する。gatePauseClassifications の reattemptedAtIterations
+ * と同じ検出方法（同じissue.numberを持つ後続反復の有無）をpaused/dry-run両方に適用するが、
+ * gatePauseClassifications が「離脱したか」(reattempted/stalled/pending)だけを見るのに対し、
+ * こちらは再実行後の実際の結末（マージまで漕ぎ着けたか）まで踏み込む。複数回再実行されて
+ * いても、runs全体でそのうち1件でもmergedに至っていれば成功とみなす。
+ */
+function pausedDryRunResumeDetails(runs: RunRecord[]): PausedDryRunResumeDetail[] {
+  const sorted = byIterationAsc(runs);
+  return sorted
+    .filter((r): r is RunRecord & { verdict: PausedDryRunStopReason } => r.verdict === 'paused' || r.verdict === 'dry-run')
+    .map((r) => {
+      const later = sorted.filter((other) => other.issue.number === r.issue.number && other.iteration > r.iteration);
+      return {
+        iteration: r.iteration,
+        resumed: later.length > 0,
+        resumeSucceeded: later.some((o) => o.verdict === 'merged'),
+      };
+    });
+}
+
+export interface PausedDryRunResumeSummary {
+  /** paused/dry-runだった反復数の合計。pausedDryRunSummary.countと同じ母集団 */
+  totalCount: number;
+  /** うち同じissueが後続反復で再実行された件数 */
+  resumedCount: number;
+  /** resumedCountのうち最終的にmergedに至った件数 */
+  resumeSucceededCount: number;
+  /** resumeSucceededCount / resumedCount * 100。resumedCount=0のときは0（再開自体がまだ無く定義できないため） */
+  resumeSuccessRatePct: number;
+  /** まだ一度も再実行されていない件数 */
+  notResumedCount: number;
+}
+
+export function pausedDryRunResumeSummary(runs: RunRecord[]): PausedDryRunResumeSummary {
+  const details = pausedDryRunResumeDetails(runs);
+  const resumed = details.filter((d) => d.resumed);
+  const succeeded = resumed.filter((d) => d.resumeSucceeded);
+  return {
+    totalCount: details.length,
+    resumedCount: resumed.length,
+    resumeSucceededCount: succeeded.length,
+    resumeSuccessRatePct: resumed.length === 0 ? 0 : (succeeded.length / resumed.length) * 100,
+    notResumedCount: details.length - resumed.length,
+  };
+}
+
+/**
+ * 再開された(resumed=true)paused/dry-run反復に絞り、その累積再開成功率(0..100)の推移を
+ * 元のiteration昇順で返す。approvalRateTrend等と同じ「対象母集団に絞ってからの累積割合」
+ * という考え方だが、母集団は「再開された反復」のみ: まだ再開されていない反復を分母に
+ * 含めると「再開すらされていない」ことと「再開したが失敗した」ことが区別できず、率が
+ * 見かけ上低く出てしまうため。
+ */
+export function pausedDryRunResumeSuccessTrend(runs: RunRecord[]): TrendPoint[] {
+  const resumed = pausedDryRunResumeDetails(runs)
+    .filter((d) => d.resumed)
+    .sort((a, b) => a.iteration - b.iteration);
+  let successCount = 0;
+  return resumed.map((d, i) => {
+    if (d.resumeSucceeded) successCount++;
+    return { iteration: d.iteration, value: (successCount / (i + 1)) * 100 };
+  });
 }
 
 export interface AdversaryOutcomeDivergenceSummary {
@@ -5124,4 +5338,70 @@ export function modelPairCompatibilityDivergence(runs: RunRecord[]): ModelPairCo
     if (a.builder !== b.builder) return a.builder.localeCompare(b.builder);
     return a.adversary.localeCompare(b.adversary);
   });
+}
+
+/**
+ * orchestrator/config.py の ideation_low_water 既定値(6)に合わせた表示用の基準線。
+ * dashboard は Python 設定も実際の ready 件数(GitHub側)も読めないため
+ * （BREAKER_THRESHOLD と同じ理由）、この既定値を起点とした相対残量として近似する。
+ */
+export const IDEATION_LOW_WATER = 6;
+
+/** 消費速度(velocity)の算出に使う直近反復数。EARLY_WARNING_WINDOW 等と同じトレイリング窓。 */
+export const BACKLOG_ETA_WINDOW = 5;
+
+export interface BacklogLowWaterEta {
+  lowWater: number;
+  /** velocity 算出に使った反復数。データが window 未満なら全件。 */
+  windowSize: number;
+  /** IDEATION_LOW_WATER を起点に、各反復の正味増減(nextIssues.length - 1)を積算した相対残量。 */
+  currentBalance: number;
+  /** 直近 windowSize 反復での1反復あたりの正味増減平均。負なら純減（枯渇方向）。 */
+  velocity: number;
+  /** currentBalance が lowWater 以下（既に低水位に達している） */
+  belowLowWater: boolean;
+  /** 低水位到達までの推定反復数。既に belowLowWater なら 0。velocity が 0 以上なら null。 */
+  etaIterations: number | null;
+  /** 対象window内の反復番号（古い→新しい順） */
+  iterations: number[];
+}
+
+/**
+ * バックログ枯渇予測: ready の消費速度から low_water 到達までの ETA（反復数）を推定する。
+ * data/runs に ready 件数は記録されないため、各反復は ready を1件消費しnextIssues件を
+ * 補充するという orchestrator/loop.py の挙動から相対残量を再構成する。runs が空ならnull。
+ */
+export function backlogLowWaterEta(runs: RunRecord[]): BacklogLowWaterEta | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  let balance = IDEATION_LOW_WATER;
+  const balances: number[] = [];
+  for (const run of sorted) {
+    balance += run.nextIssues.length - 1;
+    balances.push(balance);
+  }
+
+  const windowSize = Math.min(BACKLOG_ETA_WINDOW, sorted.length);
+  const currentBalance = balances[balances.length - 1];
+  const beforeWindowBalance =
+    sorted.length > windowSize ? balances[sorted.length - windowSize - 1] : IDEATION_LOW_WATER;
+  const velocity = (currentBalance - beforeWindowBalance) / windowSize;
+
+  const belowLowWater = currentBalance <= IDEATION_LOW_WATER;
+  const etaIterations = belowLowWater
+    ? 0
+    : velocity < 0
+      ? Math.ceil((currentBalance - IDEATION_LOW_WATER) / -velocity)
+      : null;
+
+  return {
+    lowWater: IDEATION_LOW_WATER,
+    windowSize,
+    currentBalance,
+    velocity,
+    belowLowWater,
+    etaIterations,
+    iterations: sorted.slice(sorted.length - windowSize).map((r) => r.iteration),
+  };
 }

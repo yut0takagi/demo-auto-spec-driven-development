@@ -5,7 +5,9 @@ from __future__ import annotations
 import json
 import re
 
+from orchestrator.claude_cli import run_agent
 from orchestrator.models import AdversaryVerdict
+from orchestrator.shell import real_runner
 
 ADVERSARY_PROMPT_TEMPLATE = """\
 あなたはこの変更を判定する**公正なシニアレビュアー**です。目的は「却下理由を探すこと」ではなく、
@@ -75,3 +77,33 @@ def _extract_json(text: str) -> dict | None:
         if isinstance(parsed, dict):
             return parsed
     return None
+
+
+PLAN_REVIEW_PROMPT_TEMPLATE = """\
+あなたは公正なシニアレビュアーです。以下のタスクに対する「実装計画(PLAN)」を、コードを書く前に審査してください。
+
+## タスク
+{task}
+
+## 実装計画(PLAN)
+{plan}
+
+## 判断基準
+- 計画がタスクの受入条件を満たし、方針の筋が通っていれば approve する。
+- 却下は「具体的で実害のある設計欠陥」（受入条件を満たせない・明らかな手戻り）に限る。
+- 些末な好みや、実装で吸収できる細部では却下しない。
+
+次の JSON だけを出力すること:
+```json
+{{"approved": <true/false>, "summary": "<承認理由 or blocking な欠陥>"}}
+```
+"""
+
+
+def review_plan(*, task, plan, cfg, cwd, runner=real_runner):
+    """PLAN を adversary_model で審査し (AdversaryVerdict, cost) を返す。"""
+    out = run_agent(
+        PLAN_REVIEW_PROMPT_TEMPLATE.format(task=task, plan=plan),
+        model=cfg.adversary_model, cwd=cwd, runner=runner,
+    )
+    return parse_adversary_review(out.text), out.cost_usd

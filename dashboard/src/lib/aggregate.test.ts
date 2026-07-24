@@ -88,6 +88,8 @@ import {
   gatePauseClassifications,
   gatePauseSummary,
   GATE_PAUSE_STALE_THRESHOLD_ITERATIONS,
+  pausedDryRunResumeSummary,
+  pausedDryRunResumeSuccessTrend,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -122,6 +124,12 @@ import {
   modelPairCompatibilityDivergence,
   MODEL_PAIR_MIN_SAMPLE,
   MODEL_PAIR_DIVERGENCE_THRESHOLD_PT,
+  ideationEarlyAbandonmentSignal,
+  EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+  EARLY_ABANDONMENT_TREND_WINDOW,
+  backlogLowWaterEta,
+  IDEATION_LOW_WATER,
+  BACKLOG_ETA_WINDOW,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -5993,6 +6001,191 @@ function proposeAndStart(
   ];
 }
 
+describe('ideationEarlyAbandonmentSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationEarlyAbandonmentSignal([])).toBeNull();
+  });
+
+  it('nextIssuesを一度も出していない場合はnull（提案が無い）', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [] })];
+    expect(ideationEarlyAbandonmentSignal(runs)).toBeNull();
+  });
+
+  it('提案はあるが着手されたissueが無ければnull', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] })];
+    expect(ideationEarlyAbandonmentSignal(runs)).toBeNull();
+  });
+
+  it(`reviseCyclesがEARLY_ABANDONMENT_MAX_REVISE_CYCLES(${EARLY_ABANDONMENT_MAX_REVISE_CYCLES})以下でabandonedになった着手を早期abandonmentとして数える`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    expect(signal!.earlyAbandonedCount).toBe(1);
+    expect(signal!.earlyAbandonmentRate).toBe(1);
+    expect(signal!.runs[0].isEarlyAbandonment).toBe(true);
+  });
+
+  it('reviseCyclesがしきい値を1回でも超えてabandonedになった場合は早期abandonmentに数えない（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES + 1,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.earlyAbandonedCount).toBe(0);
+    expect(signal!.earlyAbandonmentRate).toBe(0);
+    expect(signal!.runs[0].isEarlyAbandonment).toBe(false);
+  });
+
+  it('reviseCyclesが0でもverdictがabandoned以外なら早期abandonmentに数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'merged',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.earlyAbandonedCount).toBe(0);
+  });
+
+  it('提案元自身のissue番号を含む自己参照はideation起源として数えず、baseline側に計上される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 10, title: 'self', labels: [] },
+        nextIssues: [10],
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal).toBeNull();
+  });
+
+  it('ideation起源ではないissue(baseline。提案元反復自身のissueも含む)は別集計され、早期abandonment率の計算対象(startedTotal)には含めない', () => {
+    const runs = [
+      // issue1 は誰にも提案されていない(baseline)。同時に issue10 を提案する。
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10], verdict: 'merged' }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+      makeRun({
+        iteration: 3,
+        issue: { number: 999, title: 'human-authored', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    // baseline は issue1(提案元自身、merged) と issue999(abandoned, revise0) の2件
+    expect(signal!.baselineStartedTotal).toBe(2);
+    expect(signal!.baselineEarlyAbandonedCount).toBe(1);
+    expect(signal!.baselineEarlyAbandonmentRate).toBe(0.5);
+  });
+
+  it('runsが1件も無いissue.numberの重複が無ければbaselineStartedTotalは常に1以上になる（提案元反復自身も母集団に含まれるため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    // issue1(提案元反復自身)がideation起源ではないためbaselineに1件計上される
+    expect(signal!.baselineStartedTotal).toBe(1);
+    expect(signal!.baselineEarlyAbandonedCount).toBe(0);
+    expect(signal!.baselineEarlyAbandonmentRate).toBe(0);
+  });
+
+  it('同じissueが複数回dispatchされても最初の着手だけを1件として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+      makeRun({
+        iteration: 3,
+        issue: { number: 10, title: 'x-retry', labels: [] },
+        verdict: 'merged',
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    expect(signal!.runs[0].startIteration).toBe(2);
+  });
+
+  it(`直近window(${EARLY_ABANDONMENT_TREND_WINDOW})件が直前windowよりEARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT以上悪化していれば increasing で発報する`, () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30, 40, 50, 60] }),
+    ];
+    // 直前window(3件): 全てmerged(早期abandonmentなし)
+    for (const [i, issueNumber] of [10, 20, 30].entries()) {
+      runs.push(
+        makeRun({ iteration: 2 + i, issue: { number: issueNumber, title: 'x', labels: [] }, verdict: 'merged' }),
+      );
+    }
+    // 直近window(3件): 全てreviseゼロでabandoned
+    for (const [i, issueNumber] of [40, 50, 60].entries()) {
+      runs.push(
+        makeRun({
+          iteration: 5 + i,
+          issue: { number: issueNumber, title: 'x', labels: [] },
+          verdict: 'abandoned',
+          reviseCycles: 0,
+        }),
+      );
+    }
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.previousRate).toBe(0);
+    expect(signal!.recentRate).toBe(1);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.triggered).toBe(true);
+    expect(signal!.partial).toBe(false);
+  });
+
+  it('直近と直前で変化がなければ flat で未発報のまま', () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 20, title: 'y', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.triggered).toBe(false);
+    // 着手済みが2件(windowSizeの2倍未満)のため window は縮小される（partial）
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+  });
+
+  it('着手が1件のみなら直前windowが取れずtrendはnullのまま（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.windowSize).toBe(0);
+    expect(signal!.recentRate).toBeNull();
+    expect(signal!.previousRate).toBeNull();
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.triggered).toBe(false);
+  });
+});
+
 describe('ideationToStartLeadTimeDistribution', () => {
   it('runsが空ならサンプル0件・数値は全て0・bucketsは空配列（境界値）', () => {
     expect(ideationToStartLeadTimeDistribution([])).toEqual({
@@ -6700,6 +6893,88 @@ describe('gatePauseSummary', () => {
     const s = gatePauseSummary(runs);
     expect(s.abandonment).toEqual([{ status: 'reattempted', count: 1 }]);
     expect(s.mostAtRisk).toBeNull();
+  });
+});
+
+describe('pausedDryRunResumeSummary', () => {
+  it('空配列は全項目0を返す（境界値。resumedCount=0のときresumeSuccessRatePctは0除算せず0）', () => {
+    expect(pausedDryRunResumeSummary([])).toEqual({
+      totalCount: 0,
+      resumedCount: 0,
+      resumeSucceededCount: 0,
+      resumeSuccessRatePct: 0,
+      notResumedCount: 0,
+    });
+  });
+
+  it('再開・成功・未再開の件数を正確に集計する（複数回再実行の末の成功、issue番号が異なる後続反復の除外も含む）', () => {
+    const runs = [
+      // issue1: 1回目再実行(abandoned)、2回目再実行(merged) → 複数回再実行でも成功扱い
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 1, title: 'a', labels: [] } }),
+      // issue2: 再実行されたがmergedに至らない → 再開失敗
+      makeRun({ iteration: 4, verdict: 'dry-run', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'abandoned', issue: { number: 2, title: 'b', labels: [] } }),
+      // issue3: 後続にissue番号が異なる反復しか無い → 未再開のまま
+      makeRun({ iteration: 6, verdict: 'paused', issue: { number: 3, title: 'c', labels: [] } }),
+      makeRun({ iteration: 7, verdict: 'merged', issue: { number: 99, title: 'other', labels: [] } }),
+    ];
+    const s = pausedDryRunResumeSummary(runs);
+    expect(s).toEqual({
+      totalCount: 3,
+      resumedCount: 2,
+      resumeSucceededCount: 1,
+      resumeSuccessRatePct: 50,
+      notResumedCount: 1,
+    });
+  });
+});
+
+describe('pausedDryRunResumeSuccessTrend', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(pausedDryRunResumeSuccessTrend([])).toEqual([]);
+  });
+
+  it('再開された反復が1件も無ければ空配列を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+    ];
+    expect(pausedDryRunResumeSuccessTrend(runs)).toEqual([]);
+  });
+
+  it('再開されていない反復は分母に含めず、再開された反復だけの累積成功率を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      // issue 1 は再開されない（分母に含めない）
+      makeRun({ iteration: 2, verdict: 'dry-run', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 4, verdict: 'paused', issue: { number: 3, title: 'c', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'abandoned', issue: { number: 3, title: 'c', labels: [] } }),
+    ];
+    const trend = pausedDryRunResumeSuccessTrend(runs);
+    // 再開されたのは iteration 2(成功) と iteration 4(失敗) の2件のみ
+    expect(trend).toEqual([
+      { iteration: 2, value: 100 },
+      { iteration: 4, value: 50 },
+    ]);
+  });
+
+  it('runsの並び順に関わらず、元のiteration昇順で累積する', () => {
+    const runs = [
+      // 入力はiteration降順（未ソート）で渡す
+      makeRun({ iteration: 4, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'paused', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 1, verdict: 'dry-run', issue: { number: 1, title: 'a', labels: [] } }),
+    ];
+    const trend = pausedDryRunResumeSuccessTrend(runs);
+    expect(trend.map((p) => p.iteration)).toEqual([1, 3]);
+    expect(trend).toEqual([
+      { iteration: 1, value: 0 },
+      { iteration: 3, value: 50 },
+    ]);
   });
 });
 
@@ -7789,5 +8064,100 @@ describe('modelPairCompatibilityDivergence', () => {
     expect(result[0].count).toBe(3);
     expect(result[0].mergedCount).toBe(2);
     expect(result[0].iterations).toEqual([1, 2, 3]);
+  });
+});
+
+/** iteration `from`..`to` の run を、各反復 nextIssues 長 `n`（既定0=補充なし）で生成する。 */
+function makeRunRange(from: number, to: number, n = 0): RunRecord[] {
+  return Array.from({ length: to - from + 1 }, (_, k) =>
+    makeRun({ iteration: from + k, nextIssues: Array.from({ length: n }, (_, j) => 1000 * from + k * 10 + j) }),
+  );
+}
+
+describe('backlogLowWaterEta', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(backlogLowWaterEta([])).toBeNull();
+  });
+
+  it('1件だけ、補充0件なら基準線(IDEATION_LOW_WATER)から1件消費した分だけ残量が減り、既に低水位以下と判定する', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 1));
+    expect(r).not.toBeNull();
+    expect(r!.lowWater).toBe(IDEATION_LOW_WATER);
+    expect(r!.windowSize).toBe(1);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 1);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+    expect(r!.iterations).toEqual([1]);
+  });
+
+  it('1件だけ、補充1件で消費1件を相殺すると残量は基準線と同じ（ちょうど低水位=境界値）', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 1, 1));
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER);
+    expect(r!.velocity).toBe(0);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('補充が消費を上回り続けると残量は増え、枯渇ETAはnull（減っていないので予測不能）', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 3, 2));
+    expect(r!.windowSize).toBe(3);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER + 3);
+    expect(r!.velocity).toBe(1);
+    expect(r!.belowLowWater).toBe(false);
+    expect(r!.etaIterations).toBeNull();
+  });
+
+  it(`直近${BACKLOG_ETA_WINDOW}反復だけを消費速度に使い、それより前の履歴は無視する`, () => {
+    // 8反復すべて補充0件(net -1)。windowSizeは5に制限され、直近5反復(4-8)だけを見るはず。
+    const r = backlogLowWaterEta(makeRunRange(1, 8));
+    expect(r!.windowSize).toBe(BACKLOG_ETA_WINDOW);
+    expect(r!.iterations).toEqual([4, 5, 6, 7, 8]);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 8);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('直近window以前に積んだ余剰があれば残量は低水位より上のまま推移でき、window内の減少速度からETAを算出する', () => {
+    // 余剰区間(1-5, net+2): 6+5*2=16。直近window(6-10, net-1): 16-5=11。ETA=(11-6)/1=5
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 10)];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.windowSize).toBe(BACKLOG_ETA_WINDOW);
+    expect(r!.iterations).toEqual([6, 7, 8, 9, 10]);
+    expect(r!.currentBalance).toBe(11);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.belowLowWater).toBe(false);
+    expect(r!.etaIterations).toBe(5);
+  });
+
+  it('速度が非整数のときはETAを切り上げる', () => {
+    // 余剰区間(1-5, net+2): 16。直近window(6-10)は net -1,-1,-1,-1,0 → 12。速度-0.8。ETA=ceil(6/0.8)=8
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 9), ...makeRunRange(10, 10, 1)];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.currentBalance).toBe(12);
+    expect(r!.velocity).toBeCloseTo(-0.8, 10);
+    expect(r!.etaIterations).toBe(8);
+  });
+
+  it('既に低水位を下回っていれば、直近の速度が回復方向(正)でもETAは0のまま', () => {
+    // 深く消費する区間(1-5, net-1): 1。直近window(6-10)は net 0,0,+1,+1,+1 → 4（まだ低水位以下）
+    const runs = [
+      ...makeRunRange(1, 5),
+      makeRun({ iteration: 6, nextIssues: [601] }),
+      makeRun({ iteration: 7, nextIssues: [602] }),
+      ...makeRunRange(8, 10, 2),
+    ];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.currentBalance).toBe(4);
+    expect(r!.velocity).toBeCloseTo(0.6, 10);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('入力順が iteration 順でなくても集計結果は変わらない', () => {
+    const r = backlogLowWaterEta([...makeRunRange(1, 3)].reverse());
+    expect(r!.iterations).toEqual([1, 2, 3]);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 3);
   });
 });

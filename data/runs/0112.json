@@ -1,0 +1,43 @@
+{
+  "id": "20260724T075029Z-181",
+  "iteration": 112,
+  "issue": {
+    "number": 181,
+    "title": "バックログ枯渇予測：ready消費速度から low_water 到達 ETA を推定",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/181-ready-low-water-eta",
+  "startedAt": "2026-07-24T07:50:29Z",
+  "finishedAt": "2026-07-24T07:53:56Z",
+  "durationSec": 207,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "バックログ枯渇予測タスク要件を完全に満たす実装。消費速度の推定とETA計算、3段階の警告表示、包括的なテスト（unit・component・e2e）がすべて要件と整合している。既存コードへの破壊的変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.889475,
+    "adversaryUsd": 0.056942,
+    "ideationUsd": 0.0,
+    "totalUsd": 0.946417
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

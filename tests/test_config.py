@@ -15,6 +15,23 @@ def test_defaults_match_spec():
     assert cfg.ideation_model == "claude-haiku-4-5"
     assert cfg.orchestrator == "native"
     assert cfg.dry_run is False
+    assert cfg.planner_model == "claude-sonnet-5"
+    assert cfg.builder_escalation_model == "claude-opus-4-8"
+    assert cfg.escalate_after_cycles == 2
+    assert cfg.max_plan_cycles == 2
+
+
+def test_planner_and_escalation_env_overrides():
+    cfg = Config.from_env({
+        "PLANNER_MODEL": "claude-haiku-4-5",
+        "BUILDER_ESCALATION_MODEL": "claude-sonnet-5",
+        "ESCALATE_AFTER_CYCLES": "1",
+        "MAX_PLAN_CYCLES": "3",
+    })
+    assert cfg.planner_model == "claude-haiku-4-5"
+    assert cfg.builder_escalation_model == "claude-sonnet-5"
+    assert cfg.escalate_after_cycles == 1
+    assert cfg.max_plan_cycles == 3
 
 
 def test_env_overrides_are_typed():

@@ -34,6 +34,80 @@ def _utc_now() -> str:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    sub = argv[0] if argv else None
+    if sub is None:
+        return _run_full_iteration()
+    if sub == "plan":
+        return _run_plan_phase()
+    if sub == "build":
+        return _run_build_phase()
+    if sub == "gate":
+        return _run_gate_phase()
+    print(json.dumps({"status": "failed", "error": f"unknown subcommand: {sub}"}, ensure_ascii=False))
+    return 2
+
+
+def _run_plan_phase() -> int:
+    """PLAN ジョブのエントリ: 計画専用（build/merge しない）。plan_phase を実走し、
+    handoff（data/handoff/iteration.json）に書き出して次ジョブ(BUILD)へ渡す。"""
+    repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
+    cfg = Config.from_env(os.environ)
+    gh = GitHubOps(cwd=str(repo_root))
+
+    def kill_switch_reader() -> bool:
+        return read_kill_switch(env=os.environ, control=_read_control(repo_root)).enabled
+
+    from orchestrator.loop import plan_phase
+    from orchestrator.plan import propose_plan, plan_dict_from_result
+    from orchestrator.review import review_plan
+
+    def planner(*, task, cfg, cwd):
+        return plan_dict_from_result(propose_plan(task=task, cfg=cfg, cwd=cwd))
+
+    res = plan_phase(
+        gh=gh, cfg=cfg, repo_root=str(repo_root),
+        kill_switch_reader=kill_switch_reader, ideation_runner=_ideate,
+        planner=planner, plan_reviewer=review_plan,
+    )
+
+    from orchestrator.handoff import Handoff, write_handoff
+    handoff = Handoff(
+        status="ok" if res.status == "ok" else "no-work",
+        issue_number=(res.issue.number if res.issue else None),
+        issue_title=(res.issue.title if res.issue else ""),
+        branch=res.branch,
+        plan=res.plan_text,
+        trivial=(res.status == "ok" and not res.plan_text),
+        planner_cost_usd=res.planner_cost,
+        ideation_cost_usd=res.ideation_cost,
+        next_issues=list(res.next_issues),
+    )
+    write_handoff(repo_root / "data" / "handoff" / "iteration.json", handoff)
+
+    print(json.dumps({
+        "status": res.status,
+        "issue": (res.issue.number if res.issue else None),
+        "plan_preview": res.plan_text[:400],
+    }, ensure_ascii=False))
+    return 0
+
+
+def _run_build_phase() -> int:
+    """BUILD ジョブのエントリ(cross-process 配線は Phase B)。"""
+    print(json.dumps({"status": "not-implemented", "phase": "build",
+                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    return 0
+
+
+def _run_gate_phase() -> int:
+    """GATE ジョブのエントリ(cross-process 配線は Phase B)。"""
+    print(json.dumps({"status": "not-implemented", "phase": "gate",
+                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    return 0
+
+
+def _run_full_iteration() -> int:
     repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
     data_dir = repo_root / "data"
     cfg = Config.from_env(os.environ)

@@ -68,13 +68,16 @@ def make_clock(*timestamps: str):
 
 
 def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
-        proposals=("next idea",), clock=None, ideation_runner=None):
+        proposals=("next idea",), clock=None, ideation_runner=None,
+        planner=None, plan_reviewer=None, round_runner_fn=None):
     """1 反復を実行するヘルパ。
 
     kill_switch_reader は 3 回呼ばれる:
       1 回目 = 反復開始時, 2 回目 = ラウンド後・PR 前, 3 回目 = マージ直前。
     `disable_on_call=N` で N 回目以降を無効にし、任意のチェックポイントを検証する。
     `ideation_runner` を渡すと給油の挙動（呼び出し回数・提案内容）を差し替えられる。
+    `planner`/`plan_reviewer` を渡すと PLAN フェーズを検証できる（未指定なら従来動作）。
+    `round_runner_fn` を渡すと round_runner を差し替えられる（plan の受け渡し検証用）。
     """
     calls = {"n": 0}
 
@@ -97,8 +100,10 @@ def run(tmp_path, *, gh, disable_on_call=None, round_outcome=None, cfg=None,
         repo_root=str(tmp_path),
         clock=clock or make_clock(),
         kill_switch_reader=kill_switch_reader,
-        round_runner=round_runner,
+        round_runner=round_runner_fn or round_runner,
         ideation_runner=ideation_runner or default_ideation,
+        planner=planner,
+        plan_reviewer=plan_reviewer,
     )
 
 
@@ -424,3 +429,99 @@ class TestNoChanges:
         assert result.status == "merged"
         assert "commit" in gh.actions
         assert "open_pr" in gh.actions
+
+
+class TestModelRecording:
+    def test_record_reflects_escalated_builder_model(self, tmp_path):
+        gh = FakeGh()
+        outcome = approved_round(builder_model_used="claude-opus-4-8")
+        run(tmp_path, gh=gh, round_outcome=outcome)
+        record = json.loads((tmp_path / "runs" / "0001.json").read_text())
+        assert record["models"]["builder"] == "claude-opus-4-8"
+
+
+class TestPlanPhase:
+    def test_planner_runs_before_builder_and_plan_reaches_round(self, tmp_path):
+        seen = {}
+
+        def planner(*, task, cfg, cwd):
+            seen["planned_task"] = task
+            return {"trivial": False, "plan_text": "## 設計\nルータ導入", "cost_usd": 0.05}
+
+        def round_runner(**kwargs):
+            seen["round_plan"] = kwargs.get("plan", "")
+            return approved_round()
+
+        gh = FakeGh(issues=[Issue(number=176, title="複数ページ化", labels=["loop:ready"])])
+        result = run(tmp_path, gh=gh, proposals=(), planner=planner, round_runner_fn=round_runner)
+        assert result.status == "merged"
+        assert "複数ページ化" in seen["planned_task"]
+        assert "ルータ導入" in seen["round_plan"]
+
+    def test_plan_review_rejection_replans_up_to_limit(self, tmp_path):
+        calls = {"plan": 0, "review": 0}
+
+        def planner(*, task, cfg, cwd):
+            calls["plan"] += 1
+            return {"trivial": False, "plan_text": f"plan-v{calls['plan']}", "cost_usd": 0.01}
+
+        def plan_reviewer(*, task, plan, cfg, cwd):
+            calls["review"] += 1
+            from orchestrator.models import AdversaryVerdict
+            return AdversaryVerdict(approved=(calls["review"] >= 2), summary="s"), 0.01
+
+        gh = FakeGh(issues=[Issue(number=5, title="t", labels=["loop:ready"])])
+        result = run(tmp_path, gh=gh, proposals=(), planner=planner, plan_reviewer=plan_reviewer)
+        assert calls["plan"] == 2        # 1回却下 → 1回再計画
+        assert result.status == "merged"
+
+    def test_trivial_plan_skips_plan_text(self, tmp_path):
+        seen = {}
+        def planner(*, task, cfg, cwd):
+            return {"trivial": True, "plan_text": "should be ignored", "cost_usd": 0.0}
+        def round_runner(**kwargs):
+            seen["round_plan"] = kwargs.get("plan", "")
+            return approved_round()
+        gh = FakeGh(issues=[Issue(number=9, title="tiny", labels=["loop:ready"])])
+        result = run(tmp_path, gh=gh, proposals=(), planner=planner, round_runner_fn=round_runner)
+        assert result.status == "merged"
+        assert seen["round_plan"] == ""   # trivial は plan を渡さない
+
+
+class TestPlanPhaseFunction:
+    def test_plan_phase_picks_oldest_and_returns_plan(self, tmp_path):
+        from orchestrator.loop import plan_phase
+
+        def planner(*, task, cfg, cwd):
+            return {"trivial": False, "plan_text": "## 設計\nX", "cost_usd": 0.05}
+
+        gh = FakeGh(issues=[
+            Issue(number=9, title="new", labels=["loop:ready"]),
+            Issue(number=3, title="old", labels=["loop:ready"]),
+        ])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: True,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=planner, plan_reviewer=None)
+        assert res.status == "ok"
+        assert res.issue.number == 3           # FIFO 最古
+        assert "## 設計" in res.plan_text
+        assert res.branch == "loop/3-old"
+
+    def test_plan_phase_no_work_when_empty(self, tmp_path):
+        from orchestrator.loop import plan_phase
+        gh = FakeGh(issues=[])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: True,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=None, plan_reviewer=None)
+        assert res.status == "no-work"
+
+    def test_plan_phase_skipped_when_kill_switch_off(self, tmp_path):
+        from orchestrator.loop import plan_phase
+        gh = FakeGh(issues=[Issue(number=1, title="t", labels=["loop:ready"])])
+        res = plan_phase(gh=gh, cfg=Config.from_env({}), repo_root=str(tmp_path),
+                         kill_switch_reader=lambda: False,
+                         ideation_runner=lambda **k: ([], 0.0),
+                         planner=None, plan_reviewer=None)
+        assert res.status == "skipped-disabled"
