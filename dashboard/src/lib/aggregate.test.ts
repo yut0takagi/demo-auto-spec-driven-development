@@ -47,6 +47,7 @@ import {
   modelEfficiencyByRole,
   modelCostRoleBias,
   builderModelSwitchComparisons,
+  builderModelSwitchPerformanceGaps,
   approvalRateTrendByModel,
   ideationFailureSummary,
   ideationFailureRateTrend,
@@ -4690,6 +4691,67 @@ describe('builderModelSwitchComparisons', () => {
     // マージ率の分母は全件(failed含む) 2件中 merged 1件 → 0.5
     expect(result[0].before.count).toBe(2);
     expect(result[0].before.mergeRate).toBe(0.5);
+  });
+});
+
+function makeSwitchRun(iteration: number, model: string, durationSec: number, costUsd = 0.1): RunRecord {
+  return makeRun({
+    iteration,
+    durationSec,
+    cost: { builderUsd: costUsd, adversaryUsd: 0, ideationUsd: 0, totalUsd: costUsd },
+    models: { builder: model, adversary: 'x', ideation: 'x' },
+  });
+}
+
+describe('builderModelSwitchPerformanceGaps', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(builderModelSwitchPerformanceGaps([])).toEqual([]);
+  });
+
+  it('builder モデルが1種類のまま（切り替えが一度も無い）なら空配列を返す', () => {
+    const runs = [1, 2, 3].map((i) => makeSwitchRun(i, 'model-a', 100));
+    expect(builderModelSwitchPerformanceGaps(runs)).toEqual([]);
+  });
+
+  it('1回の切り替えで、before/afterの平均所要時間・平均コスト・差分・verdictを算出する', () => {
+    // model-a: durationSec 100,200→avg150 / cost 0.1,0.3→avg0.2。model-b: durationSec 50(改善) / cost 0.5(悪化)
+    const runs = [
+      makeSwitchRun(1, 'model-a', 100, 0.1),
+      makeSwitchRun(2, 'model-a', 200, 0.3),
+      makeSwitchRun(3, 'model-b', 50, 0.5),
+    ];
+
+    const [g] = builderModelSwitchPerformanceGaps(runs);
+    expect(g.switchIndex).toBe(1);
+    expect(g.before).toEqual({ model: 'model-a', fromIteration: 1, toIteration: 2, count: 2, avgDurationSec: 150, avgCostUsd: 0.2 });
+    expect(g.after).toEqual({ model: 'model-b', fromIteration: 3, toIteration: 3, count: 1, avgDurationSec: 50, avgCostUsd: 0.5 });
+    expect(g.durationDeltaSec).toBeCloseTo(-100, 10);
+    expect(g.costDeltaUsd).toBeCloseTo(0.3, 10);
+    expect(g.durationVerdict).toBe('improved');
+    expect(g.costVerdict).toBe('regressed');
+  });
+
+  it('A→B→A のような再登板は独立した切り替えイベントとして扱い、前回の同モデル区間と合算しない', () => {
+    const runs = [makeSwitchRun(1, 'model-a', 100), makeSwitchRun(2, 'model-b', 200), makeSwitchRun(3, 'model-a', 300)];
+
+    const result = builderModelSwitchPerformanceGaps(runs);
+    expect(result).toHaveLength(2);
+    expect(result[0].before).toEqual({ model: 'model-a', fromIteration: 1, toIteration: 1, count: 1, avgDurationSec: 100, avgCostUsd: 0.1 });
+    // 2件目の before は model-b(iteration2) のみ。1件目の model-a(iteration1) とは合算されない
+    expect(result[1].switchIndex).toBe(2);
+    expect(result[1].before).toEqual({ model: 'model-b', fromIteration: 2, toIteration: 2, count: 1, avgDurationSec: 200, avgCostUsd: 0.1 });
+    expect(result[1].after.model).toBe('model-a');
+    expect(result[1].after.fromIteration).toBe(3);
+  });
+
+  it('delta が0（前後で平均が完全に一致）のとき durationVerdict/costVerdict は unchanged になる', () => {
+    const runs = [makeSwitchRun(1, 'model-a', 100, 0.1), makeSwitchRun(2, 'model-b', 100, 0.1)];
+
+    const [g] = builderModelSwitchPerformanceGaps(runs);
+    expect(g.durationDeltaSec).toBe(0);
+    expect(g.costDeltaUsd).toBe(0);
+    expect(g.durationVerdict).toBe('unchanged');
+    expect(g.costVerdict).toBe('unchanged');
   });
 });
 

@@ -6,6 +6,7 @@ import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMer
 import { AdversaryOutcomeDivergencePanel } from '@/components/AdversaryOutcomeDivergencePanel';
 import { AdversaryModelVerdictMissMatrixPanel } from '@/components/AdversaryModelVerdictMissMatrixPanel';
 import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPanel';
+import { ModelSwitchPerformanceGapPanel } from '@/components/ModelSwitchPerformanceGapPanel';
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratificationPanel';
 import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
@@ -33,6 +34,7 @@ export default function ModelPage() {
         <AdversaryOutcomeDivergencePanel runs={runs} />
         <AdversaryModelVerdictMissMatrixPanel runs={runs} />
         <BuilderModelSwitchAbPanel runs={runs} />
+        <ModelSwitchPerformanceGapPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
         <ModelSkillStratificationPanel runs={runs} />
         <ModelPairCompatibilityDivergencePanel runs={runs} />

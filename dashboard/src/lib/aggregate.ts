@@ -3465,6 +3465,92 @@ export function builderModelSwitchComparisons(runs: RunRecord[]): BuilderModelSw
   return comparisons;
 }
 
+export interface BuilderModelSwitchPerformanceSegment {
+  model: string;
+  /** この区間の最初の反復番号 */
+  fromIteration: number;
+  /** この区間の最後の反復番号 */
+  toIteration: number;
+  /** この区間の反復数（verdict に関係なく全件） */
+  count: number;
+  /** 区間内の平均所要時間（秒）。durationSec は verdict に関係なく全 run で記録されるため全件が母集団 */
+  avgDurationSec: number;
+  /** 区間内の平均コスト（USD）。cost.totalUsd も全 run で記録されるため全件が母集団 */
+  avgCostUsd: number;
+}
+
+export interface BuilderModelSwitchPerformanceGap {
+  /** 何回目の切り替えか（1始まり） */
+  switchIndex: number;
+  before: BuilderModelSwitchPerformanceSegment;
+  after: BuilderModelSwitchPerformanceSegment;
+  /** after.avgDurationSec - before.avgDurationSec */
+  durationDeltaSec: number;
+  /** after.avgCostUsd - before.avgCostUsd */
+  costDeltaUsd: number;
+  /** 所要時間は小さいほど改善（lowerIsBetter=true） */
+  durationVerdict: ComparisonVerdict;
+  /** コストも小さいほど改善（lowerIsBetter=true） */
+  costVerdict: ComparisonVerdict;
+}
+
+function toBuilderModelSwitchPerformanceSegment(
+  model: string,
+  segmentRuns: RunRecord[]
+): BuilderModelSwitchPerformanceSegment {
+  return {
+    model,
+    fromIteration: segmentRuns[0].iteration,
+    toIteration: segmentRuns[segmentRuns.length - 1].iteration,
+    count: segmentRuns.length,
+    avgDurationSec: mean(segmentRuns.map((r) => r.durationSec)),
+    avgCostUsd: mean(segmentRuns.map((r) => r.cost.totalUsd)),
+  };
+}
+
+/**
+ * Builder に使われたモデルが iteration 順で切り替わった各タイミングで、直前・直後の
+ * パフォーマンス（1反復あたりの所要時間・コスト）を突き合わせる。区間分割ロジックは
+ * builderModelSwitchComparisons と同じ（同じモデルの再登板は独立した切り替えイベントとして
+ * 扱う）だが、比較対象を承認率/マージ率ではなく durationSec/cost.totalUsd の平均に置き換える。
+ * どちらも値が小さいほど改善（lowerIsBetter=true）として判定する。
+ * 切り替えが1回も無い（builder が同一モデルのまま）場合は比較対象が無いため空配列を返す。
+ */
+export function builderModelSwitchPerformanceGaps(runs: RunRecord[]): BuilderModelSwitchPerformanceGap[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+
+  const segments: { model: string; runs: RunRecord[] }[] = [];
+  for (const run of sorted) {
+    const lastSegment = segments[segments.length - 1];
+    if (lastSegment && lastSegment.model === run.models.builder) {
+      lastSegment.runs.push(run);
+    } else {
+      segments.push({ model: run.models.builder, runs: [run] });
+    }
+  }
+
+  if (segments.length < 2) return [];
+
+  const gaps: BuilderModelSwitchPerformanceGap[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    const before = toBuilderModelSwitchPerformanceSegment(segments[i - 1].model, segments[i - 1].runs);
+    const after = toBuilderModelSwitchPerformanceSegment(segments[i].model, segments[i].runs);
+    const durationDeltaSec = after.avgDurationSec - before.avgDurationSec;
+    const costDeltaUsd = after.avgCostUsd - before.avgCostUsd;
+    gaps.push({
+      switchIndex: i,
+      before,
+      after,
+      durationDeltaSec,
+      costDeltaUsd,
+      durationVerdict: builderMetricVerdict(durationDeltaSec, true),
+      costVerdict: builderMetricVerdict(costDeltaUsd, true),
+    });
+  }
+  return gaps;
+}
+
 export interface IdeationFailureSummary {
   /** ideation が実際に実行された反復数（cost.ideationUsd > 0）。ready が既に足りていて
    *  ideation 自体がスキップされた反復（ideationUsd === 0）は分母に含めない。 */
