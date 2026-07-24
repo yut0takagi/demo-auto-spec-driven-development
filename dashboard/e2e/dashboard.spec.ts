@@ -475,7 +475,7 @@ test('高revise + 低承認率の前兆検知カードが実データから導�
 });
 
 test('ゲート不通過理由の分類パネルが実データから導出した分類・件数・対象iterationを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -514,7 +514,7 @@ test('ゲート不通過理由の分類パネルが実データから導出し�
 });
 
 test('ゲート理由の時系列burdenチャートが実データから導出した反復ごとのカテゴリ別件数を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -555,7 +555,7 @@ test('ゲート理由の時系列burdenチャートが実データから導出�
 });
 
 test('ゲート失敗別 revise実質コストパネルが実データから導出した合計コスト・revise1回あたりコストを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -599,7 +599,7 @@ test('ゲート失敗別 revise実質コストパネルが実データから導�
 });
 
 test('Reviseサイクル別 APIコスト分布と回収効率パネルが実データから導出したbucket統計・回収率を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/revise');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -650,7 +650,7 @@ test('Reviseサイクル別 APIコスト分布と回収効率パネルが実デ�
 });
 
 test('ゲート理由の深刻度スペクトラムパネルが実データから導出した深刻度スコア・tier別復旧コストを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -694,7 +694,7 @@ test('ゲート理由の深刻度スペクトラムパネルが実データか�
 });
 
 test('ゲート不通過理由のカテゴリ別トレンドパネルが実データから導出した悪化/改善カテゴリ・比較windowを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -742,7 +742,7 @@ test('ゲート不通過理由のカテゴリ別トレンドパネルが実デ�
 });
 
 test('ゲート不通過理由の連鎖パネルが実データから導出したパス別のカテゴリ連鎖を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -778,7 +778,7 @@ test('ゲート不通過理由の連鎖パネルが実データから導出し�
 });
 
 test('ゲート不通過理由×モデル別 Adversary承認率パネルが実データから導出したカテゴリ・モデル別の承認率を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -834,7 +834,7 @@ test('ゲート不通過理由×モデル別 Adversary承認率パネルが実�
 });
 
 test('ゲート不通過の類型別集計パネルが実データから導出したverdict別件数・対象iterationを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -885,7 +885,7 @@ test('ゲート不通過の類型別集計パネルが実データから導出�
 });
 
 test('モデル選択の効果測定パネルが実データから導出したmodel別マージ率・承認率・平均コストを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -929,7 +929,7 @@ test('モデル選択の効果測定パネルが実データから導出したmo
 });
 
 test('モデル別 承認率・マージ率比較パネルが実データから導出したモデル名昇順・承認率・マージ率・ギャップを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -977,7 +977,7 @@ test('モデル別 承認率・マージ率比較パネルが実データから�
 });
 
 test('Adversary 承認⇔実結果 乖離パネルが実データから導出した見落とし件数・乖離率・発生反復を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1028,7 +1028,7 @@ test('Adversary 承認⇔実結果 乖離パネルが実データから導出し
 });
 
 test('Adversaryモデル別×Verdict別 見落とし率マトリクスパネルが実データから導出したモデル・verdict別の見落とし率を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1092,7 +1092,7 @@ test('Adversaryモデル別×Verdict別 見落とし率マトリクスパネル�
 });
 
 test('Builderモデル切り替えのA/B比較パネルが実データから導出した切り替えイベントの有無・承認率/マージ率の変化を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1197,7 +1197,7 @@ test('Cost効率（USD per 承認PR）パネルが実データから導出した
 });
 
 test('Ideation失敗率パネルが実データから導出した実行件数・失敗件数・失敗率を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1238,7 +1238,7 @@ test('Ideation失敗率パネルが実データから導出した実行件数・
 });
 
 test('Ideationコスト効率と生成品質の関連性パネルが実データから導出したbatch内訳・相関係数を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1285,7 +1285,7 @@ test('Ideationコスト効率と生成品質の関連性パネルが実データ
 test('Ideation→着手までのリードタイム・着手成功率観測パネルが実データから導出した着手率・未着手issue・リードタイム傾向を表示する', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1363,7 +1363,7 @@ test('Ideation→着手までのリードタイム・着手成功率観測パネ
 test('Issue提案→初着手のドロップレート検知パネルが実データから導出したドロップ率・連続ドロップ・対象issueを表示する', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1415,7 +1415,7 @@ test('Issue提案→初着手のドロップレート検知パネルが実デー
 test('Ideation提案品質（規模・単価）とドロップ率の関連分析パネルが実データから導出したbatch内訳・相関係数を表示する', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1457,7 +1457,7 @@ test('Ideation提案品質（規模・単価）とドロップ率の関連分析
 });
 
 test('E2E失敗とrevise回数の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/revise');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1495,7 +1495,7 @@ test('E2E失敗とrevise回数の相関パネルが実データから導出し�
 });
 
 test('E2E失敗と変更行数(diff size)の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/revise');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1760,7 +1760,7 @@ test('Adversary承認コメントの要約・トレンドパネルが実デー�
 });
 
 test('Model別承認率トレンド観測パネルが実データから導出したモデル別の累積承認率推移・最新値を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1805,7 +1805,7 @@ test('Model別承認率トレンド観測パネルが実データから導出し
 });
 
 test('Abandoned反復の追跡・分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1863,7 +1863,7 @@ test('Abandoned反復の追跡・分析パネルが実データから導出し�
 });
 
 test('打ち止め（abandoned）の原因分類パネルが実データから導出した分類・件数・対象iterationを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1934,7 +1934,7 @@ test('打ち止め（abandoned）の原因分類パネルが実データから�
 });
 
 test('Adversary承認済みなのにBuilder実装失敗パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -1991,7 +1991,7 @@ test('Adversary承認済みなのにBuilder実装失敗パネルが実データ�
 });
 
 test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2061,7 +2061,7 @@ test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実デ�
 });
 
 test('Gate通過後Pauseパターン分類・離脱検知パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/gate');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2140,7 +2140,7 @@ test('Gate通過後Pauseパターン分類・離脱検知パネルが実デー�
 });
 
 test('Verdict遷移の自動分類・離脱パターン検知パネルが実データから導出した遷移種別・離脱区間を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/revise');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2183,7 +2183,7 @@ test('Verdict遷移の自動分類・離脱パターン検知パネルが実デ�
 });
 
 test('変更規模と修正サイクルの非線形カーブパネルが実データから導出したサイズ区分別revise回数・カーブ形状を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/revise');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2232,7 +2232,7 @@ test('変更規模と修正サイクルの非線形カーブパネルが実デ�
 });
 
 test('Model効率分析パネルが実データから導出した役割別・モデル別のマージ率とコストを表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2286,7 +2286,7 @@ test('Model効率分析パネルが実データから導出した役割別・モ
 test('信頼度加重スコアパネルが実データから導出した加重スコア・生マージ率・信頼度・少数サンプル注意を表示する', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2371,7 +2371,7 @@ test('Issueラベル別 成功率パネルが実データから導出したlabel
 });
 
 test('Modelスキル階層分析パネルが実データから導出したbucket別成功率・pressure判定を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2419,7 +2419,7 @@ test('Modelスキル階層分析パネルが実データから導出したbucket
 });
 
 test('Model ペア相性の乖離検知パネルが実データから導出した組み合わせ別の実測/期待マージ率・乖離幅を表示する', async ({ page }) => {
-  await page.goto('/');
+  await page.goto('/model');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2474,7 +2474,7 @@ test('Model ペア相性の乖離検知パネルが実データから導出し�
 test('着手リードタイムの分布とボトルネック検知パネルが実データから導出した分布統計・ヒストグラム・ボトルネック一覧を表示する', async ({
   page,
 }) => {
-  await page.goto('/');
+  await page.goto('/ideation');
 
   const { runs } = loadRuns();
   expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
@@ -2548,4 +2548,60 @@ test('着手リードタイムの分布とボトルネック検知パネルが�
   const body8 = await bodyTextExcludingFreeform(page);
   expect(body8).not.toContain('NaN');
   expect(body8).not.toContain('undefined');
+});
+
+test('ナビゲーションが5ページすべてに表示され、現在地のリンクだけがアクティブになる', async ({ page }) => {
+  const pages = [
+    { path: '/', slug: 'overview' },
+    { path: '/ideation', slug: 'ideation' },
+    { path: '/gate', slug: 'gate' },
+    { path: '/revise', slug: 'revise' },
+    { path: '/model', slug: 'model' },
+  ];
+
+  for (const { path, slug } of pages) {
+    await page.goto(path);
+    const nav = page.getByTestId('nav');
+    await expect(nav).toBeVisible();
+
+    // このページのリンクだけが aria-current="page" を持ち、他の4つは持たない
+    // （「常に現在地」を返す壊れた実装や、逆に一切マークしない実装の両方を検知する）。
+    for (const other of pages) {
+      const link = page.getByTestId(`nav-link-${other.slug}`);
+      await expect(link).toBeVisible();
+      if (other.slug === slug) {
+        await expect(link).toHaveAttribute('aria-current', 'page');
+      } else {
+        await expect(link).not.toHaveAttribute('aria-current');
+      }
+    }
+  }
+});
+
+test('ナビのリンクをクリックすると対応するページへ実際に遷移し、そのページ固有のパネルが表示される', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  await page.getByTestId('nav-link-ideation').click();
+  await expect(page).toHaveURL(/\/ideation\/?$/);
+  await expect(page.getByTestId('ideation-failure-panel')).toBeVisible();
+  // Overview 専用パネルはここには無いはず（分割できていない＝1ページ詰め込みのままの回帰を検知）
+  await expect(page.getByTestId('status-badge')).toHaveCount(0);
+
+  await page.getByTestId('nav-link-gate').click();
+  await expect(page).toHaveURL(/\/gate\/?$/);
+  await expect(page.getByTestId('gate-reasons-panel')).toBeVisible();
+
+  await page.getByTestId('nav-link-revise').click();
+  await expect(page).toHaveURL(/\/revise\/?$/);
+  await expect(page.getByTestId('revise-cycle-cost-recovery-panel')).toBeVisible();
+
+  await page.getByTestId('nav-link-model').click();
+  await expect(page).toHaveURL(/\/model\/?$/);
+  await expect(page.getByTestId('model-effectiveness-panel')).toBeVisible();
+
+  await page.getByTestId('nav-link-overview').click();
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('status-badge')).toBeVisible();
 });
