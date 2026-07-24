@@ -1,0 +1,41 @@
+{
+  "id": "20260724T031337Z-155",
+  "iteration": 93,
+  "issue": {
+    "number": 155,
+    "title": "Reviseサイクル内のAPI呼び出しコスト分布と回収効率",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/155-revise-api",
+  "startedAt": "2026-07-24T03:13:37Z",
+  "finishedAt": "2026-07-24T03:22:55Z",
+  "durationSec": 558,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 158,
+  "adversary": {
+    "approved": true,
+    "summary": "Reviseサイクル別 APIコスト分布と回収効率パネルの実装を検証する e2e テストが追加されました。テストは統計値計算、UI レンダリング、edge case（回収実績なし）をカバーし、実装の挙動を実質的に検証しており、既存挙動も破壊していません。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 52,
+  "cost": {
+    "builderUsd": 1.734462,
+    "adversaryUsd": 0.101948,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.83641
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
