@@ -9,6 +9,7 @@ import { ReviseSizeSuccessPatternPanel } from '@/components/ReviseSizeSuccessPat
 import { RevisionSizeCurvePanel } from '@/components/RevisionSizeCurvePanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
 import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
+import { VerdictTransitionRootCausePanel } from '@/components/VerdictTransitionRootCausePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
 import { BuilderVolumeApprovalCouplingPanel } from '@/components/BuilderVolumeApprovalCouplingPanel';
@@ -36,6 +37,7 @@ export default function RevisePage() {
         <RevisionSizeCurvePanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
         <VerdictTransitionPanel runs={runs} />
+        <VerdictTransitionRootCausePanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
         <BuilderVolumeApprovalCouplingPanel runs={runs} />

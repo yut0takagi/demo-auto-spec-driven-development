@@ -5062,6 +5062,83 @@ export function verdictTransitionSummary(runs: RunRecord[]): VerdictTransitionKi
     .sort((a, b) => b.count - a.count);
 }
 
+export interface VerdictTransitionRootCauseCell {
+  rootCause: GateReasonCategory;
+  count: number;
+  /** count / このkindで根本原因を特定できた遷移数(row.total) * 100 */
+  pct: number;
+}
+
+export interface VerdictTransitionRootCauseRow {
+  kind: VerdictTransitionKind;
+  /** このkindのうち根本原因を特定できた遷移数（cellsのcount合計と一致。verdictTransitionSummaryのcountとは母集団が異なりうる） */
+  total: number;
+  /** 実際に出現したrootCauseだけをcount降順・同数はGATE_REASON_CATEGORY_ORDER順で持つ */
+  cells: VerdictTransitionRootCauseCell[];
+}
+
+/**
+ * verdictTransitions/verdictTransitionSummary が遷移を「種別(kind)」だけで分類するのに
+ * 対し、こちらはさらに各遷移に伴う gateReasons[0]（最初にブロックした条件）を根本原因
+ * カテゴリとして紐付け、「kind × rootCause」のクロス集計としてパターン化する。例えば
+ * repeatedFailure（同型で足踏み）が頻発している場合に、それが verifyFailed による
+ * 足踏みなのか adversaryNotApproved による足踏みなのかを区別できる。
+ *
+ * 根本原因を紐付けられる遷移は以下のみ:
+ * - regressed/repeatedFailure/shiftedFailure: 遷移先(to)が非mergedなので、to自身の
+ *   gateReasons[0]を採用する（「今回」何が原因でブロックされたか）
+ * - recovered: 遷移元(from)が非mergedなので、fromのgateReasons[0]を採用する
+ *   （何を乗り越えて回復したか）
+ * - sustainedSuccess: 両方mergedでgateReasonsが常に空のため対象外
+ *
+ * paused/dry-run は evaluate_gate が意図的に gateReasons を積まない非マージ
+ * （gateReasonBreakdown 等と同じ前提）なので、これらが上記の判定対象側（regressed等の
+ * to、recoveredのfrom）に来る遷移は根本原因を特定できず、その遷移自体を集計から除く
+ * （row.total にも数えない）。
+ */
+export function verdictTransitionRootCausePatterns(runs: RunRecord[]): VerdictTransitionRootCauseRow[] {
+  const sorted = byIterationAsc(runs);
+  const byKind = new Map<VerdictTransitionKind, GateReasonCategory[]>();
+
+  for (let i = 1; i < sorted.length; i++) {
+    const from = sorted[i - 1];
+    const to = sorted[i];
+    const kind = classifyVerdictTransition(from.verdict, to.verdict);
+
+    let rootCause: GateReasonCategory | null = null;
+    if (kind === 'recovered') {
+      if (from.gateReasons.length > 0) rootCause = rootCauseCategory(from);
+    } else if (kind === 'regressed' || kind === 'repeatedFailure' || kind === 'shiftedFailure') {
+      if (to.gateReasons.length > 0) rootCause = rootCauseCategory(to);
+    }
+    if (rootCause === null) continue;
+
+    const list = byKind.get(kind);
+    if (list) {
+      list.push(rootCause);
+    } else {
+      byKind.set(kind, [rootCause]);
+    }
+  }
+
+  return VERDICT_TRANSITION_KIND_ORDER.filter((kind) => byKind.has(kind)).map((kind) => {
+    const rootCauses = byKind.get(kind)!;
+    const counts = new Map<GateReasonCategory, number>();
+    for (const rc of rootCauses) counts.set(rc, (counts.get(rc) ?? 0) + 1);
+
+    const cells: VerdictTransitionRootCauseCell[] = GATE_REASON_CATEGORY_ORDER.filter(
+      (category) => (counts.get(category) ?? 0) > 0,
+    )
+      .map((category) => {
+        const count = counts.get(category)!;
+        return { rootCause: category, count, pct: (count / rootCauses.length) * 100 };
+      })
+      .sort((a, b) => b.count - a.count);
+
+    return { kind, total: rootCauses.length, cells };
+  });
+}
+
 /** 離脱パターン判定の対象とする最小連続長。1回だけの非マージはまだ「パターン」ではないため2以上を対象にする。 */
 export const DROPOUT_STREAK_MIN_LENGTH = 2;
 
