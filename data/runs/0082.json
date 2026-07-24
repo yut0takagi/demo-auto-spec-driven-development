@@ -1,0 +1,45 @@
+{
+  "id": "20260724T004136Z-133",
+  "iteration": 82,
+  "issue": {
+    "number": 133,
+    "title": "Builder稼働率低下検知パネル：反復開始から PR 作成までのリードタイム逆転",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/133-builder-pr",
+  "startedAt": "2026-07-24T00:41:36Z",
+  "finishedAt": "2026-07-24T01:01:33Z",
+  "durationSec": 1197,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 143,
+  "adversary": {
+    "approved": true,
+    "summary": "仕様どおり実装完了。PR作成反復のリードタイム逆転を隣接ペアで検出し、データ終端の連続逆転（2回以上）で発報する。テストが境界値・トレイリング判定・0除外など実装を実質的に検証。既存挙動への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 464,
+  "cost": {
+    "builderUsd": 5.612942,
+    "adversaryUsd": 0.088322,
+    "ideationUsd": 0.3022763000000001,
+    "totalUsd": 6.00354
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    140,
+    141,
+    142
+  ]
+}
