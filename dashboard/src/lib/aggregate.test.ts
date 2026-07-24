@@ -86,6 +86,10 @@ import {
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
   IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
   ideationStartSuccessSummary,
+  ideationToStartLeadTimeDistribution,
+  ideationToStartBottlenecks,
+  IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES,
+  IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS,
   verdictTransitions,
   verdictTransitionSummary,
   dropoutStreaks,
@@ -4973,6 +4977,172 @@ describe('ideationStartSuccessSummary', () => {
   it('nextIssuesを一度も出していない反復だけの場合は提案0件（境界値）', () => {
     const runs = [makeRun({ iteration: 1, nextIssues: [] })];
     expect(ideationStartSuccessSummary(runs).proposedTotal).toBe(0);
+  });
+});
+
+function proposeAndStart(
+  proposeIteration: number,
+  startIteration: number,
+  issueNumber: number,
+  leadTimeSec: number,
+): RunRecord[] {
+  return [
+    makeRun({
+      iteration: proposeIteration,
+      issue: { number: proposeIteration, title: 'gen', labels: [] },
+      finishedAt: '2026-07-20T00:00:00Z',
+      nextIssues: [issueNumber],
+    }),
+    makeRun({
+      iteration: startIteration,
+      issue: { number: issueNumber, title: 'x', labels: [] },
+      startedAt: new Date(new Date('2026-07-20T00:00:00Z').getTime() + leadTimeSec * 1000).toISOString(),
+    }),
+  ];
+}
+
+describe('ideationToStartLeadTimeDistribution', () => {
+  it('runsが空ならサンプル0件・数値は全て0・bucketsは空配列（境界値）', () => {
+    expect(ideationToStartLeadTimeDistribution([])).toEqual({
+      sampleSize: 0,
+      minSec: 0,
+      maxSec: 0,
+      medianSec: 0,
+      p90Sec: 0,
+      buckets: [],
+    });
+  });
+
+  it('着手済みが1件だけなら min=max=median=p90=その値になる（境界値）', () => {
+    const runs = proposeAndStart(1, 2, 101, 300);
+    const d = ideationToStartLeadTimeDistribution(runs);
+    expect(d.sampleSize).toBe(1);
+    expect(d.minSec).toBe(300);
+    expect(d.maxSec).toBe(300);
+    expect(d.medianSec).toBe(300);
+    expect(d.p90Sec).toBe(300);
+    expect(d.buckets.find((b) => b.label === '〜10分')?.count).toBe(1);
+    expect(d.buckets.filter((b) => b.count > 0)).toHaveLength(1);
+  });
+
+  it('複数サンプルから中央値・p90(線形補間)・ヒストグラムの各区間件数を正しく計算する', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 60),
+      ...proposeAndStart(3, 4, 102, 200),
+      ...proposeAndStart(5, 6, 103, 700),
+      ...proposeAndStart(7, 8, 104, 2000),
+      ...proposeAndStart(9, 10, 105, 12000),
+    ];
+    const d = ideationToStartLeadTimeDistribution(runs);
+    expect(d.sampleSize).toBe(5);
+    expect(d.minSec).toBe(60);
+    expect(d.maxSec).toBe(12000);
+    expect(d.medianSec).toBe(700);
+    // rank = 0.9*(5-1) = 3.6 → sorted[3] + (sorted[4]-sorted[3])*0.6 = 2000 + 6000 = 8000
+    expect(d.p90Sec).toBeCloseTo(8000, 10);
+    expect(d.buckets.map((b) => b.label)).toEqual(['〜10分', '10〜30分', '30〜60分', '60〜180分', '180分〜']);
+    expect(d.buckets.map((b) => b.count)).toEqual([2, 1, 1, 0, 1]);
+    expect(d.buckets.reduce((sum, b) => sum + b.count, 0)).toBe(5);
+  });
+
+  it('区間境界(600秒ちょうど)は下限側の区間ではなく上側の区間に入る（下限は閉区間・上限は開区間の境界値）', () => {
+    const runs = proposeAndStart(1, 2, 101, 600);
+    const d = ideationToStartLeadTimeDistribution(runs);
+    expect(d.buckets.find((b) => b.label === '〜10分')?.count).toBe(0);
+    expect(d.buckets.find((b) => b.label === '10〜30分')?.count).toBe(1);
+  });
+});
+
+describe('ideationToStartBottlenecks', () => {
+  it('runsが空なら空配列（境界値）', () => {
+    expect(ideationToStartBottlenecks([])).toEqual([]);
+  });
+
+  it(`着手済みサンプルがIDEATION_TO_START_BOTTLENECK_MIN_SAMPLES(${IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES})未満だと外れ値があってもstarted-lateを検知しない（境界値）`, () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 60),
+      ...proposeAndStart(3, 4, 102, 60),
+      ...proposeAndStart(5, 6, 103, 6000),
+    ];
+    expect(IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES).toBe(4);
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    expect(bottlenecks.filter((b) => b.kind === 'started-late')).toEqual([]);
+  });
+
+  it('サンプルが閾値件数以上のとき、閾値(p90と中央値2倍のうち大きい方)を超える突出した1件だけをstarted-lateとして検知する', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 1000),
+    ];
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    const startedLate = bottlenecks.filter((b) => b.kind === 'started-late');
+    expect(startedLate).toHaveLength(1);
+    expect(startedLate[0].issueNumber).toBe(104);
+    expect(startedLate[0].leadTimeSec).toBe(1000);
+    expect(startedLate[0].proposedIteration).toBe(7);
+  });
+
+  it('全サンプルが同一のリードタイムなら閾値を超える値が無いためstarted-lateは0件（誤検知が起きないことの確認）', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(7, 8, 104, 100),
+    ];
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    expect(bottlenecks.filter((b) => b.kind === 'started-late')).toEqual([]);
+  });
+
+  it('典型ラグの2倍(最低IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS反復)以上未着手のまま放置されている提案だけをstill-waitingとして検知する', () => {
+    expect(IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS).toBe(3);
+    const runs = [
+      // 典型ラグ(提案→着手の反復差)を1に確定させる
+      ...proposeAndStart(1, 2, 101, 300),
+      ...proposeAndStart(3, 4, 102, 300),
+      // iteration5で提案、iteration8時点(=latest)でも未着手 → waiting = 8-5 = 3 = 閾値ちょうど(境界値)
+      makeRun({ iteration: 5, issue: { number: 5, title: 'gen2', labels: [] }, nextIssues: [201, 202] }),
+      // iteration6で提案 → waiting = 8-6 = 2 < 3、検知されない
+      makeRun({ iteration: 6, issue: { number: 6, title: 'gen3', labels: [] }, nextIssues: [301] }),
+      makeRun({ iteration: 7, issue: { number: 7, title: 'filler', labels: [] } }),
+      makeRun({ iteration: 8, issue: { number: 8, title: 'filler2', labels: [] } }),
+    ];
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    const stillWaiting = bottlenecks.filter((b) => b.kind === 'still-waiting');
+    const issueNumbers = stillWaiting.map((b) => b.issueNumber).sort((a, b) => a - b);
+    expect(issueNumbers).toEqual([201, 202]);
+    expect(stillWaiting.every((b) => b.waitingIterations === 3)).toBe(true);
+    expect(stillWaiting.every((b) => b.leadTimeSec === null)).toBe(true);
+    expect(stillWaiting.find((b) => b.issueNumber === 301)).toBeUndefined();
+  });
+
+  it('着手済みサンプルが1件も無い場合はIDEATION_TO_START_STILL_WAITING_MIN_ITERATIONSをそのまま閾値として使う', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'filler', labels: [] } }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'filler2', labels: [] } }),
+      makeRun({ iteration: 4, issue: { number: 4, title: 'filler3', labels: [] } }),
+    ];
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    expect(bottlenecks).toHaveLength(1);
+    expect(bottlenecks[0]).toMatchObject({ issueNumber: 10, kind: 'still-waiting', waitingIterations: 3 });
+  });
+
+  it('戻り値は提案iteration昇順で、started-lateとstill-waitingが混在してもソートされる', () => {
+    const runs = [
+      ...proposeAndStart(1, 2, 101, 100),
+      ...proposeAndStart(3, 4, 102, 100),
+      ...proposeAndStart(5, 6, 103, 100),
+      ...proposeAndStart(20, 21, 999, 5000),
+      makeRun({ iteration: 7, issue: { number: 7, title: 'gen2', labels: [] }, nextIssues: [500] }),
+      makeRun({ iteration: 22, issue: { number: 22, title: 'filler', labels: [] } }),
+    ];
+    const bottlenecks = ideationToStartBottlenecks(runs);
+    const iterations = bottlenecks.map((b) => b.proposedIteration);
+    expect(iterations).toEqual([...iterations].sort((a, b) => a - b));
+    expect(bottlenecks.map((b) => b.issueNumber)).toContain(999);
+    expect(bottlenecks.map((b) => b.issueNumber)).toContain(500);
   });
 });
 

@@ -3217,6 +3217,162 @@ export function ideationStartSuccessSummary(runs: RunRecord[]): IdeationStartSuc
 }
 
 /**
+ * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
+ * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で
+ * off-by-one を避ける設計であるのに対し、任意のpには補間が必須で式の形が異なるため。
+ */
+function percentile(sortedValues: number[], p: number): number {
+  if (sortedValues.length === 0) return 0;
+  if (sortedValues.length === 1) return sortedValues[0];
+  const rank = (p / 100) * (sortedValues.length - 1);
+  const lower = Math.floor(rank);
+  const upper = Math.ceil(rank);
+  if (lower === upper) return sortedValues[lower];
+  return sortedValues[lower] + (sortedValues[upper] - sortedValues[lower]) * (rank - lower);
+}
+
+/** ideationToStartLeadTimeDistribution のヒストグラム区間の上限(秒)。10分/30分/60分/180分。最後の区間は上限なし。 */
+const IDEATION_TO_START_LEAD_TIME_BUCKET_EDGES_SEC = [600, 1800, 3600, 10800];
+const IDEATION_TO_START_LEAD_TIME_BUCKET_LABELS = ['〜10分', '10〜30分', '30〜60分', '60〜180分', '180分〜'];
+
+export interface IdeationToStartLeadTimeBucket {
+  label: string;
+  minSec: number;
+  /** 最後の区間(180分〜)はnull（上限なし） */
+  maxSec: number | null;
+  count: number;
+}
+
+export interface IdeationToStartLeadTimeDistribution {
+  sampleSize: number;
+  minSec: number;
+  maxSec: number;
+  medianSec: number;
+  p90Sec: number;
+  buckets: IdeationToStartLeadTimeBucket[];
+}
+
+/**
+ * ideationToStartLeadTimeTrendSignal が「直近window vs 直前window」という時系列の変化しか
+ * 見ないのに対し、こちらは着手済み全件の分布そのもの（最小/中央値/p90/最大 とヒストグラム）を見る。
+ * トレンドが横ばいでも「実は分布の裾が長く、一部のissueだけ突出して遅い」というボトルネックは
+ * 分布を見ないと分からないため、この2つは補完関係にある。サンプル0件ならbucketsは空配列。
+ */
+export function ideationToStartLeadTimeDistribution(runs: RunRecord[]): IdeationToStartLeadTimeDistribution {
+  const values = ideationToStartLeadTimes(runs).map((p) => p.leadTimeSec);
+  if (values.length === 0) {
+    return { sampleSize: 0, minSec: 0, maxSec: 0, medianSec: 0, p90Sec: 0, buckets: [] };
+  }
+
+  const sorted = [...values].sort((a, b) => a - b);
+  const buckets = IDEATION_TO_START_LEAD_TIME_BUCKET_LABELS.map((label, i) => {
+    const minSec = i === 0 ? 0 : IDEATION_TO_START_LEAD_TIME_BUCKET_EDGES_SEC[i - 1];
+    const maxSec = i < IDEATION_TO_START_LEAD_TIME_BUCKET_EDGES_SEC.length ? IDEATION_TO_START_LEAD_TIME_BUCKET_EDGES_SEC[i] : null;
+    const count = values.filter((v) => v >= minSec && (maxSec === null || v < maxSec)).length;
+    return { label, minSec, maxSec, count };
+  });
+
+  return {
+    sampleSize: values.length,
+    minSec: sorted[0],
+    maxSec: sorted[sorted.length - 1],
+    medianSec: median(values),
+    p90Sec: percentile(sorted, 90),
+    buckets,
+  };
+}
+
+/** started-late 判定に十分な着手済みサンプル数の下限。これ未満だとp90自体が不安定なため判定しない。 */
+export const IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES = 4;
+/** リードタイムが中央値の何倍を超えたら「明確に遅い」とみなすか。p90条件と併用しANDで絞り込む。 */
+export const IDEATION_TO_START_BOTTLENECK_MEDIAN_MULTIPLIER = 2;
+/** still-waiting 判定の反復数の下限。着手済みサンプルが無く典型ラグが算出できない場合のフォールバック値。 */
+export const IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS = 3;
+/** still-waiting 判定で「典型的な着手までの反復数(中央値)」の何倍を超えたら滞留とみなすか。 */
+export const IDEATION_TO_START_STILL_WAITING_LAG_MULTIPLIER = 2;
+
+export type IdeationToStartBottleneckKind = 'started-late' | 'still-waiting';
+
+export interface IdeationToStartBottleneck {
+  issueNumber: number;
+  kind: IdeationToStartBottleneckKind;
+  proposedIteration: number;
+  /** started-late のみ。still-waiting は null（まだ着手されていないため終点が無い） */
+  leadTimeSec: number | null;
+  /** still-waiting のみ。提案から runs 全体の最新反復までに経過した反復数。started-late は null */
+  waitingIterations: number | null;
+}
+
+/**
+ * リードタイムのボトルネックを2種類検知する。
+ * - started-late: 着手はされたが、他の着手済みissueと比べて明確に遅かったもの
+ *   （閾値 = max(p90, 中央値 × MEDIAN_MULTIPLIER) を超える）。閾値自体が不安定になる
+ *   IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES 未満のサンプル数では判定しない。
+ * - still-waiting: まだ着手されていない提案のうち、着手済みissueの典型的な着手ラグ
+ *   （提案〜着手の反復数の中央値）の STILL_WAITING_LAG_MULTIPLIER 倍（最低でも
+ *   STILL_WAITING_MIN_ITERATIONS 反復）以上放置されているもの。abandonedIterationDetails
+ *   と同じく、経過を時刻ではなく反復数で測る（ビルド時刻に依存しない決定的な値にするため）。
+ * 戻り値は proposedIteration 昇順（古い提案ほど先＝優先度が高いとみなす）。
+ */
+export function ideationToStartBottlenecks(runs: RunRecord[]): IdeationToStartBottleneck[] {
+  const sorted = byIterationAsc(runs);
+  const points = ideationToStartLeadTimes(runs);
+  const bottlenecks: IdeationToStartBottleneck[] = [];
+
+  if (points.length >= IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES) {
+    const values = points.map((p) => p.leadTimeSec);
+    const sortedValues = [...values].sort((a, b) => a - b);
+    const threshold = Math.max(percentile(sortedValues, 90), median(values) * IDEATION_TO_START_BOTTLENECK_MEDIAN_MULTIPLIER);
+    for (const p of points) {
+      if (p.leadTimeSec > threshold) {
+        bottlenecks.push({
+          issueNumber: p.issueNumber,
+          kind: 'started-late',
+          proposedIteration: p.proposedIteration,
+          leadTimeSec: p.leadTimeSec,
+          waitingIterations: null,
+        });
+      }
+    }
+  }
+
+  if (sorted.length > 0) {
+    const latestIteration = sorted[sorted.length - 1].iteration;
+    const createdBy = new Map<number, RunRecord>();
+    for (const r of sorted) {
+      for (const issueNumber of r.nextIssues) {
+        if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+      }
+    }
+
+    const startLagIterations = points.map((p) => p.startIteration - p.proposedIteration);
+    const typicalLagIterations = startLagIterations.length > 0 ? median(startLagIterations) : 0;
+    const waitThreshold = Math.max(
+      IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS,
+      typicalLagIterations * IDEATION_TO_START_STILL_WAITING_LAG_MULTIPLIER,
+    );
+
+    const { notStartedIssueNumbers } = ideationStartSuccessSummary(runs);
+    for (const issueNumber of notStartedIssueNumbers) {
+      const created = createdBy.get(issueNumber);
+      if (!created) continue;
+      const waitingIterations = latestIteration - created.iteration;
+      if (waitingIterations >= waitThreshold) {
+        bottlenecks.push({
+          issueNumber,
+          kind: 'still-waiting',
+          proposedIteration: created.iteration,
+          leadTimeSec: null,
+          waitingIterations,
+        });
+      }
+    }
+  }
+
+  return bottlenecks.sort((a, b) => a.proposedIteration - b.proposedIteration);
+}
+
+/**
  * abandoned（ゲートを再試行しても満たせず、人間に振らず自動で見送った）反復専用の
  * 追跡・分析サマリー。gateFailureTypeBreakdown は failed/abandoned/needs-human を
  * 横並びに集計するため、abandoned 単体の「実際にどれだけコストを浪費し、何が支配的な
