@@ -87,6 +87,9 @@ import {
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
   IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
   ideationStartSuccessSummary,
+  ideationDropRateSignal,
+  IDEATION_DROP_STALENESS_ITERATIONS,
+  IDEATION_DROP_RATE_STREAK_THRESHOLD,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   IDEATION_TO_START_BOTTLENECK_MIN_SAMPLES,
@@ -5077,6 +5080,163 @@ describe('ideationStartSuccessSummary', () => {
   it('nextIssuesを一度も出していない反復だけの場合は提案0件（境界値）', () => {
     const runs = [makeRun({ iteration: 1, nextIssues: [] })];
     expect(ideationStartSuccessSummary(runs).proposedTotal).toBe(0);
+  });
+});
+
+describe('ideationDropRateSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationDropRateSignal([])).toBeNull();
+  });
+
+  it('nextIssuesを一度も出していない場合はnull（提案が無い）', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [] })];
+    expect(ideationDropRateSignal(runs)).toBeNull();
+  });
+
+  it(`提案からの経過反復数がIDEATION_DROP_STALENESS_ITERATIONS(${IDEATION_DROP_STALENESS_ITERATIONS})未満なら猶予期間中として未判定のまま（境界値）`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS - 1,
+        issue: { number: 2, title: 'other', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.proposedTotal).toBe(1);
+    expect(signal!.judgedTotal).toBe(0);
+    expect(signal!.pendingCount).toBe(1);
+    expect(signal!.droppedCount).toBe(0);
+    expect(signal!.dropRate).toBeNull();
+    expect(signal!.streak).toBe(0);
+    expect(signal!.triggered).toBe(false);
+  });
+
+  it(`経過反復数がちょうどIDEATION_DROP_STALENESS_ITERATIONSに達すると未着手issueはドロップと判定される（境界値）`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS,
+        issue: { number: 2, title: 'other', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.judgedTotal).toBe(1);
+    expect(signal!.droppedCount).toBe(1);
+    expect(signal!.pendingCount).toBe(0);
+    expect(signal!.dropRate).toBe(1);
+    expect(signal!.droppedIssues[0]).toMatchObject({
+      issueNumber: 10,
+      proposedIteration: 1,
+      status: 'dropped',
+      startIteration: null,
+      ageIterations: IDEATION_DROP_STALENESS_ITERATIONS,
+    });
+  });
+
+  it('着手されたissueはageIterations(提案から着手までの反復差)とともにstarted判定され、ドロップに含まれない', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 3, issue: { number: 10, title: 'x', labels: [] } }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.judgedTotal).toBe(1);
+    expect(signal!.startedCount).toBe(1);
+    expect(signal!.droppedCount).toBe(0);
+    expect(signal!.dropRate).toBe(0);
+    expect(signal!.droppedIssues).toEqual([]);
+  });
+
+  it('提案元自身のissue番号を含む自己参照はstarted扱いにならず、猶予期間経過後にドロップと判定される', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS,
+        issue: { number: 2, title: 'other', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.droppedCount).toBe(1);
+    expect(signal!.droppedIssues[0].issueNumber).toBe(10);
+  });
+
+  it('着手済みとドロップが混在する場合、判定済み件数に対するドロップ率を正しく算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30, 40] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'a', labels: [] } }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.proposedTotal).toBe(4);
+    expect(signal!.judgedTotal).toBe(4);
+    expect(signal!.startedCount).toBe(1);
+    expect(signal!.droppedCount).toBe(3);
+    expect(signal!.dropRate).toBeCloseTo(3 / 4, 10);
+    expect(signal!.droppedIssues.map((d) => d.issueNumber)).toEqual([20, 30, 40]);
+  });
+
+  it(`提案順で末尾からIDEATION_DROP_RATE_STREAK_THRESHOLD(${IDEATION_DROP_RATE_STREAK_THRESHOLD})件連続でドロップすると発報する`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen1', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen2', labels: [] }, nextIssues: [20] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS + 2,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.droppedCount).toBe(2);
+    expect(signal!.streak).toBe(2);
+    expect(signal!.triggered).toBe(true);
+    expect(signal!.streakDrops.map((d) => d.issueNumber)).toEqual([10, 20]);
+  });
+
+  it('直近1件だけドロップしても閾値未満(1回)なら未発報のまま（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen1', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen2', labels: [] } }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS,
+        issue: { number: 10 + 1000, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.droppedCount).toBe(1);
+    expect(signal!.streak).toBe(1);
+    expect(signal!.triggered).toBe(false);
+  });
+
+  it('提案順で末尾のissueが着手済みならstreakは0に戻り、過去にドロップがあっても未発報のまま（トレイリング判定）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen1', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'gen2', labels: [] }, nextIssues: [20] }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'gen3', labels: [] }, nextIssues: [30] }),
+      makeRun({ iteration: 5, issue: { number: 30, title: 'started-late', labels: [] } }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS + 5,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.droppedCount).toBe(2);
+    expect(signal!.streak).toBe(0);
+    expect(signal!.triggered).toBe(false);
+    expect(signal!.streakDrops).toEqual([]);
+  });
+
+  it('同じ反復が複数issueを提案した場合、判定順は提案iteration→issue番号昇順で決まる（tie-break境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [30, 10, 20] }),
+      makeRun({
+        iteration: 1 + IDEATION_DROP_STALENESS_ITERATIONS,
+        issue: { number: 999, title: 'filler', labels: [] },
+      }),
+    ];
+    const signal = ideationDropRateSignal(runs);
+    expect(signal!.droppedIssues.map((d) => d.issueNumber)).toEqual([10, 20, 30]);
   });
 });
 

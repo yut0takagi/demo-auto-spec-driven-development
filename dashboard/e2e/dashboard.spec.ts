@@ -49,6 +49,7 @@ import {
   ideationToStartLeadTimes,
   ideationToStartLeadTimeTrendSignal,
   ideationStartSuccessSummary,
+  ideationDropRateSignal,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   verdictTransitions,
@@ -1348,6 +1349,58 @@ test('Ideation→着手までのリードタイム・着手成功率観測パネ
   // 回帰防止（不変量）: 未着手issueと着手済みissueは重複しない
   for (const n of summary.notStartedIssueNumbers) {
     expect(issueNumbers).not.toContain(n);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue提案→初着手のドロップレート検知パネルが実データから導出したドロップ率・連続ドロップ・対象issueを表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationDropRateSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation が提案した(nextIssuesに含めた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-drop-rate-panel');
+  await expect(panel).toBeVisible();
+
+  if (signal!.judgedTotal === 0) {
+    await expect(panel).toContainText('まだドロップ判定できません');
+    await expect(page.getByTestId('ideation-drop-rate-value')).toHaveCount(0);
+  } else {
+    // ドロップ率・件数は ideationDropRateSignal()（別の計算経路）と一致するはず
+    const dropRatePct = (signal!.dropRate ?? 0) * 100;
+    await expect(page.getByTestId('ideation-drop-rate-value')).toHaveText(`${dropRatePct.toFixed(1)}%`);
+    await expect(page.getByTestId('ideation-drop-rate-counts')).toContainText(
+      `判定 ${signal!.judgedTotal}件中 ${signal!.droppedCount}件がドロップ`,
+    );
+
+    const signalBlock = page.getByTestId('ideation-drop-rate-signal');
+    await expect(signalBlock).toHaveAttribute('data-triggered', String(signal!.triggered));
+    await expect(page.getByTestId('ideation-drop-rate-streak')).toHaveText(String(signal!.streak));
+    await expect(page.getByTestId('ideation-drop-rate-status')).toContainText(
+      signal!.triggered ? '発報' : '未発報',
+    );
+
+    // 判定済みドロップissueの先頭10件は一覧に個別表示されるはず（別の計算経路と突き合わせ）
+    const shown = signal!.droppedIssues.slice(0, 10);
+    for (const d of shown) {
+      await expect(page.getByTestId(`ideation-drop-rate-issue-${d.issueNumber}`)).toBeVisible();
+    }
+
+    // 回帰防止（不変量）: ドロップと判定されたissueは提案から staleAfterIterations 反復以上経過している
+    for (const d of signal!.droppedIssues) {
+      expect(d.ageIterations).toBeGreaterThanOrEqual(signal!.staleAfterIterations);
+      expect(d.status).toBe('dropped');
+    }
   }
 
   const body = await bodyTextExcludingFreeform(page);
