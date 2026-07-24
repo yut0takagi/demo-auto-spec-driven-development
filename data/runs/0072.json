@@ -1,0 +1,43 @@
+{
+  "id": "20260723T223142Z-120",
+  "iteration": 72,
+  "issue": {
+    "number": 120,
+    "title": "Builder revise 回数 ×サイズ別の成功パターン分類",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/120-builder-revise",
+  "startedAt": "2026-07-23T22:31:42Z",
+  "finishedAt": "2026-07-23T22:37:47Z",
+  "durationSec": 365,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "revise回数×変更サイズの2軸クロス集計で成功パターンを分類する実装が完成。サンプル数・merge率基準の分類ロジック、failed run除外、適切なソート、テストカバレッジすべて妥当。ダッシュボード統合も正しい。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.492803,
+    "adversaryUsd": 0.062801,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.555604
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

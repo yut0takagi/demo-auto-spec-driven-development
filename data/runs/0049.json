@@ -1,0 +1,45 @@
+{
+  "id": "20260723T175200Z-87",
+  "iteration": 49,
+  "issue": {
+    "number": 87,
+    "title": "Model別の承認率トレンド観測パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/87-model",
+  "startedAt": "2026-07-23T17:52:00Z",
+  "finishedAt": "2026-07-23T18:11:09Z",
+  "durationSec": 1149,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 96,
+  "adversary": {
+    "approved": true,
+    "summary": "要件「Model別の承認率トレンド観測パネル」を完全に満たす。新規コンポーネント ModelApprovalRateTrendPanel と集約関数 approvalRateTrendByModel は、モデルごとの時系列承認率推移を正確に計算・表示し、verify到達済み/未到達の境界値、色管理の一貫性、NaN 回避など全て実装されている。テストも空テストではなく、複数パターンで動作を実質的に検証している。既存コード変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 517,
+  "cost": {
+    "builderUsd": 6.817223,
+    "adversaryUsd": 0.206591,
+    "ideationUsd": 0.1097148,
+    "totalUsd": 7.133529
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    93,
+    94,
+    95
+  ]
+}

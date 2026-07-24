@@ -1,0 +1,43 @@
+{
+  "id": "20260723T144044Z-71",
+  "iteration": 34,
+  "issue": {
+    "number": 71,
+    "title": "ブレーカ発火までのランウェイ表示（残反復数の可視化）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/71-task",
+  "startedAt": "2026-07-23T14:40:44Z",
+  "finishedAt": "2026-07-23T14:47:05Z",
+  "durationSec": 381,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "ブレーカ発火までのランウェイ可視化が要件を満たしている。BreakerRunwayPanel が残反復数を正しく計算・表示し、テストが実装を実質的に検証している。状態遷移・色分け・スロット配置がすべて正確で、ダッシュボード統合も適切。データ契約を変更せず既存挙動も破壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.00061,
+    "adversaryUsd": 0.167471,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.168081
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

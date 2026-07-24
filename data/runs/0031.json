@@ -1,0 +1,43 @@
+{
+  "id": "20260723T141725Z-64",
+  "iteration": 31,
+  "issue": {
+    "number": 64,
+    "title": "Gate 理由の時系列 burden グラフ",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/64-gate-burden",
+  "startedAt": "2026-07-23T14:17:25Z",
+  "finishedAt": "2026-07-23T14:20:57Z",
+  "durationSec": 212,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Gate理由の時系列burdenグラフは、ゲート不通過理由を反復ごとにカテゴリ別に集計し、積み上げ棒グラフで可視化する要件を正しく実装している。実装・テスト・統合が適切で、既存挙動を壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.792581,
+    "adversaryUsd": 0.161762,
+    "ideationUsd": 0.0,
+    "totalUsd": 0.954343
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

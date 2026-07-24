@@ -1,0 +1,41 @@
+{
+  "id": "20260723T183835Z-94",
+  "iteration": 52,
+  "issue": {
+    "number": 94,
+    "title": "Revise 回数と最終 Verdict の関連図",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/94-revise-verdict",
+  "startedAt": "2026-07-23T18:38:35Z",
+  "finishedAt": "2026-07-23T18:49:51Z",
+  "durationSec": 676,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 98,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク #94「Revise 回数と Verdict の関連図」を要件通り正確に実装。revise 回数をバケット化し、各バケット内で verdict 別の分布を視覚化する機能を備えており、failed run を除外しない仕様・iteration 昇順表示・複数 verdict の按分割合を pixel で検証するテストで既存パネルの philosophy と一貫性が取れている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 367,
+  "cost": {
+    "builderUsd": 3.651674,
+    "adversaryUsd": 0.149437,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.801111
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

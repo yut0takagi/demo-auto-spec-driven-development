@@ -1,0 +1,45 @@
+{
+  "id": "20260723T133306Z-50",
+  "iteration": 28,
+  "issue": {
+    "number": 50,
+    "title": "ゲート不通過の類型別集計パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/50-task",
+  "startedAt": "2026-07-23T13:33:06Z",
+  "finishedAt": "2026-07-23T13:45:56Z",
+  "durationSec": 770,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 66,
+  "adversary": {
+    "approved": true,
+    "summary": "ゲート不通過の類型別集計パネルの実装は要件を満たし、テストが実装を実質的に検証し、既存機能への影響がありません。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 358,
+  "cost": {
+    "builderUsd": 3.512402,
+    "adversaryUsd": 0.130603,
+    "ideationUsd": 0.1205633,
+    "totalUsd": 3.763568
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    63,
+    64,
+    65
+  ]
+}

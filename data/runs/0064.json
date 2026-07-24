@@ -1,0 +1,41 @@
+{
+  "id": "20260723T205819Z-115",
+  "iteration": 64,
+  "issue": {
+    "number": 115,
+    "title": "Paused/Dryrun反復の停止理由・生存時間分析パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/115-paused-dryrun",
+  "startedAt": "2026-07-23T20:58:19Z",
+  "finishedAt": "2026-07-23T21:08:33Z",
+  "durationSec": 614,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 117,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を完全に満たし、paused/dry-run 反復の停止理由別分類・生存時間(反復数)計測・最長放置反復の表示を正確に実装。単体・コンポーネント・e2e テストで多角的に検証し、既存機能に対する破壊もない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 544,
+  "cost": {
+    "builderUsd": 3.411977,
+    "adversaryUsd": 0.097093,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.50907
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

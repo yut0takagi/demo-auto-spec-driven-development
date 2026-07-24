@@ -1,0 +1,41 @@
+{
+  "id": "20260723T220801Z-121",
+  "iteration": 70,
+  "issue": {
+    "number": 121,
+    "title": "Verdict 遷移の自動分類と離脱パターン検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/121-verdict",
+  "startedAt": "2026-07-23T22:08:01Z",
+  "finishedAt": "2026-07-23T22:20:07Z",
+  "durationSec": 726,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 124,
+  "adversary": {
+    "approved": true,
+    "summary": "Change correctly implements verdict transition auto-classification (5 categories) and dropout pattern detection (recovered/droppedOut/ongoing outcomes) with comprehensive tests validating the logic against actual data. UI component properly displays results and handles edge cases. No blocking defects."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 1,
+  "cost": {
+    "builderUsd": 2.597036,
+    "adversaryUsd": 0.254094,
+    "ideationUsd": 0.0,
+    "totalUsd": 2.85113
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

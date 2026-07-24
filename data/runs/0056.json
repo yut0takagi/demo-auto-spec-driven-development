@@ -1,0 +1,41 @@
+{
+  "id": "20260723T193358Z-101",
+  "iteration": 56,
+  "issue": {
+    "number": 101,
+    "title": "ゲート不通過の「連鎖的な理由」をパス別に可視化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/101-task",
+  "startedAt": "2026-07-23T19:33:58Z",
+  "finishedAt": "2026-07-23T19:50:19Z",
+  "durationSec": 981,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 104,
+  "adversary": {
+    "approved": true,
+    "summary": "既にマージ済みの Issue #101 機能を、敵対レビューから指摘された adversary 出力パースエラーの分類ミスで修正。orchestrator/review.py の sentinel 文字列と run.adversary.summary を活用して adversaryUnparseable と adversaryNotApproved を正確に区別し、全パネルで一貫した分類を実現している。実装はテスト済みで、既存の挙動を壊さない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 159,
+  "cost": {
+    "builderUsd": 5.588349,
+    "adversaryUsd": 0.199138,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.787487
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

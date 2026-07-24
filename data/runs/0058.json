@@ -1,0 +1,41 @@
+{
+  "id": "20260723T195855Z-100",
+  "iteration": 58,
+  "issue": {
+    "number": 100,
+    "title": "E2E失敗とコード変更範囲(diff size)の相関分析パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/100-e2e-diff-size",
+  "startedAt": "2026-07-23T19:58:55Z",
+  "finishedAt": "2026-07-23T20:02:29Z",
+  "durationSec": 214,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 106,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue #100のE2E失敗とdiff size相関パネルは既に実装・テスト済みであり、本変更はREADME.mdへの説明記載で補完している。実装と矛盾なく、既存動作を壊さず、ドキュメント完全性を向上させる。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 1,
+  "cost": {
+    "builderUsd": 0.789694,
+    "adversaryUsd": 0.044626,
+    "ideationUsd": 0.0,
+    "totalUsd": 0.83432
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

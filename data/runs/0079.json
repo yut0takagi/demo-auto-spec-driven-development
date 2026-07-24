@@ -1,0 +1,41 @@
+{
+  "id": "20260724T000429Z-135",
+  "iteration": 79,
+  "issue": {
+    "number": 135,
+    "title": "Model performance の「信頼度加重」スコアリング：少数サンプルの暴れ対策",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/135-model-performance",
+  "startedAt": "2026-07-24T00:04:29Z",
+  "finishedAt": "2026-07-24T00:16:47Z",
+  "durationSec": 738,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 137,
+  "adversary": {
+    "approved": true,
+    "summary": "信頼度加重スコアパネルが要件を完全に満たしている。Bayesian averaging で少数サンプルの暴れを実装し、テストが計算の正確性（50.0% / 35.7%）と UI 動作を実質的に検証している。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 475,
+  "cost": {
+    "builderUsd": 3.038734,
+    "adversaryUsd": 0.108981,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.147715
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

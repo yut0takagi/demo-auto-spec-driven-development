@@ -1,0 +1,43 @@
+{
+  "id": "20260723T094610Z-45",
+  "iteration": 19,
+  "issue": {
+    "number": 45,
+    "title": "Adversary 審査指摘の集約パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/45-adversary",
+  "startedAt": "2026-07-23T09:46:10Z",
+  "finishedAt": "2026-07-23T10:22:44Z",
+  "durationSec": 2194,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "key 生成ロジックが指摘文に含まれる区切り文字や # に対して脆弱で、テストが console.error スパイなど非決定的な検証に依存しています。実装がグループ内重複しか想定せず、グループ降順レンダリング時の full key 一意性が保証されていません。 / 指摘: findingKeysWithinGroup は指摘文内の # や セミコロンに対して脆弱：悪意ある指摘文 'A#0' と 'A' が同じキーを生成する可能性; React key 衝突テストが console.error スパイに依存し非決定的：バージョンや環境で警告が出ない場合がある; findingElementKeys() が返す key の一意性テスト（L173-182）が、グループ降順で返された full key セットの一意性をテストしていない; 境界値テストで指摘文内に ' / 指摘: ' や '; ' が含まれるケースが検証されていない; E2E テストがなく、実際のレンダリング時に React がどの key で要素を再マウントするか検証されていない"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 538,
+  "cost": {
+    "builderUsd": 10.705299,
+    "adversaryUsd": 0.293134,
+    "ideationUsd": 0.0,
+    "totalUsd": 10.998433
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

@@ -1,6 +1,73 @@
-import { test, expect } from '@playwright/test';
+import { test, expect, type Page } from '@playwright/test';
 import { loadRuns } from '../src/lib/loadData';
-import { summarize } from '../src/lib/aggregate';
+import {
+  summarize,
+  e2eFailureRateTrend,
+  costBreakdown,
+  changedLinesTrend,
+  builderComparison,
+  earlyWarningSignal,
+  gateReasonBreakdown,
+  gateReasonCostBreakdown,
+  gateReasonBurdenTrend,
+  gateReasonTrendSignal,
+  gateReasonChains,
+  gateFailureTypeBreakdown,
+  gateReasonSeveritySpectrum,
+  costEfficiency,
+  costPerApprovedPrTrend,
+  breakerRunway,
+  modelEffectiveness,
+  modelConfidenceWeightedScores,
+  builderModelSwitchComparisons,
+  ideationFailureSummary,
+  ideationFailureRateTrend,
+  ideationCostQualityCorrelation,
+  e2eFailureReviseCorrelation,
+  e2eFailureDiffSizeCorrelation,
+  cycleTimeTrend,
+  cycleTimeTrendSignal,
+  timeToFirstPrTrend,
+  timeToFirstPrTrendSignal,
+  issueResolutionTimeTrend,
+  issueResolutionTimeTrendSignal,
+  adversarySummaryLengthTrend,
+  adversaryCommentTrendSignal,
+  adversaryApprovalCommentStats,
+  recentAdversaryComments,
+  approvalRateTrendByModel,
+  abandonedSummary,
+  abandonedRateTrend,
+  abandonedIterationDetails,
+  adversaryApprovalByReasonAndModel,
+  pausedDryRunSummary,
+  pausedDryRunDetails,
+  gatePauseSummary,
+  gatePauseClassifications,
+  adversaryOutcomeDivergence,
+  adversaryModelVerdictMissMatrix,
+  ideationToStartLeadTimes,
+  ideationToStartLeadTimeTrendSignal,
+  ideationStartSuccessSummary,
+  ideationDropRateSignal,
+  ideationToStartLeadTimeDistribution,
+  ideationToStartBottlenecks,
+  verdictTransitions,
+  verdictTransitionSummary,
+  dropoutStreaks,
+  reviseCyclesSizeCurve,
+  modelEfficiencyByRole,
+  issueLabelSuccessRates,
+  modelSkillStratification,
+  approvedButBuilderFailedSummary,
+  approvedButBuilderFailedIterations,
+  reviseCycleCostRecovery,
+} from '../src/lib/aggregate';
+
+/** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
+function byModelNameAsc<T extends { model: string }>(summaries: T[]): T[] {
+  return [...summaries].sort((a, b) => a.model.localeCompare(b.model));
+}
 
 /**
  * data/runs/0005.json 等の値をハードコードすると、無人ループが新しい run を
@@ -19,6 +86,30 @@ function toMinutes(sec: number): string {
   return `${(sec / 60).toFixed(1)}分`;
 }
 
+/**
+ * verdict-summary-bubble や adversary-comment-trend-panel のダイジェストは
+ * adversary.summary / gateReasons という自由記述（別AIが書いた過去のレビュー文言）を
+ * そのまま表示する。そこには QA トピックとして "NaN" や "undefined" という単語
+ * そのものが登場しうる（例: data/runs/0036.json の summary）。これは実際の数値
+ * フォーマットバグ（計算結果が生の NaN/undefined としてレンダリングされる事故）とは
+ * 無関係なので、後者だけを検出したいテストでは自由記述を含む要素を除いた本文で判定する。
+ */
+async function bodyTextExcludingFreeform(page: Page): Promise<string> {
+  return page.evaluate(() => {
+    const selectors = ['[data-testid="verdict-summary-bubble"]', '[data-testid="adversary-comment-trend-panel"]'];
+    const restores: Array<{ el: HTMLElement; prevDisplay: string }> = [];
+    for (const selector of selectors) {
+      const el = document.querySelector(selector) as HTMLElement | null;
+      if (!el) continue;
+      restores.push({ el, prevDisplay: el.style.display });
+      el.style.display = 'none';
+    }
+    const text = document.body.innerText;
+    for (const { el, prevDisplay } of restores) el.style.display = prevDisplay;
+    return text;
+  });
+}
+
 test('ダッシュボードが稼働ステータスと主要メトリクスを表示する', async ({ page }) => {
   await page.goto('/');
 
@@ -30,8 +121,12 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
 
   // exact 指定: フィクスチャの issue タイトルにも「承認率…」等が含まれ、
   // 部分一致だと strict mode 違反になる。ラベルは完全一致で狙う。
-  await expect(page.getByText('反復数', { exact: true })).toBeVisible();
-  await expect(page.getByText('承認率', { exact: true })).toBeVisible();
+  // 「承認率」はモデル別比較パネル（model-approval-merge-row-*）の行ラベルとしても
+  // 表示されるため、getByText 単体だと2要素にヒットして strict mode 違反になる。
+  // トップの統計カード群（metric-cards）に限定して探す。
+  const metricCards = page.getByTestId('metric-cards');
+  await expect(metricCards.getByText('反復数', { exact: true })).toBeVisible();
+  await expect(metricCards.getByText('承認率', { exact: true })).toBeVisible();
   await expect(page.getByText('直近の反復', { exact: true })).toBeVisible();
 
   // 直近 iteration の所要時間が分表記で表示されること。値は data/runs を実際に読んで
@@ -41,29 +136,18 @@ test('ダッシュボードが稼働ステータスと主要メトリクスを�
   const avgCycleTimeText = toMinutes(summary.avgCycleTimeSec);
 
   await expect(page.getByText('直近の所要時間', { exact: true })).toBeVisible();
-  await expect(page.getByText(latestDurationText, { exact: true })).toBeVisible();
   await expect(page.getByText(`iteration ${summary.latestDurationIteration}`, { exact: true })).toBeVisible();
 
-  // 「平均サイクルタイム」と「直近の所要時間」は値が異なる別カードであり、混同されて
-  // はならない。data/runs の内容次第では両者が同値になり得るため、まずこのテストの
-  // 前提として2つの表記が異なることを確認してから、カード単位の分離を検証する。
-  expect(
-    latestDurationText,
-    'data/runs の内容が変わり、直近所要時間と平均サイクルタイムが同値になった。この場合カードの分離を検証できないため fixture を見直すこと。',
-  ).not.toBe(avgCycleTimeText);
-
-  // ラベルを起点にカード(直近の祖先の rounded-xl コンテナ)へスコープし、
-  // それぞれのカードが自分の値だけを含み、相手の値を含まないことを検証する。
-  const cycleTimeCard = page.locator('div.rounded-xl').filter({ hasText: 'サイクルタイム' });
-  const latestDurationCard = page.locator('div.rounded-xl').filter({ hasText: '直近の所要時間' });
-  await expect(cycleTimeCard).toHaveCount(1);
-  await expect(latestDurationCard).toHaveCount(1);
-
-  await expect(cycleTimeCard).toContainText(avgCycleTimeText);
-  await expect(cycleTimeCard).not.toContainText(latestDurationText);
-
-  await expect(latestDurationCard).toContainText(latestDurationText);
-  await expect(latestDurationCard).not.toContainText(avgCycleTimeText);
+  // 「平均サイクルタイム」（複数 run の平均）と「直近の所要時間」（最新1件）は算出元が
+  // 異なる別々の値だが、小数第1位への丸め表示は偶然一致しうる
+  // （例: 21.05分 と 21.12分 はどちらも表示上「21.1分」になる）。
+  // そのため表示テキストの一致/不一致でカードを識別せず、各カード固有の testid で
+  // 直接値を検証する。これにより2カードが偶然同じ表示になっても、実装が値を
+  // 取り違えていれば（testid の指す値が入れ替わっていれば）検知できる。
+  const cycleTimeValue = page.getByTestId('metric-value-cycle-time');
+  const latestDurationValue = page.getByTestId('metric-value-latest-duration');
+  await expect(cycleTimeValue).toHaveText(avgCycleTimeText);
+  await expect(latestDurationValue).toHaveText(latestDurationText);
 });
 
 test('停止バッジは理由・停止主体・再開手順を常時表示する', async ({ page }) => {
@@ -86,7 +170,7 @@ test('累計コストが $X.XX に整形され、生 float や NaN が漏れな�
   const formattedCost = `$${summary.totalCostUsd.toFixed(2)}`;
   await expect(page.getByText(formattedCost, { exact: true }).first()).toBeVisible();
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   // 整形前の高精度 float（例 1.1099999999999999）がそのまま漏れていないこと。
   const rawCost = String(summary.totalCostUsd);
   if (rawCost !== summary.totalCostUsd.toFixed(2)) {
@@ -119,7 +203,7 @@ test('カバレッジは failed 反復を拾わず、verify 到達済みの最�
   expect(lastNonFailed, 'verify 到達済み（非 failed）の run が1件も無い').toBeTruthy();
   expect(summary.latestCoverageIteration).toBe(lastNonFailed!.iteration);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
 });
 
@@ -138,11 +222,2158 @@ test('承認率・マージ率の推移グラフが表示され、最新値が M
 
   // 各グラフのヘッダに表示される最新値は、累積推移の最終点＝summarize() の
   // approvalRate/mergeRate と一致するはず（グラフとカードで数値が食い違わないことの検証）。
-  const approvalCard = page.locator('div.rounded-xl').filter({ hasText: '承認率推移' });
-  const mergeCard = page.locator('div.rounded-xl').filter({ hasText: 'マージ率推移' });
+  // カード全体を hasText で探すと、他パネルの自由記述テキスト（adversary の要約等）に
+  // 偶然「承認率推移」等の部分文字列が含まれた場合に strict mode 違反になるため、
+  // グラフ本体（svg、name で一意）の直接の親要素をカードとして特定する。
+  const approvalCard = approvalChart.locator('xpath=..');
+  const mergeCard = mergeChart.locator('xpath=..');
   await expect(approvalCard).toContainText(`${(summary.approvalRate * 100).toFixed(1)}%`);
   await expect(mergeCard).toContainText(`${(summary.mergeRate * 100).toFixed(1)}%`);
 
-  const body = await page.locator('body').innerText();
+  const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
+});
+
+test('直近の反復サマリー吹き出しが最新 iteration の verdict とレビュー内容を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const latest = [...runs].sort((a, b) => b.iteration - a.iteration)[0];
+
+  const bubble = page.getByTestId('verdict-summary-bubble');
+  await expect(bubble).toBeVisible();
+  await expect(bubble).toHaveAttribute('data-verdict', latest.verdict);
+  await expect(bubble).toContainText(`#${latest.iteration}`);
+  await expect(bubble).toContainText(`issue #${latest.issue.number}`);
+
+  // 吹き出し本文は adversary.summary（空なら gateReasons へフォールバック）。
+  // 実データを実装と同じロジックで導出し、ハードコードしない。
+  const expectedBody =
+    latest.adversary.summary.trim().length > 0
+      ? latest.adversary.summary.trim()
+      : latest.gateReasons.length > 0
+        ? latest.gateReasons.join(' / ')
+        : '（この反復にはサマリーが記録されていません）';
+  await expect(bubble).toContainText(expectedBody);
+
+  // 他の iteration の verdict が誤って選ばれていないことの回帰防止: 最新と異なる
+  // verdict を持つ run が他に存在するなら、吹き出しはその verdict ではなく
+  // 「最新 iteration」の verdict を表示しているはず。
+  const conflicting = runs.find((r) => r.iteration !== latest.iteration && r.verdict !== latest.verdict);
+  if (conflicting) {
+    await expect(bubble).not.toHaveAttribute('data-verdict', conflicting.verdict);
+  }
+});
+
+test('E2E失敗率推移グラフが表示され、最新値が data/runs から導出した累積失敗率と一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = e2eFailureRateTrend(runs);
+  const summary = summarize(runs);
+
+  const chart = page.getByRole('img', { name: 'E2E失敗率推移' });
+  await expect(chart).toBeVisible();
+
+  const card = page.locator('div.rounded-xl').filter({ hasText: 'E2E失敗率推移' });
+  await expect(card).toHaveCount(1);
+
+  // このリポジトリの data/runs は verify に到達した(非 failed の) run を常に含む
+  // 前提で運用されている（全 run が failed になるのは breaker が発火する異常事態）。
+  // そのため trend が空になる「データなし」分岐は実データでは構造的に到達できず、
+  // ここで if 分岐にして「テストしたつもり」にすると実際には検証されない。
+  // 空データ時の表示（「データなし」、svg 非描画）は TrendChart.test.tsx で、
+  // 空 trend を返す条件（全 run が failed）は aggregate.test.ts の
+  // e2eFailureRateTrend テストでそれぞれ単体テスト済み。ここでは前提を明示した
+  // 上で「データあり」経路だけを検証する。
+  expect(
+    trend.length,
+    'data/runs に verify 到達済みの run が1件も無い。fixture が全件 failed になっており、' +
+      'このテストが検証している「データあり」経路が実行されていない。',
+  ).toBeGreaterThan(0);
+
+  // 承認率・マージ率のテストと同様、trend の最終点ではなく summarize()（別の
+  // 計算経路）が導出した e2eFailureRate と突き合わせる。trend 自身から期待値を
+  // 作ると、実装のバグが期待値にもそのまま乗って検知できなくなるため。
+  await expect(card).toContainText(`${(summary.e2eFailureRate * 100).toFixed(1)}%`);
+  // 累積失敗率は 0..100 の範囲に収まるべき不変量（実装バグでの負値/100超えを検知）。
+  for (const point of trend) {
+    expect(point.value).toBeGreaterThanOrEqual(0);
+    expect(point.value).toBeLessThanOrEqual(100);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+});
+
+test('モデルコストの内訳が役割別合計とモデル別合計を表示し、Summaryの累計コストと一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = summarize(runs);
+  const breakdown = costBreakdown(runs);
+
+  expect(
+    breakdown.totalUsd,
+    'data/runs の合計コストが0のため「モデルコストの内訳」パネルの中身を検証できない。fixture を見直すこと。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-cost-breakdown');
+  await expect(panel).toBeVisible();
+  // パネルのヘッダに表示される合計は Summary.totalCostUsd（別の計算経路）と一致するはず
+  await expect(panel).toContainText(`$${summary.totalCostUsd.toFixed(2)}`);
+
+  // ロール別の内訳: builder/adversary/ideation の3つ全てがラベルとして表示され、
+  // それぞれの金額が costBreakdown() の計算結果と一致する
+  for (const role of breakdown.byRole) {
+    const label = page.getByTestId(`role-cost-label-${role.role}`);
+    await expect(label).toBeVisible();
+    await expect(label).toContainText(`$${role.totalUsd.toFixed(2)}`);
+    await expect(label).toContainText(`${role.pct.toFixed(1)}%`);
+  }
+
+  // モデル別の内訳: 各モデルが1行だけ存在し、合算後の金額を表示する
+  for (const entry of breakdown.byModel) {
+    const rows = page.getByTestId(`model-cost-row-${entry.model}`);
+    await expect(rows).toHaveCount(1);
+    await expect(rows).toContainText(`$${entry.totalUsd.toFixed(2)}`);
+  }
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
+});
+
+test('ブレーカ発火までのランウェイパネルが実データから導出した残反復数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const runway = breakerRunway(runs);
+
+  const panel = page.getByTestId('breaker-runway-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-tripped', String(runway.tripped));
+
+  // 残り回数（別経路の breakerRunway() と一致するはず）
+  await expect(page.getByTestId('breaker-runway-remaining')).toHaveText(String(runway.remaining));
+
+  // threshold 個のスロットのうち発火に近い側（末尾）の streak 個が「消費済み」であること
+  for (let i = 0; i < runway.threshold; i++) {
+    const slot = page.getByTestId(`breaker-runway-slot-${i}`);
+    await expect(slot).toHaveAttribute(
+      'data-consumed',
+      String(i >= runway.threshold - runway.streak),
+    );
+  }
+
+  // 連続が1件以上あるときだけ対象iteration注記が出る
+  if (runway.iterations.length > 0) {
+    await expect(panel).toContainText(`対象iteration: ${runway.iterations.join(', ')}`);
+  } else {
+    await expect(panel).not.toContainText('対象iteration');
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('変更行数推移グラフが表示され、最新値が data/runs から導出した changedLinesTrend の最終点と一致する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = changedLinesTrend(runs);
+
+  const chart = page.getByRole('img', { name: '変更行数推移' });
+  await expect(chart).toBeVisible();
+
+  // e2eFailureRateTrend のテストと同様の理由で、「データあり」経路のみを検証する
+  // 前提を明示する（このリポジトリの data/runs は verify 到達済み run を常に含む）。
+  expect(
+    trend.length,
+    'data/runs に verify 到達済みの run が1件も無い。fixture が全件 failed になっている。',
+  ).toBeGreaterThan(0);
+
+  const card = page.locator('div.rounded-xl').filter({ hasText: '変更行数推移' });
+  const latestValue = trend[trend.length - 1].value;
+  await expect(card).toContainText(`${latestValue.toFixed(1)}行`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+});
+
+test('Builder改善の前反復比較カードが直近2件の測定済み反復の指標と改善/悪化ラベルを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const comparison = builderComparison(runs);
+  expect(
+    comparison,
+    'data/runs に verify 到達済みの反復が2件以上無く、比較カードの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('builder-comparison');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`iteration ${comparison!.previousIteration} → ${comparison!.currentIteration}`);
+
+  // 各指標行が実データから導出した previous/current 値と、verdict に対応する
+  // 日本語ラベル（改善/悪化/変化なし）を実際に表示していることを検証する。
+  for (const m of comparison!.metrics) {
+    const row = page.getByTestId(`builder-metric-${m.key}`);
+    await expect(row).toBeVisible();
+    const verdictEl = page.getByTestId(`builder-metric-verdict-${m.key}`);
+    const expectedLabel = m.verdict === 'improved' ? '改善' : m.verdict === 'regressed' ? '悪化' : '変化なし';
+    await expect(verdictEl).toContainText(expectedLabel);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('高revise + 低承認率の前兆検知カードが実データから導出したレベルと直近window値を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = earlyWarningSignal(runs);
+  expect(
+    signal,
+    'data/runs に verify 到達済みの反復が1件も無く、前兆検知カードの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const card = page.getByTestId('early-warning-card');
+  await expect(card).toBeVisible();
+  await expect(card).toHaveAttribute('data-level', signal!.level);
+
+  const levelLabel = signal!.level === 'critical' ? '警戒' : signal!.level === 'watch' ? '注視' : '平常';
+  await expect(page.getByTestId('early-warning-level')).toContainText(levelLabel);
+
+  // カードが表示する window 内平均revise・承認率は aggregate.earlyWarningSignal（別経路）と一致するはず
+  await expect(page.getByTestId('early-warning-revise-value')).toHaveText(
+    `${signal!.windowAvgReviseCycles.toFixed(1)}回`,
+  );
+  await expect(page.getByTestId('early-warning-approval-value')).toHaveText(
+    `${(signal!.windowApprovalRate * 100).toFixed(0)}%`,
+  );
+
+  await expect(card).toContainText(`対象iteration: ${signal!.iterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由の分類パネルが実データから導出した分類・件数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateReasonBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reasons-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
+  await expect(panel).toContainText(`${totalCount}件`);
+
+  // 各分類行が gateReasonBreakdown()（別の計算経路）と一致する件数・割合・対象iterationを表示する
+  for (const b of breakdown) {
+    const countEl = page.getByTestId(`gate-reason-count-${b.category}`);
+    const pct = (b.count / totalCount) * 100;
+    await expect(countEl).toHaveText(`${b.count}件 (${pct.toFixed(1)}%)`);
+
+    const row = page.getByTestId(`gate-reason-row-${b.category}`);
+    await expect(row).toContainText(`対象iteration: ${b.iterations.join(', ')}`);
+  }
+
+  // 件数降順で描画されていること（パネルの主張である「分類」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="gate-reason-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-row-', '')),
+  );
+  expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート理由の時系列burdenチャートが実データから導出した反復ごとのカテゴリ別件数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = gateReasonBurdenTrend(runs);
+  expect(
+    points.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、チャートの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const chart = page.getByTestId('gate-reason-burden-chart');
+  await expect(chart).toBeVisible();
+
+  const latest = points[points.length - 1];
+  await expect(chart).toContainText(`直近iteration ${latest.iteration}: ${latest.total}件`);
+
+  // 各反復の列が実際に描画され、count>0のカテゴリだけが棒として存在すること
+  // （gateReasonBurdenTrend という別経路の計算結果と突き合わせる）。
+  for (const p of points) {
+    const column = page.getByTestId(`gate-reason-burden-column-${p.iteration}`);
+    await expect(column).toBeVisible();
+    for (const [category, count] of Object.entries(p.counts)) {
+      const bar = page.getByTestId(`gate-reason-burden-bar-${p.iteration}-${category}`);
+      if (count > 0) {
+        await expect(bar).toHaveCount(1);
+      } else {
+        await expect(bar).toHaveCount(0);
+      }
+    }
+  }
+
+  await expect(page.getByTestId('gate-reason-burden-iterations')).toContainText(
+    `対象iteration: ${points.map((p) => p.iteration).join(', ')}`,
+  );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート失敗別 revise実質コストパネルが実データから導出した合計コスト・revise1回あたりコストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateReasonCostBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-cost-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCostUsd = breakdown.reduce((sum, b) => sum + b.totalCostUsd, 0);
+  await expect(panel).toContainText(`総コスト $${totalCostUsd.toFixed(2)}`);
+
+  // 各カテゴリ行が gateReasonCostBreakdown()（別の計算経路）と一致する合計コスト・反復数・
+  // revise1回あたりコストを表示する
+  for (const b of breakdown) {
+    const totalEl = page.getByTestId(`gate-reason-cost-total-${b.category}`);
+    await expect(totalEl).toHaveText(`$${b.totalCostUsd.toFixed(2)}（${b.runCount}反復）`);
+
+    const perReviseEl = page.getByTestId(`gate-reason-cost-per-revise-${b.category}`);
+    const expectedPerRevise =
+      b.avgCostUsdPerReviseCycle === null || b.avgDurationSecPerReviseCycle === null
+        ? 'revise無し（即abandon等）'
+        : `$${b.avgCostUsdPerReviseCycle.toFixed(3)} / ${(b.avgDurationSecPerReviseCycle / 60).toFixed(1)}分`;
+    await expect(perReviseEl).toHaveText(`revise 1回あたり: ${expectedPerRevise}`);
+  }
+
+  // 合計コスト降順で描画されていること（パネルの主張である「実質コスト」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="gate-reason-cost-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-cost-row-', '')),
+  );
+  expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('Reviseサイクル別 APIコスト分布と回収効率パネルが実データから導出したbucket統計・回収率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const buckets = reviseCycleCostRecovery(runs);
+  expect(
+    buckets.length,
+    'data/runs から revise サイクル bucket が1件も導出できず、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('revise-cycle-cost-recovery-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${buckets.length}区分`);
+
+  // bucket は常に 0→1→2→3+ の順で描画される（出現したものだけ）
+  const rows = await page.locator('[data-testid^="revise-cost-recovery-row-"]').all();
+  const renderedBuckets = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('revise-cost-recovery-row-', '')),
+  );
+  expect(renderedBuckets).toEqual(buckets.map((b) => b.bucket));
+
+  // 各 bucket 行が reviseCycleCostRecovery()（別の計算経路）と一致するコスト統計・回収率・
+  // merge到達1件あたりコストを表示する
+  const maxMeanCostUsd = Math.max(...buckets.map((b) => b.meanCostUsd)) || 1;
+  for (const b of buckets) {
+    const statsEl = page.getByTestId(`revise-cost-recovery-stats-${b.bucket}`);
+    await expect(statsEl).toHaveText(
+      `平均$${b.meanCostUsd.toFixed(2)} / 中央値$${b.medianCostUsd.toFixed(2)} / p90 $${b.p90CostUsd.toFixed(2)}（${b.count}件）`,
+    );
+
+    const rateEl = page.getByTestId(`revise-cost-recovery-rate-${b.bucket}`);
+    await expect(rateEl).toHaveText(`回収${(b.recoveryRate * 100).toFixed(0)}%（${b.mergedCount}/${b.count}）`);
+
+    const perMergeEl = page.getByTestId(`revise-cost-recovery-per-merge-${b.bucket}`);
+    const expectedPerMerge =
+      b.usdPerMergedIteration === null ? '回収実績なし' : `$${b.usdPerMergedIteration.toFixed(2)}`;
+    await expect(perMergeEl).toHaveText(`merge到達1件あたり: ${expectedPerMerge}`);
+
+    const costBar = page.getByTestId(`revise-cost-recovery-cost-bar-${b.bucket}`);
+    const expectedCostBarPct = (b.meanCostUsd / maxMeanCostUsd) * 100;
+    const actualWidthStyle = await costBar.evaluate((el) => (el as HTMLElement).style.width);
+    expect(parseFloat(actualWidthStyle)).toBeCloseTo(expectedCostBarPct, 1);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('ゲート理由の深刻度スペクトラムパネルが実データから導出した深刻度スコア・tier別復旧コストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const spectrum = gateReasonSeveritySpectrum(runs);
+  expect(
+    spectrum.length,
+    'data/runs に failed/abandoned/needs-human で gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-severity-spectrum-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${spectrum.length}カテゴリ`);
+
+  // 各カテゴリ行が gateReasonSeveritySpectrum()（別の計算経路）と一致する深刻度スコア・
+  // tier別（failed/abandoned/needs-human）の反復数・平均コスト・revise平均回数を表示する
+  for (const s of spectrum) {
+    const scoreEl = page.getByTestId(`severity-spectrum-score-${s.category}`);
+    await expect(scoreEl).toHaveText(
+      `深刻度 ${s.severityScore.toFixed(2)}（平均$${s.avgCostUsdPerRun.toFixed(2)} / ${s.runCount}反復）`,
+    );
+
+    for (const t of s.tiers) {
+      const tierEl = page.getByTestId(`severity-spectrum-tier-${s.category}-${t.verdict}`);
+      await expect(tierEl).toContainText(
+        `${t.runCount}反復 / 平均$${t.avgCostUsdPerRun.toFixed(2)} / revise平均${t.avgReviseCyclesPerRun.toFixed(1)}回`,
+      );
+    }
+  }
+
+  // 深刻度スコア降順で描画されていること（スペクトラムの主張である「重度なほど上」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="severity-spectrum-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('severity-spectrum-row-', '')),
+  );
+  expect(renderedCategories).toEqual(spectrum.map((s) => s.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('ゲート不通過理由のカテゴリ別トレンドパネルが実データから導出した悪化/改善カテゴリ・比較windowを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = gateReasonTrendSignal(runs);
+
+  const panel = page.getByTestId('gate-reason-trend-panel');
+  await expect(panel).toBeVisible();
+
+  if (signal === null) {
+    // gateReasons を持つ反復が現状データでは1件しか無く（直前windowが取れない）、
+    // 判定不能メッセージのみが表示される経路。将来 run が積み増されればこの分岐は
+    // 下の else 側（実際の悪化/改善表示）に切り替わる。
+    await expect(panel).toContainText('反復数が少なく');
+    await expect(page.locator('[data-testid^="gate-reason-trend-row-"]')).toHaveCount(0);
+  } else {
+    // gateReasonTrendSignal()（別の計算経路）が返すカテゴリのうち横ばい以外を、
+    // コンポーネントと同じ「変化幅の大きい順」に並べ替えて期待値を作る。
+    const changed = signal.categories
+      .filter((c) => c.direction !== 'flat')
+      .sort((a, b) => Math.abs(b.delta) - Math.abs(a.delta));
+
+    if (changed.length === 0) {
+      await expect(page.getByTestId('gate-reason-trend-all-flat')).toBeVisible();
+    } else {
+      const rows = await page.locator('[data-testid^="gate-reason-trend-row-"]').all();
+      const renderedCategories = await Promise.all(
+        rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-trend-row-', '')),
+      );
+      expect(renderedCategories).toEqual(changed.map((c) => c.category));
+
+      for (const c of changed) {
+        const delta = page.getByTestId(`gate-reason-trend-delta-${c.category}`);
+        await expect(delta).toContainText(`${c.previousAvgCount.toFixed(1)} → ${c.recentAvgCount.toFixed(1)}件/反復`);
+      }
+    }
+
+    if (signal.partial) {
+      await expect(panel).toContainText('データ不足のため window 未満の反復数で計算');
+    }
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由の連鎖パネルが実データから導出したパス別のカテゴリ連鎖を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const chains = gateReasonChains(runs);
+  expect(
+    chains.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-chain-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${chains.length}パス`);
+
+  // 各パスが gateReasonChains()（別の計算経路）と一致する連鎖カテゴリを新しい順に表示する
+  for (const chain of chains) {
+    const row = page.getByTestId(`gate-reason-chain-row-${chain.iteration}`);
+    await expect(row).toContainText(`issue #${chain.issueNumber}`);
+    expect(await row.getAttribute('data-verdict')).toBe(chain.verdict);
+    for (const category of chain.categories) {
+      await expect(page.getByTestId(`gate-reason-chain-category-${chain.iteration}-${category}`)).toHaveCount(1);
+    }
+  }
+
+  const rows = await page.locator('[data-testid^="gate-reason-chain-row-"]').all();
+  const renderedIterations = await Promise.all(
+    rows.map(async (r) => Number((await r.getAttribute('data-testid'))!.replace('gate-reason-chain-row-', ''))),
+  );
+  expect(renderedIterations).toEqual(chains.map((c) => c.iteration));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過理由×モデル別 Adversary承認率パネルが実データから導出したカテゴリ・モデル別の承認率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = adversaryApprovalByReasonAndModel(runs);
+  expect(
+    rows.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-reason-model-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}区分`);
+
+  // 各カテゴリ行が adversaryApprovalByReasonAndModel()（別の計算経路）と一致する
+  // モデル別の承認率・件数・対象iterationを表示する
+  for (const row of rows) {
+    const rowEl = page.getByTestId(`adversary-reason-model-row-${row.category}`);
+    await expect(rowEl).toContainText(`${row.total}件`);
+
+    const allIterations = row.cells.flatMap((c) => c.iterations).sort((a, b) => a - b);
+    await expect(rowEl).toContainText(`対象iteration: ${allIterations.join(', ')}`);
+
+    for (const cell of row.cells) {
+      const rateEl = page.getByTestId(`adversary-reason-model-rate-${row.category}-${cell.model}`);
+      await expect(rateEl).toHaveText(
+        `承認${cell.approvalRatePct.toFixed(0)}% (${cell.approvedCount}/${cell.count})`,
+      );
+    }
+
+    // セルはcount降順で描画されていること
+    const cellEls = await page
+      .locator(`[data-testid^="adversary-reason-model-cell-${row.category}-"]`)
+      .all();
+    const renderedModels = await Promise.all(
+      cellEls.map(async (c) => (await c.getAttribute('data-testid'))!.replace(
+        `adversary-reason-model-cell-${row.category}-`,
+        '',
+      )),
+    );
+    expect(renderedModels).toEqual(row.cells.map((c) => c.model));
+  }
+
+  // カテゴリ行はtotal降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="adversary-reason-model-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-reason-model-row-', '')),
+  );
+  expect(renderedCategories).toEqual(rows.map((r) => r.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('ゲート不通過の類型別集計パネルが実データから導出したverdict別件数・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = gateFailureTypeBreakdown(runs);
+  expect(
+    breakdown.length,
+    'data/runs に gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-failure-types-panel');
+  await expect(panel).toBeVisible();
+
+  const totalCount = breakdown.reduce((sum, b) => sum + b.count, 0);
+  await expect(panel).toContainText(`${totalCount}件`);
+
+  // 各行が gateFailureTypeBreakdown()（別の計算経路）と一致する件数・割合・対象iterationを表示する
+  for (const b of breakdown) {
+    const countEl = page.getByTestId(`gate-failure-type-count-${b.verdict}`);
+    const pct = (b.count / totalCount) * 100;
+    await expect(countEl).toHaveText(`${b.count}件 (${pct.toFixed(1)}%)`);
+
+    const row = page.getByTestId(`gate-failure-type-row-${b.verdict}`);
+    await expect(row).toContainText(`対象iteration: ${b.iterations.join(', ')}`);
+  }
+
+  // 件数降順で描画されていること
+  const rows = await page.locator('[data-testid^="gate-failure-type-row-"]').all();
+  const renderedVerdicts = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-failure-type-row-', '')),
+  );
+  expect(renderedVerdicts).toEqual(breakdown.map((b) => b.verdict));
+
+  // paused/dry-run は gateReasons が常に空（意図的な非マージ）なので、
+  // このパネルの「ゲート不通過」母集団には現れないはずという不変量。
+  const pausedOrDryRun = runs.filter((r) => r.verdict === 'paused' || r.verdict === 'dry-run');
+  for (const r of pausedOrDryRun) {
+    expect(
+      r.gateReasons,
+      `iteration ${r.iteration} (${r.verdict}) の gateReasons は空である前提が崩れている`,
+    ).toEqual([]);
+  }
+  await expect(page.getByTestId('gate-failure-type-row-paused')).toHaveCount(0);
+  await expect(page.getByTestId('gate-failure-type-row-dry-run')).toHaveCount(0);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('モデル選択の効果測定パネルが実データから導出したmodel別マージ率・承認率・平均コストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = modelEffectiveness(runs);
+  expect(
+    summaries.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-effectiveness-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が modelEffectiveness()（別の計算経路）と一致するマージ率・件数・
+  // 承認率・e2e失敗率・平均revise・平均カバレッジ・平均コストを表示していること
+  for (const s of summaries) {
+    const mergeEl = page.getByTestId(`model-effectiveness-merge-${s.model}`);
+    await expect(mergeEl).toHaveText(`マージ率${(s.mergeRate * 100).toFixed(1)}% (${s.count}件)`);
+
+    const statsEl = page.getByTestId(`model-effectiveness-stats-${s.model}`);
+    await expect(statsEl).toHaveText(
+      `承認率${(s.approvalRate * 100).toFixed(1)}% / e2e失敗率${(s.e2eFailureRate * 100).toFixed(1)}% / ` +
+        `平均revise${s.avgReviseCycles.toFixed(1)}回 / 平均カバレッジ${s.avgCoveragePct.toFixed(1)}% / ` +
+        `平均コスト$${s.avgCostUsd.toFixed(2)}`,
+    );
+
+    const row = page.getByTestId(`model-effectiveness-row-${s.model}`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+  }
+
+  // マージ率降順で描画されていること
+  const rows = await page.locator('[data-testid^="model-effectiveness-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-effectiveness-row-', '')),
+  );
+  expect(renderedModels).toEqual(summaries.map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('モデル別 承認率・マージ率比較パネルが実データから導出したモデル名昇順・承認率・マージ率・ギャップを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = modelEffectiveness(runs);
+  expect(
+    summaries.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-approval-merge-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が modelEffectiveness()（別の計算経路）と一致する承認率・マージ率・
+  // ギャップ（承認率-マージ率）・件数・対象iterationを表示していること
+  for (const s of summaries) {
+    const approvalPct = s.approvalRate * 100;
+    const mergePct = s.mergeRate * 100;
+    const gapPct = approvalPct - mergePct;
+
+    const approvalEl = page.getByTestId(`model-approval-merge-approval-value-${s.model}`);
+    await expect(approvalEl).toHaveText(`${approvalPct.toFixed(1)}%`);
+
+    const mergeEl = page.getByTestId(`model-approval-merge-merge-value-${s.model}`);
+    await expect(mergeEl).toHaveText(`${mergePct.toFixed(1)}%`);
+
+    const gapEl = page.getByTestId(`model-approval-merge-gap-${s.model}`);
+    await expect(gapEl).toHaveText(`承認→マージのギャップ: ${gapPct >= 0 ? '+' : ''}${gapPct.toFixed(1)}pt`);
+
+    const row = page.getByTestId(`model-approval-merge-row-${s.model}`);
+    await expect(row).toContainText(`${s.count}件`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+  }
+
+  // ModelEffectivenessPanel はマージ率降順だが、こちらはモデル名昇順で固定されているはず
+  const rows = await page.locator('[data-testid^="model-approval-merge-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-approval-merge-row-', '')),
+  );
+  expect(renderedModels).toEqual(byModelNameAsc(summaries).map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary 承認⇔実結果 乖離パネルが実データから導出した見落とし件数・乖離率・発生反復を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summaries = adversaryOutcomeDivergence(runs);
+  expect(
+    summaries.length,
+    'data/runs に verify 到達済み run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-outcome-divergence-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${summaries.length}モデル`);
+
+  // 各モデル行が adversaryOutcomeDivergence()（別の計算経路）と一致する
+  // 乖離率・見落とし件数・誤却下件数・見落とし発生反復を表示していること
+  for (const s of summaries) {
+    const rateEl = page.getByTestId(`adversary-outcome-divergence-rate-${s.model}`);
+    await expect(rateEl).toHaveText(`${s.divergenceRatePct.toFixed(1)}%`);
+
+    const falseApproveEl = page.getByTestId(`adversary-outcome-divergence-false-approve-${s.model}`);
+    await expect(falseApproveEl).toContainText(
+      `見落とし（承認したのに非マージ）: ${s.falseApproveCount}件 / 承認${s.approvedCount}件中（${s.falseApproveRatePct.toFixed(1)}%）`,
+    );
+
+    const falseRejectEl = page.getByTestId(`adversary-outcome-divergence-false-reject-${s.model}`);
+    await expect(falseRejectEl).toContainText(
+      `誤却下（却下したのにマージ）: ${s.falseRejectCount}件 / 却下${s.rejectedCount}件中（${s.falseRejectRatePct.toFixed(1)}%）`,
+    );
+
+    const row = page.getByTestId(`adversary-outcome-divergence-row-${s.model}`);
+    if (s.falseApproveIterations.length > 0) {
+      await expect(row).toContainText(`見落とし発生反復: ${s.falseApproveIterations.map((n) => `#${n}`).join(', ')}`);
+    } else {
+      await expect(row).not.toContainText('見落とし発生反復');
+    }
+  }
+
+  // 乖離率降順で並ぶはず
+  const rows = await page.locator('[data-testid^="adversary-outcome-divergence-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-outcome-divergence-row-', '')),
+  );
+  expect(renderedModels).toEqual(summaries.map((s) => s.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversaryモデル別×Verdict別 見落とし率マトリクスパネルが実データから導出したモデル・verdict別の見落とし率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = adversaryModelVerdictMissMatrix(runs);
+  expect(
+    rows.length,
+    'data/runs に verify 到達済み run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('adversary-model-verdict-miss-matrix-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}モデル`);
+
+  // 各モデル行が adversaryModelVerdictMissMatrix()（別の計算経路）と一致する
+  // 非マージ件数・見落とし件数・全体見落とし率・verdict別セルを表示していること
+  for (const row of rows) {
+    const overallEl = page.getByTestId(`adversary-model-verdict-miss-overall-${row.model}`);
+    await expect(overallEl).toContainText(
+      `非マージ${row.nonMergedCount}件中 見落とし${row.totalMissCount}件（${row.overallMissRatePct.toFixed(1)}%）`,
+    );
+
+    const rowEl = page.getByTestId(`adversary-model-verdict-miss-row-${row.model}`);
+    if (row.cells.length === 0) {
+      await expect(rowEl).toContainText('非マージ反復なし');
+    }
+
+    for (const cell of row.cells) {
+      const rateEl = page.getByTestId(`adversary-model-verdict-miss-rate-${row.model}-${cell.verdict}`);
+      await expect(rateEl).toHaveText(`見落とし${cell.missRatePct.toFixed(0)}% (${cell.missCount}/${cell.count})`);
+
+      if (cell.iterations.length > 0) {
+        await expect(rowEl).toContainText(
+          `見落とし発生反復: ${cell.iterations.map((n) => `#${n}`).join(', ')}`,
+        );
+      }
+    }
+
+    // セルは MISS_MATRIX_VERDICT_ORDER (dry-run→paused→needs-human→abandoned) の順で描画されること
+    const cellEls = await page
+      .locator(`[data-testid^="adversary-model-verdict-miss-cell-${row.model}-"]`)
+      .all();
+    const renderedVerdicts = await Promise.all(
+      cellEls.map(async (c) => (await c.getAttribute('data-testid'))!.replace(
+        `adversary-model-verdict-miss-cell-${row.model}-`,
+        '',
+      )),
+    );
+    expect(renderedVerdicts).toEqual(row.cells.map((c) => c.verdict));
+  }
+
+  // overallMissRatePct の降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="adversary-model-verdict-miss-row-"]').all();
+  const renderedModels = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('adversary-model-verdict-miss-row-', '')),
+  );
+  expect(renderedModels).toEqual(rows.map((r) => r.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Builderモデル切り替えのA/B比較パネルが実データから導出した切り替えイベントの有無・承認率/マージ率の変化を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const comparisons = builderModelSwitchComparisons(runs);
+
+  if (comparisons.length === 0) {
+    // 現状データでは builder モデルが切り替わったことが一度も無い経路。将来 run が積み増され
+    // モデル切り替えが発生すれば下の else 側（実際のA/B比較表示）に切り替わる。
+    await expect(page.getByText('Builderモデル切り替えのA/B比較')).toBeVisible();
+    await expect(
+      page.getByText('データなし（builder モデルの切り替えが記録されていません）'),
+    ).toBeVisible();
+    await expect(page.locator('[data-testid="builder-model-switch-ab-panel"]')).toHaveCount(0);
+  } else {
+    const panel = page.getByTestId('builder-model-switch-ab-panel');
+    await expect(panel).toBeVisible();
+    await expect(panel).toContainText(`${comparisons.length}回の切り替え`);
+
+    // 各切り替えイベント行が builderModelSwitchComparisons()（別の計算経路）と一致する
+    // 承認率・マージ率の before→after・差分・verdictを表示していること
+    for (const c of comparisons) {
+      const row = page.getByTestId(`builder-model-switch-row-${c.switchIndex}`);
+      await expect(row).toContainText(
+        `${c.before.model} (iteration ${c.before.fromIteration}〜${c.before.toIteration}) → ${c.after.model} (iteration ${c.after.fromIteration}〜${c.after.toIteration})`,
+      );
+
+      const approvalPctBefore = (c.before.approvalRate * 100).toFixed(1);
+      const approvalPctAfter = (c.after.approvalRate * 100).toFixed(1);
+      const approvalValue = page.getByTestId(`builder-model-switch-approval-value-${c.switchIndex}`);
+      await expect(approvalValue).toHaveText(`${approvalPctBefore}% → ${approvalPctAfter}%`);
+
+      const approvalDeltaPt = c.approvalRateDelta * 100;
+      const approvalSign = approvalDeltaPt > 0 ? '+' : '';
+      const approvalVerdictLabel =
+        c.approvalVerdict === 'improved' ? '改善' : c.approvalVerdict === 'regressed' ? '悪化' : '変化なし';
+      const approvalVerdict = page.getByTestId(`builder-model-switch-approval-verdict-${c.switchIndex}`);
+      await expect(approvalVerdict).toHaveText(
+        `${approvalSign}${approvalDeltaPt.toFixed(1)}pt (${approvalVerdictLabel})`,
+      );
+
+      const mergePctBefore = (c.before.mergeRate * 100).toFixed(1);
+      const mergePctAfter = (c.after.mergeRate * 100).toFixed(1);
+      const mergeValue = page.getByTestId(`builder-model-switch-merge-value-${c.switchIndex}`);
+      await expect(mergeValue).toHaveText(`${mergePctBefore}% → ${mergePctAfter}%`);
+
+      const mergeDeltaPt = c.mergeRateDelta * 100;
+      const mergeSign = mergeDeltaPt > 0 ? '+' : '';
+      const mergeVerdictLabel =
+        c.mergeVerdict === 'improved' ? '改善' : c.mergeVerdict === 'regressed' ? '悪化' : '変化なし';
+      const mergeVerdict = page.getByTestId(`builder-model-switch-merge-verdict-${c.switchIndex}`);
+      await expect(mergeVerdict).toHaveText(`${mergeSign}${mergeDeltaPt.toFixed(1)}pt (${mergeVerdictLabel})`);
+
+      await expect(row).toContainText(`対象反復数: ${c.before.model} ${c.before.count}件 / ${c.after.model} ${c.after.count}件`);
+    }
+
+    const rows = await page.locator('[data-testid^="builder-model-switch-row-"]').all();
+    const renderedIndices = await Promise.all(
+      rows.map(async (r) => Number((await r.getAttribute('data-testid'))!.replace('builder-model-switch-row-', ''))),
+    );
+    expect(renderedIndices).toEqual(comparisons.map((c) => c.switchIndex));
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Cost効率（USD per 承認PR）パネルが実データから導出した総コスト・承認PR件数・単価を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const efficiency = costEfficiency(runs);
+  expect(
+    efficiency.approvedPrCount,
+    'data/runs に承認PR（adversary承認かつPRが開かれた反復）が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('cost-efficiency-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの総コスト・承認PR件数は costEfficiency()（別の計算経路）と一致するはず
+  const totalEl = page.getByTestId('cost-efficiency-total');
+  await expect(totalEl).toHaveText(
+    `総コスト $${efficiency.totalCostUsd.toFixed(2)} / 承認PR ${efficiency.approvedPrCount}件`,
+  );
+
+  // 見出しの単価は totalCostUsd / approvedPrCount と一致するはず
+  await expect(page.getByTestId('cost-efficiency-value')).toContainText(`$${efficiency.usdPerApprovedPr!.toFixed(2)}`);
+
+  // 推移バーは costPerApprovedPrTrend()（別の計算経路）の点数と一致し、
+  // 最後のバーの iteration が実データの最終点と揃っていること
+  const trend = costPerApprovedPrTrend(runs);
+  const bars = page.locator('[data-testid^="cost-efficiency-bar-"]');
+  await expect(bars).toHaveCount(trend.length);
+  const lastPoint = trend[trend.length - 1];
+  await expect(page.getByTestId(`cost-efficiency-bar-${lastPoint.iteration}`)).toBeVisible();
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation失敗率パネルが実データから導出した実行件数・失敗件数・失敗率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = ideationFailureSummary(runs);
+  expect(
+    summary.attempted,
+    'data/runs に ideation が実行された（cost.ideationUsd > 0 の）反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-failure-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの実行件数・失敗件数は ideationFailureSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('ideation-failure-attempted')).toHaveText(
+    `実行 ${summary.attempted}件中 ${summary.failed}件が提案0件`,
+  );
+  await expect(page.getByTestId('ideation-failure-value')).toHaveText(`${(summary.failureRate * 100).toFixed(1)}%`);
+
+  if (summary.failedIterations.length > 0) {
+    await expect(page.getByTestId('ideation-failure-iterations')).toContainText(
+      `対象iteration: ${summary.failedIterations.join(', ')}`,
+    );
+  } else {
+    await expect(page.getByTestId('ideation-failure-iterations')).toHaveCount(0);
+  }
+
+  // 推移チャートは ideationFailureRateTrend()（別の計算経路）の点数・対象iterationと一致する
+  const trend = ideationFailureRateTrend(runs);
+  const trendBars = page.locator('[data-testid^="ideation-failure-trend-bar-"]');
+  await expect(trendBars).toHaveCount(trend.length);
+  for (const point of trend) {
+    await expect(page.getByTestId(`ideation-failure-trend-bar-${point.iteration}`)).toBeVisible();
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideationコスト効率と生成品質の関連性パネルが実データから導出したbatch内訳・相関係数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = ideationCostQualityCorrelation(runs);
+  expect(
+    stats.batches.length,
+    'data/runs に ideation が提案を行った反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.mergeRateSampleSize,
+    'data/runs に提案issueが実際に着手された反復が1件も無く、相関算出の経路を検証できない。',
+  ).toBeGreaterThan(1);
+
+  const panel = page.getByTestId('ideation-cost-quality-panel');
+  await expect(panel).toBeVisible();
+
+  const approvalEl = page.getByTestId('ideation-cost-quality-correlation-approval');
+  if (stats.costVsApprovalRateCorrelation === null) {
+    await expect(approvalEl).toHaveText('算出不可');
+  } else {
+    await expect(approvalEl).toHaveText(`r = ${stats.costVsApprovalRateCorrelation.toFixed(2)}`);
+  }
+
+  const mergeEl = page.getByTestId('ideation-cost-quality-correlation-merge');
+  if (stats.costVsMergeRateCorrelation === null) {
+    await expect(mergeEl).toHaveText('算出不可');
+  } else {
+    await expect(mergeEl).toHaveText(`r = ${stats.costVsMergeRateCorrelation.toFixed(2)}`);
+  }
+
+  // batch行は ideationCostQualityCorrelation()（別の計算経路）と同数・同iterationで存在するはず
+  const rows = page.locator('[data-testid^="ideation-cost-quality-row-"]');
+  await expect(rows).toHaveCount(stats.batches.length);
+  const lastBatch = stats.batches[stats.batches.length - 1];
+  await expect(page.getByTestId(`ideation-cost-quality-row-${lastBatch.iteration}`)).toContainText(
+    `$${lastBatch.costPerIssueUsd.toFixed(3)}`,
+  );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation→着手までのリードタイム・着手成功率観測パネルが実データから導出した着手率・未着手issue・リードタイム傾向を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = ideationStartSuccessSummary(runs);
+  expect(
+    summary.proposedTotal,
+    'data/runs に ideation が提案した(nextIssuesに含めた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const points = ideationToStartLeadTimes(runs);
+  const signal = ideationToStartLeadTimeTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs に着手済み(提案元が特定できissue.numberとして後続反復に現れた)issueが2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-to-start-lead-time-panel');
+  await expect(panel).toBeVisible();
+
+  // 着手成功率・件数は ideationStartSuccessSummary()（別の計算経路）と一致するはず
+  const startRatePct = (summary.startRate ?? 0) * 100;
+  await expect(page.getByTestId('ideation-to-start-success-rate')).toHaveText(`${startRatePct.toFixed(1)}%`);
+  await expect(page.getByTestId('ideation-to-start-success-counts')).toContainText(
+    `提案 ${summary.proposedTotal}件中 ${summary.startedCount}件が着手済み`,
+  );
+
+  if (summary.notStartedIssueNumbers.length > 0) {
+    const notStartedBlock = page.getByTestId('ideation-to-start-not-started-issues');
+    const firstNotStarted = summary.notStartedIssueNumbers[0];
+    await expect(notStartedBlock).toContainText(`#${firstNotStarted}`);
+  }
+
+  // 折れ線の最新値（分表記）が ideationToStartLeadTimes()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(toMinutes(latest.leadTimeSec));
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(`issue #${latest.issueNumber}`);
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(
+    `提案 iteration ${latest.proposedIteration}`,
+  );
+  await expect(page.getByTestId('ideation-to-start-lead-time-latest')).toContainText(
+    `着手 iteration ${latest.startIteration}`,
+  );
+
+  const signalBlock = page.getByTestId('ideation-to-start-lead-time-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('ideation-to-start-lead-time-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('ideation-to-start-lead-time-recent-avg')).toHaveText(toMinutes(signal!.recentAvgSec));
+  await expect(page.getByTestId('ideation-to-start-lead-time-previous-avg')).toHaveText(
+    toMinutes(signal!.previousAvgSec),
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: 同一issue番号は着手済み一覧に高々1回しか現れない
+  const issueNumbers = points.map((p) => p.issueNumber);
+  expect(new Set(issueNumbers).size).toBe(issueNumbers.length);
+  // 回帰防止（不変量）: 未着手issueと着手済みissueは重複しない
+  for (const n of summary.notStartedIssueNumbers) {
+    expect(issueNumbers).not.toContain(n);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue提案→初着手のドロップレート検知パネルが実データから導出したドロップ率・連続ドロップ・対象issueを表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationDropRateSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation が提案した(nextIssuesに含めた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-drop-rate-panel');
+  await expect(panel).toBeVisible();
+
+  if (signal!.judgedTotal === 0) {
+    await expect(panel).toContainText('まだドロップ判定できません');
+    await expect(page.getByTestId('ideation-drop-rate-value')).toHaveCount(0);
+  } else {
+    // ドロップ率・件数は ideationDropRateSignal()（別の計算経路）と一致するはず
+    const dropRatePct = (signal!.dropRate ?? 0) * 100;
+    await expect(page.getByTestId('ideation-drop-rate-value')).toHaveText(`${dropRatePct.toFixed(1)}%`);
+    await expect(page.getByTestId('ideation-drop-rate-counts')).toContainText(
+      `判定 ${signal!.judgedTotal}件中 ${signal!.droppedCount}件がドロップ`,
+    );
+
+    const signalBlock = page.getByTestId('ideation-drop-rate-signal');
+    await expect(signalBlock).toHaveAttribute('data-triggered', String(signal!.triggered));
+    await expect(page.getByTestId('ideation-drop-rate-streak')).toHaveText(String(signal!.streak));
+    await expect(page.getByTestId('ideation-drop-rate-status')).toContainText(
+      signal!.triggered ? '発報' : '未発報',
+    );
+
+    // 判定済みドロップissueの先頭10件は一覧に個別表示されるはず（別の計算経路と突き合わせ）
+    const shown = signal!.droppedIssues.slice(0, 10);
+    for (const d of shown) {
+      await expect(page.getByTestId(`ideation-drop-rate-issue-${d.issueNumber}`)).toBeVisible();
+    }
+
+    // 回帰防止（不変量）: ドロップと判定されたissueは提案から staleAfterIterations 反復以上経過している
+    for (const d of signal!.droppedIssues) {
+      expect(d.ageIterations).toBeGreaterThanOrEqual(signal!.staleAfterIterations);
+      expect(d.status).toBe('dropped');
+    }
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('E2E失敗とrevise回数の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = e2eFailureReviseCorrelation(runs);
+  expect(
+    stats.sampleSize,
+    'data/runs に verify 到達済みの反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.failedCount,
+    'data/runs に e2e 失敗した反復が1件も無く、失敗群の表示を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('e2e-revise-correlation-panel');
+  await expect(panel).toBeVisible();
+
+  // 群別の平均revise回数は e2eFailureReviseCorrelation()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('e2e-revise-passed-mean')).toHaveText(`${stats.passedMeanRevise.toFixed(1)}回`);
+  await expect(page.getByTestId('e2e-revise-failed-mean')).toHaveText(`${stats.failedMeanRevise.toFixed(1)}回`);
+
+  const coefficientEl = page.getByTestId('e2e-revise-correlation-coefficient');
+  if (stats.correlationCoefficient === null) {
+    await expect(coefficientEl).toHaveText('算出不可');
+  } else {
+    await expect(coefficientEl).toHaveText(`r = ${stats.correlationCoefficient.toFixed(2)}`);
+  }
+
+  await expect(page.getByTestId('e2e-revise-failed-iterations')).toContainText(
+    `E2E失敗した反復: ${stats.failedIterations.join(', ')}`,
+  );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('E2E失敗と変更行数(diff size)の相関パネルが実データから導出した群別平均・相関係数を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stats = e2eFailureDiffSizeCorrelation(runs);
+  expect(
+    stats.sampleSize,
+    'data/runs に verify 到達済みの反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.failedCount,
+    'data/runs に e2e 失敗した反復が1件も無く、失敗群の表示を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('e2e-diffsize-correlation-panel');
+  await expect(panel).toBeVisible();
+
+  // 群別の平均変更行数は e2eFailureDiffSizeCorrelation()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('e2e-diffsize-passed-mean')).toHaveText(
+    `${stats.passedMeanChangedLines.toFixed(1)}行`,
+  );
+  await expect(page.getByTestId('e2e-diffsize-failed-mean')).toHaveText(
+    `${stats.failedMeanChangedLines.toFixed(1)}行`,
+  );
+
+  const coefficientEl = page.getByTestId('e2e-diffsize-correlation-coefficient');
+  if (stats.correlationCoefficient === null) {
+    await expect(coefficientEl).toHaveText('算出不可');
+  } else {
+    await expect(coefficientEl).toHaveText(`r = ${stats.correlationCoefficient.toFixed(2)}`);
+  }
+
+  await expect(page.getByTestId('e2e-diffsize-failed-iterations')).toContainText(
+    `E2E失敗した反復: ${stats.failedIterations.join(', ')}`,
+  );
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
+});
+
+test('CI/ゲート通過時間のトレンド観測パネルが実データから導出した傾向・直近直前平均を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = cycleTimeTrend(runs);
+  const signal = cycleTimeTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の反復数が1件以下で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('cycle-time-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が cycleTimeTrend()（別の計算経路）の最終点と一致するはず
+  const latestMinutes = points[points.length - 1].value / 60;
+  await expect(panel).toContainText(`${latestMinutes.toFixed(1)}分`);
+
+  const signalBlock = page.getByTestId('cycle-time-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('cycle-time-trend-direction')).toContainText(directionLabels[signal!.direction]);
+  await expect(page.getByTestId('cycle-time-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('cycle-time-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue開始から初PR作成までの時間トレンド観測パネルが、PRが作られた反復だけを対象に傾向・直近直前平均を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = timeToFirstPrTrend(runs);
+  const signal = timeToFirstPrTrendSignal(runs);
+
+  // このリポジトリの data/runs は PR が実際に作られた(prNumber !== null)反復を
+  // 複数含む前提で運用されている。0/1件しか無いと「データあり」経路自体を
+  // 検証できないため、前提を明示した上で失敗させる。
+  expect(
+    signal,
+    'data/runs に prNumber が設定された(PRが作られた)反復が2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('time-to-first-pr-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が timeToFirstPrTrend()（別の計算経路）の最終点と一致するはず
+  const latestMinutes = points[points.length - 1].value / 60;
+  await expect(panel).toContainText(`${latestMinutes.toFixed(1)}分`);
+
+  const signalBlock = page.getByTestId('time-to-first-pr-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('time-to-first-pr-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('time-to-first-pr-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('time-to-first-pr-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: PRが一度も作られなかった(prNumber: null)反復は、この
+  // パネルが比較に使う直近/直前ウィンドウの対象iterationに含まれてはいけない。
+  const noPrIterations = runs.filter((r) => r.prNumber === null).map((r) => r.iteration);
+  for (const it of [...signal!.recentIterations, ...signal!.previousIterations]) {
+    expect(noPrIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Issue生成からIssueクローズまでの解決時間トレンドパネルが実データから導出した傾向・直近直前平均・直近解決issueを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = issueResolutionTimeTrend(runs);
+  const signal = issueResolutionTimeTrendSignal(runs);
+
+  // このリポジトリの data/runs は nextIssues 経由で生成され、後に merged/abandoned で
+  // クローズされたissueを複数含む前提で運用されている。0/1件しか無いと「データあり」経路
+  // 自体を検証できないため、前提を明示した上で失敗させる。
+  expect(
+    signal,
+    'data/runs に生成元(nextIssues)が特定できクローズもされたissueが2件未満で、トレンド判定の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('issue-resolution-time-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 折れ線の最新値（分表記）が issueResolutionTimeTrend()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(`${(latest.value / 60).toFixed(1)}分`);
+
+  // 直近解決issueの注記が生成元/クローズ先の反復番号込みで一致するはず
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(`issue #${latest.issueNumber}`);
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(
+    `生成 iteration ${latest.createdIteration}`,
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-latest')).toContainText(
+    `クローズ iteration ${latest.iteration}`,
+  );
+
+  const signalBlock = page.getByTestId('issue-resolution-time-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    increasing: '悪化傾向',
+    decreasing: '改善傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('issue-resolution-time-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-recent-avg')).toHaveText(
+    `${(signal!.recentAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(page.getByTestId('issue-resolution-time-trend-previous-avg')).toHaveText(
+    `${(signal!.previousAvgSec / 60).toFixed(1)}分`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 回帰防止（不変量）: 同一issue番号は解決済み一覧に高々1回しか現れない
+  // （重複dispatchされていても最初のクローズだけを1件として数えるはず）。
+  const issueNumbers = points.map((p) => p.issueNumber);
+  expect(new Set(issueNumbers).size).toBe(issueNumbers.length);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary承認コメントの要約・トレンドパネルが実データから導出した文字数トレンド・承認/却下統計・直近ダイジェストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = adversarySummaryLengthTrend(runs);
+  const signal = adversaryCommentTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の verify 到達済み反復数が1件以下で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('adversary-comment-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの最新値は adversarySummaryLengthTrend()（別の計算経路）の最終点と一致するはず
+  const latestLength = points[points.length - 1].value;
+  await expect(panel).toContainText(`${latestLength.toFixed(1)}文字`);
+
+  const signalBlock = page.getByTestId('adversary-comment-trend-signal');
+  await expect(signalBlock).toHaveAttribute('data-direction', signal!.direction);
+
+  const directionLabels: Record<string, string> = {
+    lengthening: '長文化傾向',
+    shortening: '短文化傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('adversary-comment-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+  await expect(page.getByTestId('adversary-comment-trend-recent-avg')).toHaveText(
+    `${signal!.recentAvgLength.toFixed(1)}文字`,
+  );
+  await expect(page.getByTestId('adversary-comment-trend-previous-avg')).toHaveText(
+    `${signal!.previousAvgLength.toFixed(1)}文字`,
+  );
+  await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
+  await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  // 承認/却下の平均文字数は adversaryApprovalCommentStats()（別の計算経路）と一致するはず
+  const stats = adversaryApprovalCommentStats(runs);
+  await expect(page.getByTestId('adversary-comment-approved-avg')).toHaveText(
+    `${stats.approvedAvgLength.toFixed(1)}文字 (${stats.approvedCount}件)`,
+  );
+  await expect(page.getByTestId('adversary-comment-rejected-avg')).toHaveText(
+    `${stats.rejectedAvgLength.toFixed(1)}文字 (${stats.rejectedCount}件)`,
+  );
+
+  // ダイジェストは recentAdversaryComments()（別の計算経路）と件数・iteration・承認バッジが一致する
+  const digest = recentAdversaryComments(runs);
+  for (const entry of digest) {
+    const row = page.getByTestId(`adversary-comment-digest-${entry.iteration}`);
+    await expect(row).toBeVisible();
+    await expect(row).toHaveAttribute('data-approved', String(entry.approved));
+    await expect(row).toContainText(`issue #${entry.issueNumber}`);
+  }
+  const digestRows = page.locator('[data-testid^="adversary-comment-digest-"]');
+  await expect(digestRows).toHaveCount(digest.length);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Model別承認率トレンド観測パネルが実データから導出したモデル別の累積承認率推移・最新値を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const series = approvalRateTrendByModel(runs);
+  expect(
+    series.some((s) => s.points.length > 0),
+    'data/runs に verify 到達済みの反復を持つ builder モデルが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBe(true);
+
+  const panel = page.getByTestId('model-approval-rate-trend-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${series.length}モデル`);
+
+  // 各モデルの凡例行が approvalRateTrendByModel()（別の計算経路）と一致する最新値・件数を表示する
+  for (const s of series) {
+    const legend = page.getByTestId(`model-approval-rate-trend-latest-${s.model}`);
+    if (s.count === 0) {
+      await expect(legend).toHaveText('データなし (0件)');
+      await expect(page.getByTestId(`model-approval-rate-trend-line-${s.model}`)).toHaveCount(0);
+      await expect(page.getByTestId(`model-approval-rate-trend-point-${s.model}`)).toHaveCount(0);
+    } else {
+      await expect(legend).toHaveText(`最新${s.latestRate.toFixed(1)}% (${s.count}件)`);
+      // 2点以上なら折れ線(path)、1点だけなら単一点(circle)として描画される
+      const lineCount = await page.getByTestId(`model-approval-rate-trend-line-${s.model}`).count();
+      const pointCount = await page.getByTestId(`model-approval-rate-trend-point-${s.model}`).count();
+      expect(lineCount + pointCount).toBe(1);
+    }
+  }
+
+  // 凡例の描画順は count 降順・同数はモデル名昇順（approvalRateTrendByModel の並びそのもの）
+  const legendRows = await page.locator('[data-testid^="model-approval-rate-trend-legend-"]').all();
+  const renderedModels = await Promise.all(
+    legendRows.map(async (r) =>
+      (await r.getAttribute('data-testid'))!.replace('model-approval-rate-trend-legend-', ''),
+    ),
+  );
+  expect(renderedModels).toEqual(series.map((s) => s.model));
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
+});
+
+test('Abandoned反復の追跡・分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = abandonedSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に abandoned な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('abandoned-iterations-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダ・サマリー指標は abandonedSummary()/abandonedRateTrend()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('abandoned-count')).toHaveText(`${summary.count}件`);
+
+  const trend = abandonedRateTrend(runs);
+  const latestRatePct = trend[trend.length - 1].value;
+  await expect(page.getByTestId('abandoned-latest-rate')).toHaveText(`${latestRatePct.toFixed(1)}%`);
+  await expect(page.getByTestId('abandoned-total-cost')).toHaveText(`$${summary.totalCostUsd.toFixed(2)}`);
+  await expect(page.getByTestId('abandoned-avg-revise')).toHaveText(`${summary.avgReviseCycles.toFixed(1)}`);
+
+  const topReasonEl = page.getByTestId('abandoned-top-reason');
+  if (summary.topGateReasonCategory === null) {
+    await expect(topReasonEl).toHaveText('なし');
+  } else {
+    await expect(topReasonEl).toContainText(`${summary.topGateReasonCount}件`);
+  }
+
+  // 一覧は abandonedIterationDetails()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = abandonedIterationDetails(runs);
+  const rows = page.locator('[data-testid^="abandoned-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`abandoned-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('abandoned-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: abandoned 以外の verdict はこの一覧に現れてはいけない
+  const nonAbandonedIterations = runs.filter((r) => r.verdict !== 'abandoned').map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(nonAbandonedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Adversary承認済みなのにBuilder実装失敗パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = approvedButBuilderFailedSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に adversary承認済みなのに builder が失敗した反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('approved-builder-failed-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダ・サマリー指標は approvedButBuilderFailedSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('approved-builder-failed-count')).toHaveText(`${summary.count}件`);
+  await expect(page.getByTestId('approved-builder-failed-rate')).toHaveText(`${summary.ratePct.toFixed(1)}%`);
+  await expect(page.getByTestId('approved-builder-failed-cost')).toHaveText(`$${summary.totalCostUsd.toFixed(2)}`);
+
+  const topCategoryEl = page.getByTestId('approved-builder-failed-top-category');
+  if (summary.topCategory === null) {
+    await expect(topCategoryEl).toHaveText('なし');
+  } else {
+    await expect(topCategoryEl).toContainText(`${summary.topCategoryCount}件`);
+  }
+
+  // 一覧は approvedButBuilderFailedIterations()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = approvedButBuilderFailedIterations(runs);
+  const rows = page.locator('[data-testid^="approved-builder-failed-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`approved-builder-failed-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('approved-builder-failed-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: merged になった反復、および adversary が approve していない反復は
+  // このパネルの一覧に現れてはいけない
+  const ineligibleIterations = runs
+    .filter((r) => r.verdict === 'merged' || !r.adversary.approved)
+    .map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(ineligibleIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Paused/Dryrun反復の停止理由・生存時間分析パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = pausedDryRunSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に paused/dry-run な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('paused-dryrun-survival-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは pausedDryRunSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('paused-dryrun-count')).toHaveText(`${summary.count}件`);
+
+  // 停止理由別の行は該当件数がある理由だけ存在し、平均/最長生存反復数・PR開設件数・合計コストが一致するはず
+  for (const r of summary.reasons) {
+    const row = page.getByTestId(`paused-dryrun-reason-${r.stopReason}`);
+    await expect(row).toContainText(`${r.count}件`);
+    await expect(row).toContainText(`平均生存${r.avgSurvivalIterations.toFixed(1)}反復`);
+    await expect(row).toContainText(`最長生存${r.maxSurvivalIterations}反復`);
+    await expect(row).toContainText(`PR開設${r.openPrCount}件`);
+    await expect(row).toContainText(`$${r.totalCostUsd.toFixed(2)}`);
+  }
+  const allStopReasons = ['paused', 'dry-run'] as const;
+  for (const stopReason of allStopReasons) {
+    if (!summary.reasons.some((r) => r.stopReason === stopReason)) {
+      await expect(page.getByTestId(`paused-dryrun-reason-${stopReason}`)).toHaveCount(0);
+    }
+  }
+
+  if (summary.longestSurviving) {
+    const longest = page.getByTestId('paused-dryrun-longest');
+    await expect(longest).toContainText(`issue #${summary.longestSurviving.issueNumber}`);
+    await expect(longest).toContainText(`${summary.longestSurviving.survivalIterations}反復経過`);
+  }
+
+  // 一覧は pausedDryRunDetails()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = pausedDryRunDetails(runs);
+  const rows = page.locator('[data-testid^="paused-dryrun-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`paused-dryrun-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+    await expect(row).toContainText(d.prNumber !== null ? `PR #${d.prNumber}` : 'PRなし');
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('paused-dryrun-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: paused/dry-run 以外の verdict はこの一覧に現れてはいけない
+  const otherVerdictIterations = runs
+    .filter((r) => r.verdict !== 'paused' && r.verdict !== 'dry-run')
+    .map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(otherVerdictIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Gate通過後Pauseパターン分類・離脱検知パネルが実データから導出したサマリーと一覧を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const summary = gatePauseSummary(runs);
+  expect(
+    summary.count,
+    'data/runs に paused な反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-pause-abandonment-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダは gatePauseSummary()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('gate-pause-count')).toHaveText(`${summary.count}件`);
+
+  // pattern別の行は該当件数がある pattern だけ存在し、件数が一致するはず
+  const allPatterns = ['clean-pause', 'contested-pause'] as const;
+  for (const pattern of allPatterns) {
+    const found = summary.patterns.find((p) => p.pattern === pattern);
+    const row = page.getByTestId(`gate-pause-pattern-${pattern}`);
+    if (found) {
+      await expect(row).toContainText(`${found.count}件`);
+    } else {
+      await expect(row).toHaveCount(0);
+    }
+  }
+
+  // abandonmentStatus別の行も同様
+  const allStatuses = ['reattempted', 'stalled', 'pending'] as const;
+  for (const status of allStatuses) {
+    const found = summary.abandonment.find((a) => a.status === status);
+    const row = page.getByTestId(`gate-pause-status-${status}`);
+    if (found) {
+      await expect(row).toContainText(`${found.count}件`);
+    } else {
+      await expect(row).toHaveCount(0);
+    }
+  }
+
+  if (summary.mostAtRisk) {
+    const mostAtRisk = page.getByTestId('gate-pause-most-at-risk');
+    await expect(mostAtRisk).toContainText(`issue #${summary.mostAtRisk.issueNumber}`);
+    await expect(mostAtRisk).toContainText(`${summary.mostAtRisk.survivalIterations}反復経過`);
+  } else {
+    await expect(page.getByTestId('gate-pause-most-at-risk')).toHaveCount(0);
+  }
+
+  // 一覧は gatePauseClassifications()（別の計算経路）と同数・同iterationで、新しい反復から順に並ぶはず
+  const details = gatePauseClassifications(runs);
+  const rows = page.locator('[data-testid^="gate-pause-row-"]');
+  await expect(rows).toHaveCount(details.length);
+  for (const d of details) {
+    const row = page.getByTestId(`gate-pause-row-${d.iteration}`);
+    await expect(row).toContainText(`issue #${d.issueNumber}`);
+    await expect(row).toContainText(d.issueTitle);
+    await expect(row).toContainText(d.prNumber !== null ? `PR #${d.prNumber}` : 'PRなし');
+    await expect(row).toContainText(`${d.survivalIterations}反復経過`);
+  }
+
+  const renderedIterations = await Promise.all(
+    (await rows.all()).map(async (r) =>
+      Number((await r.getAttribute('data-testid'))!.replace('gate-pause-row-', '')),
+    ),
+  );
+  expect(renderedIterations).toEqual(details.map((d) => d.iteration));
+
+  // 回帰防止（不変量）: paused 以外の verdict はこの一覧に現れてはいけない
+  const nonPausedIterations = runs.filter((r) => r.verdict !== 'paused').map((r) => r.iteration);
+  for (const it of renderedIterations) {
+    expect(nonPausedIterations).not.toContain(it);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Verdict遷移の自動分類・離脱パターン検知パネルが実データから導出した遷移種別・離脱区間を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const transitions = verdictTransitions(runs);
+  expect(
+    transitions.length,
+    'data/runs の反復数が2件未満で、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('verdict-transition-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${transitions.length}遷移`);
+
+  // 遷移種別ごとの件数・割合が verdictTransitionSummary()（別の計算経路）と一致するはず
+  const summary = verdictTransitionSummary(runs);
+  for (const s of summary) {
+    const countEl = page.getByTestId(`verdict-transition-kind-count-${s.kind}`);
+    await expect(countEl).toHaveText(`${s.count}件 (${s.pct.toFixed(1)}%)`);
+  }
+  // count降順で描画されていること
+  const kindEls = await page.locator('[data-testid^="verdict-transition-kind-count-"]').all();
+  const renderedKinds = await Promise.all(
+    kindEls.map(async (el) => (await el.getAttribute('data-testid'))!.replace('verdict-transition-kind-count-', '')),
+  );
+  expect(renderedKinds).toEqual(summary.map((s) => s.kind));
+
+  // 離脱パターン（非マージ連続）が dropoutStreaks()（別の計算経路）と一致する件数・区間・結末を表示するはず
+  const streaks = dropoutStreaks(runs);
+  await expect(page.getByTestId('dropout-streak-count')).toHaveText(`${streaks.length}件`);
+  for (const s of streaks) {
+    const row = page.getByTestId(`dropout-streak-row-${s.startIteration}`);
+    await expect(row).toContainText(`iteration ${s.startIteration}〜${s.endIteration}（${s.length}反復連続）`);
+    await expect(row).toContainText(`浪費コスト $${s.totalCostUsd.toFixed(2)}`);
+    expect(await row.getAttribute('data-outcome')).toBe(s.outcome);
+  }
+
+  const body2 = await bodyTextExcludingFreeform(page);
+  expect(body2).not.toContain('NaN');
+  expect(body2).not.toContain('undefined');
+});
+
+test('変更規模と修正サイクルの非線形カーブパネルが実データから導出したサイズ区分別revise回数・カーブ形状を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+
+  const signal = reviseCyclesSizeCurve(runs);
+  expect(signal.buckets.length, 'changedLines>0でverifyに到達した反復が0件で「データあり」経路を検証できない').toBeGreaterThan(0);
+
+  await expect(page.getByTestId('revision-size-curve-panel')).toBeVisible();
+
+  const shapeLabels = {
+    convex: '加速（非線形に悪化）',
+    concave: '減速（伸びは頭打ち）',
+    linear: 'ほぼ比例',
+    'insufficient-data': 'データ不足',
+  } as const;
+  await expect(page.getByTestId('revision-size-curve-shape')).toHaveText(shapeLabels[signal.shape]);
+
+  // 区分ごとの行が reviseCyclesSizeCurve()（別経路の同一集計）の平均・中央値・件数と一致し、未出現区分の行は無いはず
+  const allSizeBuckets = ['small', 'medium', 'large'] as const;
+  const presentBuckets = new Set(signal.buckets.map((b) => b.sizeBucket));
+  for (const sizeBucket of allSizeBuckets) {
+    if (!presentBuckets.has(sizeBucket)) {
+      await expect(page.getByTestId(`revision-size-curve-row-${sizeBucket}`)).toHaveCount(0);
+      continue;
+    }
+    const b = signal.buckets.find((x) => x.sizeBucket === sizeBucket)!;
+    const stats = page.getByTestId(`revision-size-curve-stats-${sizeBucket}`);
+    await expect(stats).toContainText(`平均revise ${b.avgReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`中央値 ${b.medianReviseCycles.toFixed(2)}回`);
+    await expect(stats).toContainText(`${b.total}件`);
+  }
+
+  if (signal.shape === 'insufficient-data') {
+    await expect(page.getByTestId('revision-size-curve-deltas')).toHaveCount(0);
+  } else {
+    const deltas = page.getByTestId('revision-size-curve-deltas');
+    const fmt = (v: number) => `${v >= 0 ? '+' : ''}${v.toFixed(2)}`;
+    await expect(deltas).toContainText(`小→中 ${fmt(signal.smallToMediumDelta as number)}回`);
+    await expect(deltas).toContainText(`中→大 ${fmt(signal.mediumToLargeDelta as number)}回`);
+    await expect(deltas).toContainText(`傾き差 ${fmt(signal.accelerationDelta as number)}回`);
+  }
+
+  const body3 = await bodyTextExcludingFreeform(page);
+  expect(body3).not.toContain('NaN');
+  expect(body3).not.toContain('undefined');
+});
+
+test('Model効率分析パネルが実データから導出した役割別・モデル別のマージ率とコストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+
+  const roles = modelEfficiencyByRole(runs);
+  expect(roles.length, 'run が1件以上あれば builder/adversary/ideation の3役割が必ず返るはず').toBe(3);
+
+  const panel = page.getByTestId('model-efficiency-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${roles.length}役割`);
+
+  // 各role×modelの行が modelEfficiencyByRole()（別の計算経路）と一致する
+  // マージ率・件数・コスト・マージ1件あたりコストを表示していること
+  for (const role of roles) {
+    const roleEl = page.getByTestId(`model-efficiency-role-${role.role}`);
+    await expect(roleEl).toBeVisible();
+
+    for (const e of role.entries) {
+      const mergeEl = page.getByTestId(`model-efficiency-merge-${role.role}-${e.model}`);
+      await expect(mergeEl).toHaveText(`マージ率${(e.mergeRate * 100).toFixed(1)}% (${e.count}件)`);
+
+      const statsEl = page.getByTestId(`model-efficiency-stats-${role.role}-${e.model}`);
+      const expectedPerMerged =
+        e.costPerMergedRunUsd === null ? '算出不可（マージ0件）' : `$${e.costPerMergedRunUsd.toFixed(2)}`;
+      await expect(statsEl).toHaveText(
+        `コスト$${e.totalCostUsd.toFixed(2)}（平均$${e.avgCostUsd.toFixed(2)}/件）/ マージ1件あたり${expectedPerMerged}`,
+      );
+
+      const entryEl = page.getByTestId(`model-efficiency-entry-${role.role}-${e.model}`);
+      await expect(entryEl).toContainText(`対象iteration: ${e.iterations.join(', ')}`);
+    }
+
+    // role内はmergeRate降順で描画されていること
+    const entryEls = await page
+      .locator(`[data-testid^="model-efficiency-entry-${role.role}-"]`)
+      .all();
+    const renderedModels = await Promise.all(
+      entryEls.map(async (el) => (await el.getAttribute('data-testid'))!.replace(
+        `model-efficiency-entry-${role.role}-`,
+        '',
+      )),
+    );
+    expect(renderedModels).toEqual(role.entries.map((e) => e.model));
+  }
+
+  const body4 = await bodyTextExcludingFreeform(page);
+  expect(body4).not.toContain('NaN');
+  expect(body4).not.toContain('undefined');
+});
+
+test('信頼度加重スコアパネルが実データから導出した加重スコア・生マージ率・信頼度・少数サンプル注意を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const scores = modelConfidenceWeightedScores(runs);
+  expect(
+    scores.length,
+    'data/runs に run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-confidence-weighted-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${scores.length}モデル`);
+
+  for (const s of scores) {
+    const scoreEl = page.getByTestId(`model-confidence-weighted-score-${s.model}`);
+    await expect(scoreEl).toHaveText(`加重${(s.weightedScore * 100).toFixed(1)}%`);
+
+    const rawEl = page.getByTestId(`model-confidence-weighted-raw-${s.model}`);
+    await expect(rawEl).toHaveText(
+      `生マージ率${(s.rawMergeRate * 100).toFixed(1)}% (${s.count}件) / 信頼度${(s.confidence * 100).toFixed(0)}%`,
+    );
+
+    const row = page.getByTestId(`model-confidence-weighted-row-${s.model}`);
+    await expect(row).toContainText(`対象iteration: ${s.iterations.join(', ')}`);
+
+    // count < 5 のモデルだけ「少数サンプル注意」バッジが出る不変量
+    const lowSampleBadge = page.getByTestId(`model-confidence-weighted-lowsample-${s.model}`);
+    if (s.count < 5) {
+      await expect(lowSampleBadge).toBeVisible();
+    } else {
+      await expect(lowSampleBadge).toHaveCount(0);
+    }
+  }
+
+  // 加重スコア降順で描画されていること
+  const rows = await page.locator('[data-testid^="model-confidence-weighted-row-"]').all();
+  const renderedModels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-confidence-weighted-row-', '')),
+  );
+  expect(renderedModels).toEqual(scores.map((s) => s.model));
+
+  const body5 = await bodyTextExcludingFreeform(page);
+  expect(body5).not.toContain('NaN');
+  expect(body5).not.toContain('undefined');
+});
+
+test('Issueラベル別 成功率パネルが実データから導出したlabel別のマージ件数・成功率を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rates = issueLabelSuccessRates(runs);
+  expect(
+    rates.length,
+    'data/runs に label 付きの run が1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('issue-label-success-rate-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rates.length}ラベル`);
+
+  // 各label行が issueLabelSuccessRates()（別の計算経路）と一致する成功率・
+  // マージ件数・件数・対象iterationを表示していること
+  for (const r of rates) {
+    const valueEl = page.getByTestId(`issue-label-success-rate-value-${r.label}`);
+    await expect(valueEl).toHaveText(`成功率${(r.successRate * 100).toFixed(1)}% (${r.mergedCount}/${r.count}件)`);
+
+    const row = page.getByTestId(`issue-label-success-rate-row-${r.label}`);
+    await expect(row).toContainText(`対象iteration: ${r.iterations.join(', ')}`);
+  }
+
+  // 成功率降順で描画されていること
+  const rows = await page.locator('[data-testid^="issue-label-success-rate-row-"]').all();
+  const renderedLabels = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('issue-label-success-rate-row-', '')),
+  );
+  expect(renderedLabels).toEqual(rates.map((r) => r.label));
+
+  const body6 = await bodyTextExcludingFreeform(page);
+  expect(body6).not.toContain('NaN');
+  expect(body6).not.toContain('undefined');
+});
+
+test('Modelスキル階層分析パネルが実データから導出したbucket別成功率・pressure判定を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const stratification = modelSkillStratification(runs);
+  expect(
+    stratification.length,
+    'data/runs に verify到達済みのrunが1件もなく、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('model-skill-stratification-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${stratification.length}モデル`);
+
+  const verdictLabels: Record<string, string> = {
+    degrades: '負荷に弱い',
+    improves: '負荷でむしろ改善',
+    resilient: '負荷耐性あり',
+    'insufficient-data': 'データ不足',
+  };
+
+  // 各モデル行が modelSkillStratification()（別の計算経路）と一致する判定・pt値・bucket別成功率を表示していること
+  for (const s of stratification) {
+    const ptSuffix =
+      s.pressureDeltaPct === null ? '' : ` (${s.pressureDeltaPct >= 0 ? '+' : ''}${s.pressureDeltaPct.toFixed(1)}pt)`;
+    await expect(page.getByTestId(`model-skill-stratification-verdict-${s.model}`)).toHaveText(
+      `${verdictLabels[s.verdict]}${ptSuffix}`,
+    );
+    for (const cell of s.cells) {
+      await expect(page.getByTestId(`model-skill-stratification-rate-${s.model}-${cell.bucket}`)).toHaveText(
+        `${(cell.mergeRate * 100).toFixed(0)}% (${cell.mergedCount}/${cell.count}件)`,
+      );
+    }
+  }
+
+  // totalCount降順で描画されていること
+  const modelEls = await page.locator('[data-testid^="model-skill-stratification-model-"]').all();
+  const renderedModels = await Promise.all(
+    modelEls.map(async (m) => (await m.getAttribute('data-testid'))!.replace('model-skill-stratification-model-', '')),
+  );
+  expect(renderedModels).toEqual(stratification.map((s) => s.model));
+
+  const body7 = await bodyTextExcludingFreeform(page);
+  expect(body7).not.toContain('NaN');
+  expect(body7).not.toContain('undefined');
+});
+
+test('着手リードタイムの分布とボトルネック検知パネルが実データから導出した分布統計・ヒストグラム・ボトルネック一覧を表示する', async ({
+  page,
+}) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const distribution = ideationToStartLeadTimeDistribution(runs);
+  expect(
+    distribution.sampleSize,
+    'data/runs に着手済み(提案元が特定できissue.numberとして後続反復に現れた)issueが1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-to-start-lead-time-distribution-panel');
+  await expect(panel).toBeVisible();
+  await expect(page.getByTestId('ideation-to-start-distribution-sample-size')).toContainText(
+    `サンプル ${distribution.sampleSize}件`,
+  );
+
+  // 分布統計(最小/中央値/p90/最大)は ideationToStartLeadTimeDistribution()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('ideation-to-start-distribution-min')).toHaveText(toMinutes(distribution.minSec));
+  await expect(page.getByTestId('ideation-to-start-distribution-median')).toHaveText(
+    toMinutes(distribution.medianSec),
+  );
+  await expect(page.getByTestId('ideation-to-start-distribution-p90')).toHaveText(toMinutes(distribution.p90Sec));
+  await expect(page.getByTestId('ideation-to-start-distribution-max')).toHaveText(toMinutes(distribution.maxSec));
+
+  // 回帰防止（不変量）: min <= median <= max、min <= p90 <= max
+  expect(distribution.minSec).toBeLessThanOrEqual(distribution.medianSec);
+  expect(distribution.medianSec).toBeLessThanOrEqual(distribution.maxSec);
+  expect(distribution.minSec).toBeLessThanOrEqual(distribution.p90Sec);
+  expect(distribution.p90Sec).toBeLessThanOrEqual(distribution.maxSec);
+
+  // 各ヒストグラム区間が件数を表示し、合計がサンプル数と一致するはず（不変量）
+  let bucketTotal = 0;
+  for (const bucket of distribution.buckets) {
+    bucketTotal += bucket.count;
+    await expect(page.getByTestId(`ideation-to-start-distribution-bucket-${bucket.label}`)).toContainText(
+      `${bucket.count}件`,
+    );
+  }
+  expect(bucketTotal).toBe(distribution.sampleSize);
+
+  const bottlenecks = ideationToStartBottlenecks(runs);
+  await expect(page.getByTestId('ideation-to-start-bottleneck-count')).toHaveText(`${bottlenecks.length}件`);
+
+  if (bottlenecks.length === 0) {
+    // 現状データでは突出した遅延・滞留が無い経路。将来 run が積み増され外れ値が
+    // 発生すれば下の else 側（実際のボトルネック一覧表示）に切り替わる。
+    await expect(panel).toContainText('検出されていません');
+  } else {
+    // 各ボトルネック行が ideationToStartBottlenecks()（別の計算経路）と一致する
+    // issue番号・提案iteration・種別ごとの詳細(リードタイム or 放置反復数)を表示していること
+    for (const b of bottlenecks) {
+      const row = page.getByTestId(`ideation-to-start-bottleneck-row-${b.kind}-${b.issueNumber}`);
+      await expect(row).toContainText(`issue #${b.issueNumber}`);
+      await expect(row).toContainText(`提案 iteration ${b.proposedIteration}`);
+      if (b.kind === 'started-late' && b.leadTimeSec !== null) {
+        await expect(row).toContainText(toMinutes(b.leadTimeSec));
+      } else {
+        await expect(row).toContainText(`${b.waitingIterations}反復 放置`);
+      }
+    }
+
+    // 回帰防止（不変量）: 提案iteration昇順で描画されていること
+    const rows = await page.locator('[data-testid^="ideation-to-start-bottleneck-row-"]').all();
+    const renderedIds = await Promise.all(
+      rows.map(async (r) =>
+        (await r.getAttribute('data-testid'))!.replace('ideation-to-start-bottleneck-row-', ''),
+      ),
+    );
+    expect(renderedIds).toEqual(bottlenecks.map((b) => `${b.kind}-${b.issueNumber}`));
+  }
+
+  const body8 = await bodyTextExcludingFreeform(page);
+  expect(body8).not.toContain('NaN');
+  expect(body8).not.toContain('undefined');
 });

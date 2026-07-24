@@ -1,0 +1,41 @@
+{
+  "id": "20260723T164054Z-83",
+  "iteration": 43,
+  "issue": {
+    "number": 83,
+    "title": "Advesary承認コメントの要約・トレンド化",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/83-advesary",
+  "startedAt": "2026-07-23T16:40:54Z",
+  "finishedAt": "2026-07-23T17:00:04Z",
+  "durationSec": 1150,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 85,
+  "adversary": {
+    "approved": true,
+    "summary": "Feature correctly implements Adversary comment trend visualization with proper test coverage. No blocking issues found."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 866,
+  "cost": {
+    "builderUsd": 8.57491,
+    "adversaryUsd": 0.203552,
+    "ideationUsd": 0.0,
+    "totalUsd": 8.778462
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

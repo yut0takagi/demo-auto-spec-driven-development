@@ -1,0 +1,41 @@
+{
+  "id": "20260723T231214Z-128",
+  "iteration": 75,
+  "issue": {
+    "number": 128,
+    "title": "Revision効率サイズ分析：変更規模と修正サイクルの非線形カーブ",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/128-revision",
+  "startedAt": "2026-07-23T23:12:14Z",
+  "finishedAt": "2026-07-23T23:24:31Z",
+  "durationSec": 737,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 131,
+  "adversary": {
+    "approved": true,
+    "summary": "変更規模と修正サイクルの非線形カーブ機能が正しく実装され、テストは複数のカーブ形状と統計計算を実質的に検証している。failed run の除外、サンプル数チェック、傾き差判定のロジックが全て正確で、既存の動作も保持されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 381,
+  "cost": {
+    "builderUsd": 3.133193,
+    "adversaryUsd": 0.527148,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.660341
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

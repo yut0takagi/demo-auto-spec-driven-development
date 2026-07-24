@@ -1,0 +1,45 @@
+{
+  "id": "20260723T234831Z-126",
+  "iteration": 78,
+  "issue": {
+    "number": 126,
+    "title": "Model効率分析パネル：コスト/成功率の次元別分解",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/126-model",
+  "startedAt": "2026-07-23T23:48:31Z",
+  "finishedAt": "2026-07-24T00:04:28Z",
+  "durationSec": 957,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 136,
+  "adversary": {
+    "approved": true,
+    "summary": "Model効率分析パネルが要件を完全に満たしている。役割別×モデル別の2軸でコスト/マージ率を正確に分解・集計し、テストは境界値・異常系を含む実質的な検証を行っている。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 424,
+  "cost": {
+    "builderUsd": 5.950513,
+    "adversaryUsd": 0.17668,
+    "ideationUsd": 0.1309691,
+    "totalUsd": 6.258162
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    133,
+    134,
+    135
+  ]
+}

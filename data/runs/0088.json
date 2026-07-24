@@ -1,0 +1,41 @@
+{
+  "id": "20260724T020750Z-149",
+  "iteration": 88,
+  "issue": {
+    "number": 149,
+    "title": "Gate通過後マージまでのPauseパターン分類と離脱検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/149-gate-pause",
+  "startedAt": "2026-07-24T02:07:50Z",
+  "finishedAt": "2026-07-24T02:24:22Z",
+  "durationSec": 992,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 151,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク#149「Gate通過後Pauseパターン分類・離脱検知」を完全に実装・テスト済み。Pattern（clean/contested）× Status（reattempted/stalled/pending）の2軸分類、最高リスク表示、詳細行表示が全て要件通り実装され、テストが実装を実質的に検証（境界値・異常値・並び順含む）。既存挙動への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 640,
+  "cost": {
+    "builderUsd": 5.517112,
+    "adversaryUsd": 0.188657,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.705769
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

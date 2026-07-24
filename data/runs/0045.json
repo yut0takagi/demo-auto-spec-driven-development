@@ -1,0 +1,41 @@
+{
+  "id": "20260723T170431Z-82",
+  "iteration": 45,
+  "issue": {
+    "number": 82,
+    "title": "Gate不通過理由のトレンド化（時系列化）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/82-gate",
+  "startedAt": "2026-07-23T17:04:31Z",
+  "finishedAt": "2026-07-23T17:16:32Z",
+  "durationSec": 721,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 86,
+  "adversary": {
+    "approved": true,
+    "summary": "Gate不通過理由のトレンド観測機能を要件通り実装。直近/直前ウィンドウ比較で悪化/改善/横ばいを判定し、変化幅の大きい順に表示。CycleTimeTrendPanelと同じローリング窓メカニズム。テストは関数・UI両面で実装を実質検証。既存パネルとの干渉なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 406,
+  "cost": {
+    "builderUsd": 4.710755,
+    "adversaryUsd": 0.183671,
+    "ideationUsd": 0.0,
+    "totalUsd": 4.894426
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

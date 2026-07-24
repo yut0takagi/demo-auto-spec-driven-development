@@ -1,0 +1,41 @@
+{
+  "id": "20260723T232432Z-127",
+  "iteration": 76,
+  "issue": {
+    "number": 127,
+    "title": "ゲート理由の時系列カオス分析：連続非通過の根本原因パターン",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/127-task",
+  "startedAt": "2026-07-23T23:24:32Z",
+  "finishedAt": "2026-07-23T23:41:23Z",
+  "durationSec": 1011,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 132,
+  "adversary": {
+    "approved": true,
+    "summary": "連続非通過のカオス度を根本原因の入れ替わり頻度で判定する新パネルを正確に実装。streakの分断ロジック・chaosScore計算・テストのいずれも要件を満たし、既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 403,
+  "cost": {
+    "builderUsd": 6.714071,
+    "adversaryUsd": 0.057207,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.771278
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

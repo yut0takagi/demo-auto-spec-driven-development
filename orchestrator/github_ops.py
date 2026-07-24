@@ -71,7 +71,10 @@ class GitHubOps:
     # --- 変更 ---
 
     def create_branch(self, name: str, base: str) -> None:
-        self._run(["git", "checkout", "-b", name, base])
+        # 連続バッチ（1 ジョブで複数周）だと前周が作った loop/* ローカルブランチが残り、
+        # 同名を `-b` で作ると "already exists" で fatal → 反復が例外終了して同じ issue で
+        # 空回りする。冪等な `-B`（無ければ作る／有れば base に作り直す）でクラッシュを防ぐ。
+        self._run(["git", "checkout", "-B", name, base])
 
     def commit_all(self, message: str) -> bool:
         """builder が作業ツリーに加えた全変更を1コミットにする。

@@ -1,0 +1,45 @@
+{
+  "id": "20260723T200231Z-99",
+  "iteration": 59,
+  "issue": {
+    "number": 99,
+    "title": "Builder の model 切り替え による approval/merge の変化をA/B可視化する",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/99-builder-model-approval-merge-a-b",
+  "startedAt": "2026-07-23T20:02:31Z",
+  "finishedAt": "2026-07-23T20:14:35Z",
+  "durationSec": 724,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 110,
+  "adversary": {
+    "approved": true,
+    "summary": "モデル切り替え毎の A/B テスト機能が完全に実装・テスト・統合されている。承認率・マージ率の before/after 比較、improvement/regression/neutral の verdict、複数切り替え対応、空データハンドルも網羅。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 586,
+  "cost": {
+    "builderUsd": 3.137804,
+    "adversaryUsd": 0.092026,
+    "ideationUsd": 0.11040109999999999,
+    "totalUsd": 3.340231
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    107,
+    108,
+    109
+  ]
+}

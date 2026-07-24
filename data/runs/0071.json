@@ -1,0 +1,41 @@
+{
+  "id": "20260723T222009Z-120",
+  "iteration": 71,
+  "issue": {
+    "number": 120,
+    "title": "Builder revise 回数 ×サイズ別の成功パターン分類",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/120-builder-revise",
+  "startedAt": "2026-07-23T22:20:09Z",
+  "finishedAt": "2026-07-23T22:31:41Z",
+  "durationSec": 692,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 125,
+  "adversary": {
+    "approved": true,
+    "summary": "Builder revise回数 ×サイズ別の成功パターン分類（issue #120）が完全に実装され、境界値・分類ロジック・UI の各層で実質的なテストで検証されています。既存コード・型安全性への影響もなし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 424,
+  "cost": {
+    "builderUsd": 3.687736,
+    "adversaryUsd": 0.053731,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.741467
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

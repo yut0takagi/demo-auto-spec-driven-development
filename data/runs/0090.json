@@ -1,0 +1,43 @@
+{
+  "id": "20260724T024142Z-148",
+  "iteration": 90,
+  "issue": {
+    "number": 148,
+    "title": "Issue提案→実装着手のリードタイム分布とボトルネック検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/148-issue",
+  "startedAt": "2026-07-24T02:41:42Z",
+  "finishedAt": "2026-07-24T02:47:48Z",
+  "durationSec": 366,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "リードタイム分布の統計計算、2種類のボトルネック検知、ダッシュボード統合が完全に実装され、境界値・ロジック・UI表示をカバーするテストが充実している。既存機能に影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.35493,
+    "adversaryUsd": 0.082479,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.437409
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

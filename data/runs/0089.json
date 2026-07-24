@@ -1,0 +1,41 @@
+{
+  "id": "20260724T022423Z-148",
+  "iteration": 89,
+  "issue": {
+    "number": 148,
+    "title": "Issue提案→実装着手のリードタイム分布とボトルネック検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/148-issue",
+  "startedAt": "2026-07-24T02:24:23Z",
+  "finishedAt": "2026-07-24T02:41:41Z",
+  "durationSec": 1038,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 152,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue #148のリードタイム分布・ボトルネック検知を完全に実装。統計計算（p90の線形補間）と2種類のボトルネック判定（started-late / still-waiting）の両方が正確。テストはp90補間、区間境界、閾値判定、ソート順序など実装を実質的に検証しており、e2eも計算結果の正確性を画面で確認している。既存パネルへの変更はなく、新機能追加のみ。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 708,
+  "cost": {
+    "builderUsd": 6.009161,
+    "adversaryUsd": 0.061748,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.070909
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

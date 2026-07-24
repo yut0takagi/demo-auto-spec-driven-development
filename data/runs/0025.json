@@ -1,0 +1,45 @@
+{
+  "id": "20260723T124137Z-58",
+  "iteration": 25,
+  "issue": {
+    "number": 58,
+    "title": "changedLines 推移グラフ + builder 改善の1反復前比較",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/58-changedlines-builder-1",
+  "startedAt": "2026-07-23T12:41:37Z",
+  "finishedAt": "2026-07-23T13:05:46Z",
+  "durationSec": 1449,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 60,
+  "adversary": {
+    "approved": true,
+    "summary": "changedLinesTrend と builderComparison の両機能を要件どおり実装。failed run 除外、前反復比較の改善判定ロジック、UI表示、e2eテストまで一貫性がある。400行制限内で、既存の挙動を壊さない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 531,
+  "cost": {
+    "builderUsd": 6.799221,
+    "adversaryUsd": 0.061638,
+    "ideationUsd": 0.20111525000000002,
+    "totalUsd": 7.061974
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    57,
+    58,
+    59
+  ]
+}

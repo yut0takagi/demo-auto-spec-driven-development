@@ -1,0 +1,41 @@
+{
+  "id": "20260723T160023Z-76",
+  "iteration": 40,
+  "issue": {
+    "number": 76,
+    "title": "Verdict 別の平均 revise 回数を分離表示",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/76-verdict-revise",
+  "startedAt": "2026-07-23T16:00:23Z",
+  "finishedAt": "2026-07-23T16:08:57Z",
+  "durationSec": 514,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 80,
+  "adversary": {
+    "approved": true,
+    "summary": "Verdict別のrevise回数分布を正確に集計し、failed run も除外せず独立グループとして表示。コンポーネント・集計ロジック・テストすべてが実装を実質的に検証し、既存パネル/ロジックへの影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 263,
+  "cost": {
+    "builderUsd": 3.257471,
+    "adversaryUsd": 0.052414,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.309885
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

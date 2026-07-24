@@ -1,0 +1,41 @@
+{
+  "id": "20260724T002814Z-134",
+  "iteration": 81,
+  "issue": {
+    "number": 134,
+    "title": "ゲート連続失敗の「理由の単一化」パターン認識",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/134-task",
+  "startedAt": "2026-07-24T00:28:14Z",
+  "finishedAt": "2026-07-24T00:41:35Z",
+  "durationSec": 801,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 139,
+  "adversary": {
+    "approved": true,
+    "summary": "テスト変更のみで実装コード変更なし。新テストは、同じ gateReasons 文字列でも adversary.summary により異なるカテゴリ分類され、末尾の収束パターンを正確に検出する機能を実質的に検証している。タスク要件を満たし既存挙動を破壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 59,
+  "cost": {
+    "builderUsd": 2.908995,
+    "adversaryUsd": 0.160359,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.069354
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

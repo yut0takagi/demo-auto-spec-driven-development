@@ -1,0 +1,41 @@
+{
+  "id": "20260723T093539Z-0",
+  "iteration": 18,
+  "issue": {
+    "number": 0,
+    "title": "(不明: 例外発生時点で issue を特定できなかった)",
+    "labels": []
+  },
+  "branch": "unknown",
+  "startedAt": "2026-07-23T09:35:39Z",
+  "finishedAt": "2026-07-23T09:35:39Z",
+  "durationSec": 0,
+  "reviseCycles": 0,
+  "verdict": "failed",
+  "gateReasons": [
+    "反復が例外で異常終了した: GitHubError(\"git checkout -b loop/46-model develop failed: fatal: a branch named 'loop/46-model' already exists\")"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "例外により審査に到達しなかった"
+  },
+  "verify": {
+    "unitPassed": false,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.0,
+    "adversaryUsd": 0.0,
+    "ideationUsd": 0.0,
+    "totalUsd": 0.0
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

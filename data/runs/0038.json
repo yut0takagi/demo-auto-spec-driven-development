@@ -1,0 +1,41 @@
+{
+  "id": "20260723T154758Z-77",
+  "iteration": 38,
+  "issue": {
+    "number": 77,
+    "title": "E2E テスト失敗と revise 回数の相関を可視化",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/77-e2e-revise",
+  "startedAt": "2026-07-23T15:47:58Z",
+  "finishedAt": "2026-07-23T15:58:19Z",
+  "durationSec": 621,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 79,
+  "adversary": {
+    "approved": true,
+    "summary": "E2E失敗とrevise回数の相関を可視化する要件を完全に満たしています。集計関数・UI・テスト全てが実装され、境界値や計算精度も正確に検証されています。既存機能への影響もありません。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 356,
+  "cost": {
+    "builderUsd": 3.685952,
+    "adversaryUsd": 0.079681,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.765633
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

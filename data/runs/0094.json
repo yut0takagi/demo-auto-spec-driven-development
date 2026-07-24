@@ -1,0 +1,41 @@
+{
+  "id": "20260724T032256Z-154",
+  "iteration": 94,
+  "issue": {
+    "number": 154,
+    "title": "Issue提案→初着手のドロップレート検知",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/154-issue",
+  "startedAt": "2026-07-24T03:22:56Z",
+  "finishedAt": "2026-07-24T03:38:58Z",
+  "durationSec": 962,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 159,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue提案→初着手ドロップレート検知が完全に実装され、境界値・混在ケース・トレイリング判定を含む包括的なテストで真の振る舞いを検証している。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 554,
+  "cost": {
+    "builderUsd": 5.9416,
+    "adversaryUsd": 0.069903,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.011503
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

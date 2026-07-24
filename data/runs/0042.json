@@ -1,0 +1,45 @@
+{
+  "id": "20260723T162523Z-69",
+  "iteration": 42,
+  "issue": {
+    "number": 69,
+    "title": "CI/ゲート通過時間のトレンド観測",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/69-ci",
+  "startedAt": "2026-07-23T16:25:23Z",
+  "finishedAt": "2026-07-23T16:40:52Z",
+  "durationSec": 929,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 84,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件（CI/ゲート通過時間のトレンド観測）を完全に満たし、直近/直前ウィンドウの比較による傾向判定（増加/減少/横ばい）の実装・UI・テストが揃っている。単体テストで境界値・ゼロ除算を含む主要分岐を網羅し、E2E テストで実データでの正確性を検証している。既存の挙動・データ契約に影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 556,
+  "cost": {
+    "builderUsd": 4.665721,
+    "adversaryUsd": 0.06407,
+    "ideationUsd": 0.17576850000000002,
+    "totalUsd": 4.905559
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    81,
+    82,
+    83
+  ]
+}

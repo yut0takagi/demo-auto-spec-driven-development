@@ -1,0 +1,45 @@
+{
+  "id": "20260723T223748Z-119",
+  "iteration": 73,
+  "issue": {
+    "number": 119,
+    "title": "Adversary モデル別・Verdict別 見落とし率マトリックス",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/119-adversary-verdict",
+  "startedAt": "2026-07-23T22:37:48Z",
+  "finishedAt": "2026-07-23T22:50:12Z",
+  "durationSec": 744,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 129,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を正確に満たす adversary モデル別×verdict別 見落とし率マトリクスの実装。計算ロジック・テストいずれも妥当で、既存の挙動破壊なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 582,
+  "cost": {
+    "builderUsd": 4.893521,
+    "adversaryUsd": 0.263969,
+    "ideationUsd": 0.08363179999999999,
+    "totalUsd": 5.241122
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    126,
+    127,
+    128
+  ]
+}

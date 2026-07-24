@@ -1,0 +1,41 @@
+{
+  "id": "20260724T012718Z-141",
+  "iteration": 85,
+  "issue": {
+    "number": 141,
+    "title": "Gate Reason Severity Spectrum — Recovery Cost Analysis",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/141-gate-reason-severity-spectrum-recovery-c",
+  "startedAt": "2026-07-24T01:27:18Z",
+  "finishedAt": "2026-07-24T01:44:27Z",
+  "durationSec": 1029,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 146,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を正確に満たし、既存の挙動を壊さず、テストが実装を実質的に検証している。深刻度スコア計算とUI実装が仕様通りで、3tierの分解表示も正確。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 522,
+  "cost": {
+    "builderUsd": 5.776103,
+    "adversaryUsd": 0.171309,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.947412
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

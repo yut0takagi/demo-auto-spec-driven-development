@@ -1,0 +1,41 @@
+{
+  "id": "20260723T173225Z-89",
+  "iteration": 47,
+  "issue": {
+    "number": 89,
+    "title": "Verdict別の平均CI/ゲート通過時間の比較パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/89-verdict-ci",
+  "startedAt": "2026-07-23T17:32:25Z",
+  "finishedAt": "2026-07-23T17:39:42Z",
+  "durationSec": 437,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 91,
+  "adversary": {
+    "approved": true,
+    "summary": "実装は要件を正しく満たし、全 verdict を対象に平均/中央値/範囲を正確に計算して比較パネルとして表示しています。テストは境界値・全データ型を検証し、実装が実際に振る舞いを検証しています。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 275,
+  "cost": {
+    "builderUsd": 2.137246,
+    "adversaryUsd": 0.143695,
+    "ideationUsd": 0.0,
+    "totalUsd": 2.280941
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

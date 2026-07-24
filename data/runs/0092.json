@@ -1,0 +1,41 @@
+{
+  "id": "20260724T030133Z-155",
+  "iteration": 92,
+  "issue": {
+    "number": 155,
+    "title": "Reviseサイクル内のAPI呼び出しコスト分布と回収効率",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/155-revise-api",
+  "startedAt": "2026-07-24T03:01:33Z",
+  "finishedAt": "2026-07-24T03:13:35Z",
+  "durationSec": 722,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 157,
+  "adversary": {
+    "approved": true,
+    "summary": "要件の5柱（revise分類/コスト分布/回収効率/実効コスト/失敗コスト含有）が全て実装・テスト済み。統計計算の正確性を具体的な数値で検証し、0除算やnull対応も適切。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 401,
+  "cost": {
+    "builderUsd": 5.051597,
+    "adversaryUsd": 0.065539,
+    "ideationUsd": 0.0,
+    "totalUsd": 5.117136
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

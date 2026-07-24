@@ -87,6 +87,15 @@ class TestMutations:
         gh, _ = ops([CommandResult(0, "https://github.com/o/r/issues/45\n", "")])
         assert gh.create_issue(title="t", body="b", labels=["loop:ready"]) == 45
 
+    def test_create_branch_is_idempotent(self):
+        # 連続バッチ（1 ジョブで複数周）だと前周が作った loop/* ローカルブランチが残る。
+        # `git checkout -b`（既存だと "already exists" で fatal）ではなく、冪等な `-B`
+        # （無ければ作る／有れば base に作り直す）を使い、同名再作成でクラッシュしないこと。
+        gh, runner = ops([CommandResult(0, "", "")])
+        gh.create_branch("loop/46-model", "develop")
+        cmd = runner.calls[0][0]
+        assert cmd == ["git", "checkout", "-B", "loop/46-model", "develop"]
+
 
 class TestCommitAll:
     def test_commits_when_there_are_changes(self):

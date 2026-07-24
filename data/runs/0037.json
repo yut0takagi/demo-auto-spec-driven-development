@@ -1,0 +1,45 @@
+{
+  "id": "20260723T150934Z-75",
+  "iteration": 37,
+  "issue": {
+    "number": 75,
+    "title": "Ideation の失敗率を可視化",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/75-ideation",
+  "startedAt": "2026-07-23T15:09:34Z",
+  "finishedAt": "2026-07-23T15:47:56Z",
+  "durationSec": 2302,
+  "reviseCycles": 2,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 78,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation失敗率の可視化がパネル・計算関数・テストで完全に実装されている。失敗の定義（ideationUsd>0かつnextIssues.length===0）が明確で、境界値・E2Eが実装を実質的に検証している。既存コードへの影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 466,
+  "cost": {
+    "builderUsd": 11.166608,
+    "adversaryUsd": 0.163308,
+    "ideationUsd": 0.10364250000000003,
+    "totalUsd": 11.433559
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    75,
+    76,
+    77
+  ]
+}

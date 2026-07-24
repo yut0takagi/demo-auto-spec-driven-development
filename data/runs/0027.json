@@ -1,0 +1,41 @@
+{
+  "id": "20260723T132116Z-57",
+  "iteration": 27,
+  "issue": {
+    "number": 57,
+    "title": "gateReasons 集計・分類パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/57-gatereasons",
+  "startedAt": "2026-07-23T13:21:16Z",
+  "finishedAt": "2026-07-23T13:33:04Z",
+  "durationSec": 708,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 62,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たし、既存機能への影響なく、重要な分岐とエッジケースをカバーしたテストがある。分類ロジックと UI 表示の両方が実データで end-to-end 検証されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 391,
+  "cost": {
+    "builderUsd": 4.906175,
+    "adversaryUsd": 0.060995,
+    "ideationUsd": 0.0,
+    "totalUsd": 4.96717
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

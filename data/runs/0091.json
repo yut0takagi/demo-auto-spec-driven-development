@@ -1,0 +1,45 @@
+{
+  "id": "20260724T024749Z-147",
+  "iteration": 91,
+  "issue": {
+    "number": 147,
+    "title": "Adversary承認済みなのにBuilder実装失敗の検知パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/147-adversary-builder",
+  "startedAt": "2026-07-24T02:47:49Z",
+  "finishedAt": "2026-07-24T03:01:31Z",
+  "durationSec": 822,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 156,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を正確に実装。adversary承認済みながらbuilder側要因でゲート通過できなかった反復を、検知率・コスト・最多カテゴリで可視化する。テストは実装を実質的に検証し、既存機能への破壊的変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 583,
+  "cost": {
+    "builderUsd": 4.09393,
+    "adversaryUsd": 0.159173,
+    "ideationUsd": 0.1328226,
+    "totalUsd": 4.385926
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    153,
+    154,
+    155
+  ]
+}

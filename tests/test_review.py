@@ -35,8 +35,12 @@ def test_non_boolean_approved_is_treated_as_rejection():
     assert verdict.approved is False
 
 
-def test_prompt_template_demands_hostility_and_json():
-    assert "棄却" in ADVERSARY_PROMPT_TEMPLATE
+def test_prompt_template_is_fair_and_has_json_contract():
+    # 「却下理由探し」ではなく公正な判定を指示する（要件を満たし壊していなければ承認）。
+    # 却下は具体的な blocking 欠陥がある場合のみ。JSON 契約とプレースホルダは維持する。
+    assert "公正" in ADVERSARY_PROMPT_TEMPLATE
+    assert "承認" in ADVERSARY_PROMPT_TEMPLATE
+    assert "blocking" in ADVERSARY_PROMPT_TEMPLATE
     assert "approved" in ADVERSARY_PROMPT_TEMPLATE
     assert "{task}" in ADVERSARY_PROMPT_TEMPLATE
     assert "{diff}" in ADVERSARY_PROMPT_TEMPLATE

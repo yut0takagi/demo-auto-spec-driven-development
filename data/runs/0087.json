@@ -1,0 +1,45 @@
+{
+  "id": "20260724T015058Z-140",
+  "iteration": 87,
+  "issue": {
+    "number": 140,
+    "title": "Model Skill Stratification Under Load — Revise-Cycle Pressure Analysis",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/140-model-skill-stratification-under-load-re",
+  "startedAt": "2026-07-24T01:50:58Z",
+  "finishedAt": "2026-07-24T02:07:49Z",
+  "durationSec": 1011,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 150,
+  "adversary": {
+    "approved": true,
+    "summary": "Model Skill Stratification の実装が、aggregate.ts の集計ロジック・UI コンポーネント・複数レベルのテスト（unit/e2e/component）すべてにおいて要件を正確に満たしている。bucket 区分、pressureDeltaPct 計算、verdict 判定、UI 表示が一貫性を保ち、エッジケース（empty/insufficient-data/sort 順）も完全にカバーされている。既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 399,
+  "cost": {
+    "builderUsd": 6.145231,
+    "adversaryUsd": 0.074218,
+    "ideationUsd": 0.17984635,
+    "totalUsd": 6.399295
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    147,
+    148,
+    149
+  ]
+}

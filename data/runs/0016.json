@@ -1,0 +1,47 @@
+{
+  "id": "20260723T073545Z-37",
+  "iteration": 16,
+  "issue": {
+    "number": 37,
+    "title": "Verdict 別反復サマリーテーブル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/37-verdict",
+  "startedAt": "2026-07-23T07:35:45Z",
+  "finishedAt": "2026-07-23T08:10:38Z",
+  "durationSec": 2093,
+  "reviseCycles": 3,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "adversary が approve していない"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "E2E テストがテーブルの平均revise回数・コスト・所要時間の DOM 表示を検証していない。ユニットテストで計算は検証されているが、実データ駆動の E2E では意図的に回避されており、手動テスト時に値が壊れても検知できない構造になっている。 / 指摘: E2E テスト dashboard.spec.ts:151-183 で平均revise回数・平均コスト・平均所要時間を toContainText で検証する必要がある"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 594,
+  "cost": {
+    "builderUsd": 8.247586,
+    "adversaryUsd": 0.515893,
+    "ideationUsd": 0.1889165,
+    "totalUsd": 8.952395
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    44,
+    45,
+    46
+  ]
+}
