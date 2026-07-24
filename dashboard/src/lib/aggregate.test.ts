@@ -48,6 +48,7 @@ import {
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
+  e2eFailureBuilderWorkloadSeparation,
   builderVolumeApprovalCoupling,
   cycleTimeTrend,
   cycleTimeTrendSignal,
@@ -4569,6 +4570,90 @@ describe('e2eFailureDiffSizeCorrelation', () => {
     const result = e2eFailureDiffSizeCorrelation(runs);
     expect(result.delta).toBeCloseTo(-400, 10);
     expect(result.correlationCoefficient!).toBeLessThan(0);
+  });
+});
+
+function makeWorkloadRun(iteration: number, e2ePassed: boolean, changedLines: number, builderUsd: number): RunRecord {
+  return makeRun({
+    iteration,
+    verify: { unitPassed: true, e2ePassed, coveragePct: 80 },
+    changedLines,
+    cost: { builderUsd, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: builderUsd + 0.01 },
+  });
+}
+
+describe('e2eFailureBuilderWorkloadSeparation', () => {
+  it('run が0件なら全て0/null、verdictはundetermined（境界値）', () => {
+    expect(e2eFailureBuilderWorkloadSeparation([])).toEqual({
+      sampleSize: 0,
+      diffSizeCorrelation: null,
+      builderWorkloadCorrelation: null,
+      diffSizeWorkloadCorrelation: null,
+      diffSizePartialCorrelation: null,
+      builderWorkloadPartialCorrelation: null,
+      verdict: 'undetermined',
+    });
+  });
+
+  it('verify に到達していない failed run は母集団から除外する', () => {
+    const failedRun = makeWorkloadRun(1, false, 0, 0);
+    failedRun.verdict = 'failed';
+    failedRun.verify = { unitPassed: false, e2ePassed: false, coveragePct: 0 };
+    const result = e2eFailureBuilderWorkloadSeparation([failedRun, makeWorkloadRun(2, true, 50, 0.1)]);
+    expect(result.sampleSize).toBe(1);
+  });
+
+  it('diffSizeとBuilder稼働量が完全連動(相関1)だと偏相関の分母が0になりundetermined（境界値）', () => {
+    const runs = [1, 2, 3, 4].map((i) => makeWorkloadRun(i, i > 2, i * 100, i));
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.sampleSize).toBe(4);
+    expect(result.diffSizeWorkloadCorrelation).toBeCloseTo(1, 10);
+    expect(result.diffSizePartialCorrelation).toBeNull();
+    expect(result.builderWorkloadPartialCorrelation).toBeNull();
+    expect(result.verdict).toBe('undetermined');
+  });
+
+  it('changedLinesが全run同値（分散0）だと単純相関・偏相関ともnull、verdictはundetermined（境界値）', () => {
+    const runs = [makeWorkloadRun(1, true, 42, 0.1), makeWorkloadRun(2, false, 42, 0.5)];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation).toBeNull();
+    expect(result.diffSizePartialCorrelation).toBeNull();
+    expect(result.verdict).toBe('undetermined');
+  });
+
+  it('diffSizeがBuilder稼働量と独立にe2e失敗と関係している場合、偏相関はあまり縮まずindependent判定になる', () => {
+    // 手計算検算済み: x=e2eFail[0,0,1,1], y=changedLines[100,200,300,400], z=builderUsd[0.3,0.1,0.2,0.4]
+    // → rXY=2/√5, rXZ=1/√5, rYZ=0.4、偏相関の閉形式解は4/√21・1/√21。
+    const runs = [
+      makeWorkloadRun(1, true, 100, 0.3),
+      makeWorkloadRun(2, true, 200, 0.1),
+      makeWorkloadRun(3, false, 300, 0.2),
+      makeWorkloadRun(4, false, 400, 0.4),
+    ];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation!).toBeCloseTo(0.894427, 5);
+    expect(result.builderWorkloadCorrelation!).toBeCloseTo(0.447214, 5);
+    expect(result.diffSizeWorkloadCorrelation!).toBeCloseTo(0.4, 10);
+    expect(result.diffSizePartialCorrelation!).toBeCloseTo(4 / Math.sqrt(21), 6);
+    expect(result.builderWorkloadPartialCorrelation!).toBeCloseTo(1 / Math.sqrt(21), 6);
+    expect(result.verdict).toBe('independent');
+  });
+
+  it('diffSizeの単純相関がBuilder稼働量による交絡で説明し尽くされる場合、偏相関は0に潰れconfounded判定になる', () => {
+    // 手計算検算済み: x=e2eFail[0,0,1,1], y=changedLines[98,98,100,104], z=builderUsd[0.2,0.4,0.6,0.8]
+    // → rXY=2/√6, rXZ=2/√5, rYZ=5/√30 で rXY=rXZ*rYZ が厳密成立し偏相関は厳密に0。
+    const runs = [
+      makeWorkloadRun(1, true, 98, 0.2),
+      makeWorkloadRun(2, true, 98, 0.4),
+      makeWorkloadRun(3, false, 100, 0.6),
+      makeWorkloadRun(4, false, 104, 0.8),
+    ];
+    const result = e2eFailureBuilderWorkloadSeparation(runs);
+    expect(result.diffSizeCorrelation!).toBeCloseTo(2 / Math.sqrt(6), 6);
+    expect(result.diffSizeWorkloadCorrelation!).toBeCloseTo(5 / Math.sqrt(30), 6);
+    expect(result.diffSizePartialCorrelation!).toBeCloseTo(0, 6);
+    expect(result.builderWorkloadPartialCorrelation!).toBeCloseTo(Math.sqrt(0.4), 6);
+    expect(result.verdict).toBe('confounded');
   });
 });
 
