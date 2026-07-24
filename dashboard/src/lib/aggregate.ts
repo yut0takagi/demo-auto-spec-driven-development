@@ -7049,3 +7049,88 @@ export function costQualityElasticityTrendSignal(runs: RunRecord[]): CostQuality
     direction: costQualityElasticityDirection(latest.elasticity, historicalAvgElasticity),
   };
 }
+
+export type VerdictJumpKind = 'spikeFailure' | 'spikeSuccess';
+
+/** ジャンプ判定に使う前後の窓幅（反復件数）。 */
+export const VERDICT_JUMP_WINDOW = 3;
+
+export interface VerdictJumpAnomaly {
+  iteration: number;
+  verdict: Verdict;
+  kind: VerdictJumpKind;
+  /** 直前 VERDICT_JUMP_WINDOW 件の成功率。窓が揃っている場合のみ検出対象になるため常に0か1 */
+  beforeMergedRate: number;
+  /** 直後 VERDICT_JUMP_WINDOW 件の成功率。窓が揃っている場合のみ検出対象になるため常に0か1 */
+  afterMergedRate: number;
+  gateReasons: string[];
+}
+
+/**
+ * verdictTransitions系の遷移型分析(隣接2反復のfrom→to分類)を一切参照しない、非遷移型の
+ * 点異常検知。verdictを2値の成功指標(merged=1, それ以外=0)に写像し、各反復の前後
+ * VERDICT_JUMP_WINDOW件がそれぞれ同一の極値(全てmerged、または全て非merged)で揃っており、
+ * 当該反復だけがその逆になっている場合のみ「ジャンプ」と判定する。sustainedSuccess/
+ * repeatedFailureのように安定区間の内部で起きる単発の逸脱は遷移型分析では捉えられないため
+ * これを補う。窓がVERDICT_JUMP_WINDOW件に満たない・不揃い・前後の極値が異なる場合は対象外。
+ */
+export function verdictJumpAnomalies(runs: RunRecord[]): VerdictJumpAnomaly[] {
+  const sorted = byIterationAsc(runs);
+  const mergedFlags = sorted.map((r) => (r.verdict === 'merged' ? 1 : 0));
+  const anomalies: VerdictJumpAnomaly[] = [];
+
+  for (let i = VERDICT_JUMP_WINDOW; i < sorted.length - VERDICT_JUMP_WINDOW; i++) {
+    const before = mergedFlags.slice(i - VERDICT_JUMP_WINDOW, i);
+    const after = mergedFlags.slice(i + 1, i + 1 + VERDICT_JUMP_WINDOW);
+    const current = mergedFlags[i];
+
+    const beforeUniform = before.every((v) => v === before[0]);
+    const afterUniform = after.every((v) => v === after[0]);
+    if (!beforeUniform || !afterUniform) continue;
+    if (before[0] !== after[0]) continue;
+    if (current === before[0]) continue;
+
+    const run = sorted[i];
+    const kind: VerdictJumpKind = current === 0 ? 'spikeFailure' : 'spikeSuccess';
+    const gateReasons: string[] = kind === 'spikeFailure' && run.gateReasons.length > 0 ? [rootCauseCategory(run)] : [];
+
+    anomalies.push({
+      iteration: run.iteration,
+      verdict: run.verdict,
+      kind,
+      beforeMergedRate: before[0],
+      afterMergedRate: after[0],
+      gateReasons,
+    });
+  }
+
+  return anomalies;
+}
+
+const VERDICT_JUMP_KIND_ORDER: readonly VerdictJumpKind[] = ['spikeFailure', 'spikeSuccess'];
+
+export interface VerdictJumpKindSummary {
+  kind: VerdictJumpKind;
+  count: number;
+  /** count / 全異常件数 * 100。全異常件数が0のときは0 */
+  pct: number;
+}
+
+/**
+ * verdictJumpAnomalies を種別ごとに集計する。0件の種別は含めない（verdictTransitionSummary
+ * と同じ規約）。count降順、同数はVERDICT_JUMP_KIND_ORDERの順。
+ */
+export function verdictJumpSummary(runs: RunRecord[]): VerdictJumpKindSummary[] {
+  const anomalies = verdictJumpAnomalies(runs);
+  const counts = new Map<VerdictJumpKind, number>();
+  for (const a of anomalies) {
+    counts.set(a.kind, (counts.get(a.kind) ?? 0) + 1);
+  }
+
+  return VERDICT_JUMP_KIND_ORDER.filter((kind) => (counts.get(kind) ?? 0) > 0)
+    .map((kind) => {
+      const count = counts.get(kind) ?? 0;
+      return { kind, count, pct: anomalies.length === 0 ? 0 : (count / anomalies.length) * 100 };
+    })
+    .sort((a, b) => b.count - a.count);
+}
