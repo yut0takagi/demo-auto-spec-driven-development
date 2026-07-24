@@ -5265,3 +5265,69 @@ export function modelPairCompatibilityDivergence(runs: RunRecord[]): ModelPairCo
     return a.adversary.localeCompare(b.adversary);
   });
 }
+
+/**
+ * orchestrator/config.py の ideation_low_water 既定値(6)に合わせた表示用の基準線。
+ * dashboard は Python 設定も実際の ready 件数(GitHub側)も読めないため
+ * （BREAKER_THRESHOLD と同じ理由）、この既定値を起点とした相対残量として近似する。
+ */
+export const IDEATION_LOW_WATER = 6;
+
+/** 消費速度(velocity)の算出に使う直近反復数。EARLY_WARNING_WINDOW 等と同じトレイリング窓。 */
+export const BACKLOG_ETA_WINDOW = 5;
+
+export interface BacklogLowWaterEta {
+  lowWater: number;
+  /** velocity 算出に使った反復数。データが window 未満なら全件。 */
+  windowSize: number;
+  /** IDEATION_LOW_WATER を起点に、各反復の正味増減(nextIssues.length - 1)を積算した相対残量。 */
+  currentBalance: number;
+  /** 直近 windowSize 反復での1反復あたりの正味増減平均。負なら純減（枯渇方向）。 */
+  velocity: number;
+  /** currentBalance が lowWater 以下（既に低水位に達している） */
+  belowLowWater: boolean;
+  /** 低水位到達までの推定反復数。既に belowLowWater なら 0。velocity が 0 以上なら null。 */
+  etaIterations: number | null;
+  /** 対象window内の反復番号（古い→新しい順） */
+  iterations: number[];
+}
+
+/**
+ * バックログ枯渇予測: ready の消費速度から low_water 到達までの ETA（反復数）を推定する。
+ * data/runs に ready 件数は記録されないため、各反復は ready を1件消費しnextIssues件を
+ * 補充するという orchestrator/loop.py の挙動から相対残量を再構成する。runs が空ならnull。
+ */
+export function backlogLowWaterEta(runs: RunRecord[]): BacklogLowWaterEta | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  let balance = IDEATION_LOW_WATER;
+  const balances: number[] = [];
+  for (const run of sorted) {
+    balance += run.nextIssues.length - 1;
+    balances.push(balance);
+  }
+
+  const windowSize = Math.min(BACKLOG_ETA_WINDOW, sorted.length);
+  const currentBalance = balances[balances.length - 1];
+  const beforeWindowBalance =
+    sorted.length > windowSize ? balances[sorted.length - windowSize - 1] : IDEATION_LOW_WATER;
+  const velocity = (currentBalance - beforeWindowBalance) / windowSize;
+
+  const belowLowWater = currentBalance <= IDEATION_LOW_WATER;
+  const etaIterations = belowLowWater
+    ? 0
+    : velocity < 0
+      ? Math.ceil((currentBalance - IDEATION_LOW_WATER) / -velocity)
+      : null;
+
+  return {
+    lowWater: IDEATION_LOW_WATER,
+    windowSize,
+    currentBalance,
+    velocity,
+    belowLowWater,
+    etaIterations,
+    iterations: sorted.slice(sorted.length - windowSize).map((r) => r.iteration),
+  };
+}

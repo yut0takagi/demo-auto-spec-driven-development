@@ -125,6 +125,9 @@ import {
   ideationEarlyAbandonmentSignal,
   EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
   EARLY_ABANDONMENT_TREND_WINDOW,
+  backlogLowWaterEta,
+  IDEATION_LOW_WATER,
+  BACKLOG_ETA_WINDOW,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -7977,5 +7980,100 @@ describe('modelPairCompatibilityDivergence', () => {
     expect(result[0].count).toBe(3);
     expect(result[0].mergedCount).toBe(2);
     expect(result[0].iterations).toEqual([1, 2, 3]);
+  });
+});
+
+/** iteration `from`..`to` の run を、各反復 nextIssues 長 `n`（既定0=補充なし）で生成する。 */
+function makeRunRange(from: number, to: number, n = 0): RunRecord[] {
+  return Array.from({ length: to - from + 1 }, (_, k) =>
+    makeRun({ iteration: from + k, nextIssues: Array.from({ length: n }, (_, j) => 1000 * from + k * 10 + j) }),
+  );
+}
+
+describe('backlogLowWaterEta', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(backlogLowWaterEta([])).toBeNull();
+  });
+
+  it('1件だけ、補充0件なら基準線(IDEATION_LOW_WATER)から1件消費した分だけ残量が減り、既に低水位以下と判定する', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 1));
+    expect(r).not.toBeNull();
+    expect(r!.lowWater).toBe(IDEATION_LOW_WATER);
+    expect(r!.windowSize).toBe(1);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 1);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+    expect(r!.iterations).toEqual([1]);
+  });
+
+  it('1件だけ、補充1件で消費1件を相殺すると残量は基準線と同じ（ちょうど低水位=境界値）', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 1, 1));
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER);
+    expect(r!.velocity).toBe(0);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('補充が消費を上回り続けると残量は増え、枯渇ETAはnull（減っていないので予測不能）', () => {
+    const r = backlogLowWaterEta(makeRunRange(1, 3, 2));
+    expect(r!.windowSize).toBe(3);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER + 3);
+    expect(r!.velocity).toBe(1);
+    expect(r!.belowLowWater).toBe(false);
+    expect(r!.etaIterations).toBeNull();
+  });
+
+  it(`直近${BACKLOG_ETA_WINDOW}反復だけを消費速度に使い、それより前の履歴は無視する`, () => {
+    // 8反復すべて補充0件(net -1)。windowSizeは5に制限され、直近5反復(4-8)だけを見るはず。
+    const r = backlogLowWaterEta(makeRunRange(1, 8));
+    expect(r!.windowSize).toBe(BACKLOG_ETA_WINDOW);
+    expect(r!.iterations).toEqual([4, 5, 6, 7, 8]);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 8);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('直近window以前に積んだ余剰があれば残量は低水位より上のまま推移でき、window内の減少速度からETAを算出する', () => {
+    // 余剰区間(1-5, net+2): 6+5*2=16。直近window(6-10, net-1): 16-5=11。ETA=(11-6)/1=5
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 10)];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.windowSize).toBe(BACKLOG_ETA_WINDOW);
+    expect(r!.iterations).toEqual([6, 7, 8, 9, 10]);
+    expect(r!.currentBalance).toBe(11);
+    expect(r!.velocity).toBe(-1);
+    expect(r!.belowLowWater).toBe(false);
+    expect(r!.etaIterations).toBe(5);
+  });
+
+  it('速度が非整数のときはETAを切り上げる', () => {
+    // 余剰区間(1-5, net+2): 16。直近window(6-10)は net -1,-1,-1,-1,0 → 12。速度-0.8。ETA=ceil(6/0.8)=8
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 9), ...makeRunRange(10, 10, 1)];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.currentBalance).toBe(12);
+    expect(r!.velocity).toBeCloseTo(-0.8, 10);
+    expect(r!.etaIterations).toBe(8);
+  });
+
+  it('既に低水位を下回っていれば、直近の速度が回復方向(正)でもETAは0のまま', () => {
+    // 深く消費する区間(1-5, net-1): 1。直近window(6-10)は net 0,0,+1,+1,+1 → 4（まだ低水位以下）
+    const runs = [
+      ...makeRunRange(1, 5),
+      makeRun({ iteration: 6, nextIssues: [601] }),
+      makeRun({ iteration: 7, nextIssues: [602] }),
+      ...makeRunRange(8, 10, 2),
+    ];
+    const r = backlogLowWaterEta(runs);
+    expect(r!.currentBalance).toBe(4);
+    expect(r!.velocity).toBeCloseTo(0.6, 10);
+    expect(r!.belowLowWater).toBe(true);
+    expect(r!.etaIterations).toBe(0);
+  });
+
+  it('入力順が iteration 順でなくても集計結果は変わらない', () => {
+    const r = backlogLowWaterEta([...makeRunRange(1, 3)].reverse());
+    expect(r!.iterations).toEqual([1, 2, 3]);
+    expect(r!.currentBalance).toBe(IDEATION_LOW_WATER - 3);
   });
 });
