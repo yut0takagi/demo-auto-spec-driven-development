@@ -1,6 +1,7 @@
 import { loadRuns } from '@/lib/loadData';
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { IdeationCostQualityPanel } from '@/components/IdeationCostQualityPanel';
+import { IdeationProposalConsumptionPanel } from '@/components/IdeationProposalConsumptionPanel';
 import { IdeationToStartLeadTimePanel } from '@/components/IdeationToStartLeadTimePanel';
 import { IdeationToStartLeadTimeDistributionPanel } from '@/components/IdeationToStartLeadTimeDistributionPanel';
 import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
@@ -25,6 +26,7 @@ export default function IdeationPage() {
         <IdeationQualityDegradationPanel runs={runs} />
         <IdeationFailurePanel runs={runs} />
         <IdeationCostQualityPanel runs={runs} />
+        <IdeationProposalConsumptionPanel runs={runs} />
         <IdeationToStartLeadTimePanel runs={runs} />
         <IdeationToStartLeadTimeDistributionPanel runs={runs} />
         <IdeationDropRatePanel runs={runs} />

@@ -70,6 +70,7 @@ import {
   recentAdversaryComments,
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
+  ideationProposalConsumption,
   abandonedSummary,
   abandonedReasonBreakdown,
   abandonedReasonOverrepresentation,
@@ -5900,6 +5901,126 @@ describe('ideationCostQualityCorrelation', () => {
     expect(result.batches.map((b) => b.costPerIssueUsd)).toEqual([0.1, 0.1]);
     expect(result.costVsApprovalRateCorrelation).toBeNull();
     expect(result.costVsMergeRateCorrelation).toBeNull();
+  });
+});
+
+describe('ideationProposalConsumption', () => {
+  it('空配列なら rows 空・件数/合計0・倍率null（境界値）', () => {
+    expect(ideationProposalConsumption([])).toEqual({
+      rows: [],
+      proposedCount: 0,
+      startedCount: 0,
+      proposedTotalUsd: 0,
+      actualConsumedTotalUsd: 0,
+      consumptionRatio: null,
+    });
+  });
+
+  it('ideationUsd=0、またはnextIssues空の反復は提案として扱わない（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [2], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0, totalUsd: 0.11 } }),
+      makeRun({ iteration: 2, nextIssues: [], cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.05, totalUsd: 0.16 } }),
+    ];
+    expect(ideationProposalConsumption(runs).rows).toEqual([]);
+  });
+
+  it('未着手の提案issueはstartIteration/actualCostUsd/verdictがnull', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2, 3],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 },
+      }),
+    ];
+    const result = ideationProposalConsumption(runs);
+    expect(result.rows).toEqual([
+      { issueNumber: 2, proposedIteration: 1, proposedCostUsd: 0.05, startIteration: null, actualCostUsd: null, verdict: null },
+      { issueNumber: 3, proposedIteration: 1, proposedCostUsd: 0.05, startIteration: null, actualCostUsd: null, verdict: null },
+    ]);
+    expect(result.proposedCount).toBe(2);
+    expect(result.startedCount).toBe(0);
+    expect(result.proposedTotalUsd).toBeCloseTo(0.1, 10);
+    expect(result.actualConsumedTotalUsd).toBe(0);
+    expect(result.consumptionRatio).toBeNull();
+  });
+
+  it('着手済みissueは着手反復のcost.totalUsdとverdictを実消費として対応付ける', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 },
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 2, title: 'child', labels: [] },
+        verdict: 'merged',
+        cost: { builderUsd: 0.3, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 0.35 },
+      }),
+    ];
+    const result = ideationProposalConsumption(runs);
+    expect(result.rows).toEqual([
+      { issueNumber: 2, proposedIteration: 1, proposedCostUsd: 0.02, startIteration: 2, actualCostUsd: 0.35, verdict: 'merged' },
+    ]);
+    expect(result.startedCount).toBe(1);
+    expect(result.actualConsumedTotalUsd).toBeCloseTo(0.35, 10);
+    // 実消費(0.35) / 提案時点コスト(0.02) = 17.5倍
+    expect(result.consumptionRatio).toBeCloseTo(17.5, 10);
+  });
+
+  it('提案元自身のissue番号がnextIssuesに含まれていても自分自身を着手済みにカウントしない（自己参照の境界値）', () => {
+    const runs = [
+      makeRun({
+        iteration: 5,
+        issue: { number: 10, title: 'self', labels: [] },
+        nextIssues: [10, 11],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 },
+      }),
+      makeRun({
+        iteration: 6,
+        issue: { number: 11, title: 'child', labels: [] },
+        verdict: 'merged',
+        cost: { builderUsd: 0.2, adversaryUsd: 0.02, ideationUsd: 0, totalUsd: 0.22 },
+      }),
+    ];
+    const result = ideationProposalConsumption(runs);
+    const selfRow = result.rows.find((r) => r.issueNumber === 10);
+    expect(selfRow).toEqual({
+      issueNumber: 10,
+      proposedIteration: 5,
+      proposedCostUsd: 0.05,
+      startIteration: null,
+      actualCostUsd: null,
+      verdict: null,
+    });
+    expect(result.rows.find((r) => r.issueNumber === 11)?.startIteration).toBe(6);
+  });
+
+  it('複数issueの合計から実消費合計と提案時点合計の倍率を算出する（未着手issueは倍率の分母に含めない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 1, title: 'a', labels: [] },
+        nextIssues: [2, 3],
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.02, totalUsd: 0.13 },
+      }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 2, title: 'c1', labels: [] },
+        verdict: 'merged',
+        cost: { builderUsd: 0.4, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 0.45 },
+      }),
+      // issue 3 はまだ着手されていない
+    ];
+    const result = ideationProposalConsumption(runs);
+    expect(result.proposedCount).toBe(2);
+    expect(result.startedCount).toBe(1);
+    expect(result.proposedTotalUsd).toBeCloseTo(0.02, 10); // 0.01 + 0.01
+    expect(result.actualConsumedTotalUsd).toBeCloseTo(0.45, 10);
+    // 倍率は着手済み(issue2)の提案コスト0.01のみを分母にする: 0.45 / 0.01 = 45
+    expect(result.consumptionRatio).toBeCloseTo(45, 10);
   });
 });
 
