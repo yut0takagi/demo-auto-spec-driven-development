@@ -82,6 +82,9 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
+  gateReasonCooccurrencePairs,
+  gateReasonCooccurrenceClusters,
+  GATE_REASON_COOCCURRENCE_MIN_COUNT,
   gateReasonConsecutiveFailureChaos,
   gateReasonUnificationPatterns,
   gateReasonRecoverySteps,
@@ -2235,6 +2238,172 @@ describe('gateReasonChains', () => {
     // iteration降順で返るので[0]がiteration2、[1]がiteration1
     expect(chains[0].categories).toEqual(['adversaryNotApproved']);
     expect(chains[1].categories).toEqual(['adversaryUnparseable']);
+  });
+});
+
+describe('gateReasonCooccurrencePairs', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(gateReasonCooccurrencePairs([])).toEqual([]);
+  });
+
+  it('全runのgateReasonsが単一カテゴリのみなら、共起ペアは発生せず空配列を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(gateReasonCooccurrencePairs(runs)).toEqual([]);
+  });
+
+  it('同一run内の2カテゴリを1回の共起として数え、該当反復を記録する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+    ];
+    const pairs = gateReasonCooccurrencePairs(runs);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].categories).toEqual(['e2eFailed', 'adversaryNotApproved']);
+    expect(pairs[0].count).toBe(1);
+    expect(pairs[0].iterations).toEqual([1]);
+  });
+
+  it('複数runにまたがる同じペアはcountが積み上がり、iterationsが昇順ユニークになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', 'e2e(Playwright) が失敗している'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const pairs = gateReasonCooccurrencePairs(runs);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].categories).toEqual(['verifyFailed', 'e2eFailed']);
+    expect(pairs[0].count).toBe(2);
+    expect(pairs[0].iterations).toEqual([1, 2]);
+  });
+});
+
+describe('gateReasonCooccurrenceClusters', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(gateReasonCooccurrenceClusters([])).toEqual([]);
+  });
+
+  it('全runのgateReasonsが単一カテゴリのみならクラスタは発生しない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(gateReasonCooccurrenceClusters(runs)).toEqual([]);
+  });
+
+  it('2カテゴリがGATE_REASON_COOCCURRENCE_MIN_COUNT以上共起すると1クラスタになる', () => {
+    expect(GATE_REASON_COOCCURRENCE_MIN_COUNT).toBe(2);
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', 'e2e(Playwright) が失敗している'],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].categories).toEqual(['e2eFailed', 'adversaryNotApproved']);
+    expect(clusters[0].totalCooccurrences).toBe(2);
+    expect(clusters[0].pairs).toHaveLength(1);
+    expect(clusters[0].pairs[0].count).toBe(2);
+    expect(clusters[0].iterations).toEqual([1, 2]);
+  });
+
+  it('共起が1回のみ（閾値未満）のペアはクラスタ化されない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+    ];
+    expect(gateReasonCooccurrenceClusters(runs)).toEqual([]);
+    // 閾値を明示的に下げれば検出される
+    expect(gateReasonCooccurrenceClusters(runs, 1)).toHaveLength(1);
+  });
+
+  it('3カテゴリが互いに閾値以上共起する場合、3つの2要素クラスタに分裂せず推移的に1クラスタへ統合される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: [
+          'verify(lint/typecheck/unit/build) が失敗している',
+          'e2e(Playwright) が失敗している',
+          'adversary が approve していない',
+        ],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: [
+          'verify(lint/typecheck/unit/build) が失敗している',
+          'e2e(Playwright) が失敗している',
+          'adversary が approve していない',
+        ],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].categories).toEqual(['verifyFailed', 'e2eFailed', 'adversaryNotApproved']);
+    expect(clusters[0].pairs).toHaveLength(3);
+    expect(clusters[0].totalCooccurrences).toBe(6);
+    expect(clusters[0].iterations).toEqual([1, 2]);
+  });
+
+  it('totalCooccurrences降順、同数はGATE_REASON_CATEGORY_ORDER順で安定ソートする', () => {
+    const runs = [
+      // verifyFailed × changedLinesExceeded を3反復共起
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      // noChanges × crashed を2反復共起
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった', '反復が例外で異常終了した: boom'],
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった', '反復が例外で異常終了した: boom'],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].categories).toEqual(['verifyFailed', 'changedLinesExceeded']);
+    expect(clusters[0].totalCooccurrences).toBe(3);
+    expect(clusters[1].categories).toEqual(['noChanges', 'crashed']);
+    expect(clusters[1].totalCooccurrences).toBe(2);
   });
 });
 
