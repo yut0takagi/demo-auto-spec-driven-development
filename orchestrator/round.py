@@ -10,42 +10,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Callable
 
+from orchestrator import prompts
 from orchestrator.claude_cli import run_agent
 from orchestrator.config import Config
 from orchestrator.models import AdversaryVerdict
-from orchestrator.review import ADVERSARY_PROMPT_TEMPLATE, parse_adversary_review
+from orchestrator.review import parse_adversary_review
 from orchestrator.shell import CommandResult, Runner, real_runner
-
-BUILDER_PROMPT_TEMPLATE = """\
-あなたは実装担当です。次のタスクをこのリポジトリに実装してください。
-
-## タスク
-{task}
-{plan_block}
-## 進め方（テスト駆動）
-- まず失敗するテストを書き、失敗を確認してから最小実装で通す（見せかけのテスト・実装は禁止）
-- テストは振る舞いを実質的に検証する（通すためだけのテストは禁止）
-
-## 必ず守ること
-- 変更は `dashboard/` と `data/` の中だけに限る。`.github/`, `orchestrator/`, `tests/` は絶対に変更しない
-- `cd dashboard && npm run verify` と `npm run test:e2e` が緑になること
-- 変更は必要最小限に保つ
-"""
-
-REVISE_PROMPT_TEMPLATE = """\
-あなたの実装は gate を通過しませんでした。以下の不通過理由に実際に対応して修正してください。
-
-## 元のタスク
-{task}
-
-## 不通過の理由（これを解消すること）
-{feedback}
-
-## 必ず守ること
-- 指摘・失敗に実際に対応する（見せかけの修正は禁止）
-- `cd dashboard && npm run verify` と `npm run test:e2e` が緑になること
-- 変更は `dashboard/` と `data/` の中だけに限る。`.github/`, `orchestrator/`, `tests/` は変更しない
-"""
 
 _UNREVIEWED = "verify/e2e が未通過のためレビュー未実施"
 
@@ -61,7 +31,7 @@ def _builder_model(cycles: int, cfg: Config, plan: str) -> str:
 
 def _builder_prompt(task: str, plan: str) -> str:
     block = f"\n## 実装計画（これに沿って進める）\n{plan}\n" if plan else "\n"
-    return BUILDER_PROMPT_TEMPLATE.format(task=task, plan_block=block)
+    return prompts.render("builder", task=task, plan_block=block)
 
 
 @dataclass(frozen=True)
@@ -147,7 +117,7 @@ def run_native_round(
 
         if verify_ok and e2e_ok:
             review_out = run_agent(
-                ADVERSARY_PROMPT_TEMPLATE.format(task=task, diff=diff_provider()),
+                prompts.render("adversary", task=task, diff=diff_provider()),
                 model=cfg.adversary_model, cwd=cwd, runner=runner,
             )
             adversary_cost += review_out.cost_usd
@@ -165,7 +135,7 @@ def run_native_round(
         )
         model_used = _builder_model(cycles, cfg, plan)
         revise = run_agent(
-            REVISE_PROMPT_TEMPLATE.format(task=task, feedback=feedback),
+            prompts.render("revise", task=task, feedback=feedback),
             model=model_used, cwd=cwd, runner=runner,
         )
         builder_cost += revise.cost_usd

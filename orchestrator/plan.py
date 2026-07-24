@@ -10,27 +10,10 @@ import json
 import re
 from dataclasses import dataclass
 
+from orchestrator import prompts
 from orchestrator.claude_cli import run_agent
 from orchestrator.config import Config
 from orchestrator.shell import Runner, real_runner
-
-PLANNER_PROMPT_TEMPLATE = """\
-あなたはこのリポジトリの実装計画者です。次のタスクを実装するための計画を立ててください。
-人間には質問できません（無人運用）。与えられた情報だけで自律的に判断すること。
-
-## タスク
-{task}
-
-## 進め方
-- まず「これは小さく、計画不要か」を判定する。設定変更・単一パネル追加など数十行で終わるものは trivial。
-- trivial でなければ、設計方針・ファイル単位のタスク分解・**機械検証可能な受入条件**を書く。
-- 変更は `dashboard/` と `data/` 内で完結する前提で計画する。
-
-次の JSON だけをコードフェンスで囲って出力すること:
-```json
-{{"trivial": <true/false>, "design": "<設計方針>", "tasks": ["<手順1>", "..."], "acceptance": ["<検証可能な受入条件>", "..."]}}
-```
-"""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\{.*?\})\s*```", re.DOTALL)
 _BARE = re.compile(r"(\{.*\})", re.DOTALL)
@@ -77,7 +60,7 @@ def propose_plan(
     *, task: str, cfg: Config, cwd: str, runner: Runner = real_runner
 ) -> PlanResult:
     out = run_agent(
-        PLANNER_PROMPT_TEMPLATE.format(task=task),
+        prompts.render("planner", task=task),
         model=cfg.planner_model, cwd=cwd, runner=runner,
     )
     return parse_plan(out.text, cost=out.cost_usd)

@@ -9,30 +9,18 @@ from __future__ import annotations
 import asyncio
 from typing import Callable
 
+from orchestrator import prompts
 from orchestrator.claude_cli import run_agent
 from orchestrator.config import Config
-from orchestrator.review import ADVERSARY_PROMPT_TEMPLATE, parse_adversary_review
-from orchestrator.round import (
-    BUILDER_PROMPT_TEMPLATE,
-    RoundOutcome,
-    run_native_round,
-)
+from orchestrator.review import parse_adversary_review
+from orchestrator.round import RoundOutcome, run_native_round
 from orchestrator.shell import Runner, real_runner
-
-TURN_PROMPT_TEMPLATE = """\
-あなたは h5i オーケストラの `{role}` シートです。
-自分の worktree の中だけで作業し、他のシートの作業領域には触れないでください。
-
-## タスク
-{task}
-{materials_section}
-"""
 
 
 def build_turn_prompt(*, role: str, task: str, materials: str) -> str:
     materials_section = f"\n## 参考資料\n{materials}\n" if materials else ""
-    return TURN_PROMPT_TEMPLATE.format(
-        role=role, task=task, materials_section=materials_section
+    return prompts.render(
+        "h5i_turn", role=role, task=task, materials_section=materials_section
     )
 
 
@@ -84,7 +72,7 @@ async def _run_h5i_round_async(
         builder = await c.hire("builder", runtime="claude", model=cfg.builder_model)
         adversary = await c.hire("adversary", runtime="claude", model=cfg.adversary_model)
 
-        artifact = await builder.work(BUILDER_PROMPT_TEMPLATE.format(task=task))
+        artifact = await builder.work(prompts.render("builder", task=task, plan_block="\n"))
         await c.freeze()
 
         review = await adversary.review(artifact)
