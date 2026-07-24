@@ -3896,6 +3896,146 @@ export function ideationProposalQualityDropCorrelation(runs: RunRecord[]): Ideat
   };
 }
 
+/** 着手した反復の revise 回数がこれ以下で abandoned になった場合を「早期abandonment」とみなす。0回=一度もreviseせず即見送り。 */
+export const EARLY_ABANDONMENT_MAX_REVISE_CYCLES = 0;
+/** トレンド判定に使う直近/直前ウィンドウの着手件数。他のTrendSignal系と揃えている。 */
+export const EARLY_ABANDONMENT_TREND_WINDOW = 3;
+/** 直近ウィンドウの早期abandonment率が直前ウィンドウよりこのpt以上変化して初めて増加/減少と判定する。 */
+export const EARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT = 5;
+
+export type EarlyAbandonmentTrendDirection = 'increasing' | 'decreasing' | 'flat';
+
+export interface IdeationEarlyAbandonmentRun {
+  issueNumber: number;
+  /** issue を提案した(nextIssuesに含めた)反復番号 */
+  proposedIteration: number;
+  /** issue.number として実際に着手された反復番号 */
+  startIteration: number;
+  verdict: Verdict;
+  reviseCycles: number;
+  durationSec: number;
+  /** verdict === 'abandoned' かつ reviseCycles <= EARLY_ABANDONMENT_MAX_REVISE_CYCLES */
+  isEarlyAbandonment: boolean;
+}
+
+export interface IdeationEarlyAbandonmentSignal {
+  maxReviseCycles: number;
+  /** ideation提案経由で着手されたissue数（着手順、= startIteration昇順） */
+  startedTotal: number;
+  earlyAbandonedCount: number;
+  earlyAbandonmentRate: number;
+  /** 比較用: ideation提案が起源でない(人間作成等の)issueのうち着手された件数 */
+  baselineStartedTotal: number;
+  baselineEarlyAbandonedCount: number;
+  /** baselineStartedTotalが0ならnull */
+  baselineEarlyAbandonmentRate: number | null;
+  windowSize: number;
+  partial: boolean;
+  recentRate: number | null;
+  previousRate: number | null;
+  deltaPt: number | null;
+  direction: EarlyAbandonmentTrendDirection;
+  /** direction === 'increasing'（早期abandonment率が悪化傾向） */
+  triggered: boolean;
+  /** ideation提案経由で着手された全run（着手順） */
+  runs: IdeationEarlyAbandonmentRun[];
+}
+
+function earlyAbandonmentDirection(deltaPt: number): EarlyAbandonmentTrendDirection {
+  if (Math.abs(deltaPt) < EARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT) return 'flat';
+  return deltaPt > 0 ? 'increasing' : 'decreasing';
+}
+
+/**
+ * ideationDropRateSignal が「提案されてから一度も着手されない」ドロップを検知するのに
+ * 対し、こちらは「着手はしたのに、ほぼreviseもせず(EARLY_ABANDONMENT_MAX_REVISE_CYCLES回以下)
+ * すぐabandonedになった」早期abandonmentを検知する。着手直後に見送られるのは、issue自体の
+ * 記述が曖昧/実装不能などideation生成物の品質問題を示唆するため、着手済みissueの中でも
+ * 「粘って revise を重ねた末の abandoned」とは区別する。ideation提案が起源でないissueの
+ * 同じ指標(baseline)も併記し、ideation起源のissueだけが悪化しているのか、ゲート全体が
+ * 厳しくなっているだけなのかを切り分けられるようにする。トレンドは他のTrendSignal系と
+ * 同じ直近/直前ウィンドウ比較（着手順）。ideation提案が1件も無い、または1件も着手されて
+ * いない場合はnull。
+ */
+export function ideationEarlyAbandonmentSignal(runs: RunRecord[]): IdeationEarlyAbandonmentSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const createdBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    for (const issueNumber of r.nextIssues) {
+      if (!createdBy.has(issueNumber)) createdBy.set(issueNumber, r);
+    }
+  }
+  if (createdBy.size === 0) return null;
+
+  const isEarly = (r: RunRecord) => r.verdict === 'abandoned' && r.reviseCycles <= EARLY_ABANDONMENT_MAX_REVISE_CYCLES;
+
+  const seenIdeation = new Set<number>();
+  const ideationRuns: IdeationEarlyAbandonmentRun[] = [];
+  const seenBaseline = new Set<number>();
+  let baselineStartedTotal = 0;
+  let baselineEarlyAbandonedCount = 0;
+
+  for (const r of sorted) {
+    const created = createdBy.get(r.issue.number);
+    if (created && created.iteration < r.iteration) {
+      if (seenIdeation.has(r.issue.number)) continue;
+      seenIdeation.add(r.issue.number);
+      ideationRuns.push({
+        issueNumber: r.issue.number,
+        proposedIteration: created.iteration,
+        startIteration: r.iteration,
+        verdict: r.verdict,
+        reviseCycles: r.reviseCycles,
+        durationSec: r.durationSec,
+        isEarlyAbandonment: isEarly(r),
+      });
+    } else {
+      if (seenBaseline.has(r.issue.number)) continue;
+      seenBaseline.add(r.issue.number);
+      baselineStartedTotal++;
+      if (isEarly(r)) baselineEarlyAbandonedCount++;
+    }
+  }
+
+  if (ideationRuns.length === 0) return null;
+
+  const earlyAbandonedCount = ideationRuns.filter((r) => r.isEarlyAbandonment).length;
+
+  const windowSize = Math.min(EARLY_ABANDONMENT_TREND_WINDOW, Math.floor(ideationRuns.length / 2));
+  let recentRate: number | null = null;
+  let previousRate: number | null = null;
+  let deltaPt: number | null = null;
+  let direction: EarlyAbandonmentTrendDirection = 'flat';
+  if (windowSize > 0) {
+    const recent = ideationRuns.slice(ideationRuns.length - windowSize);
+    const previous = ideationRuns.slice(ideationRuns.length - windowSize * 2, ideationRuns.length - windowSize);
+    recentRate = recent.filter((r) => r.isEarlyAbandonment).length / recent.length;
+    previousRate = previous.filter((r) => r.isEarlyAbandonment).length / previous.length;
+    deltaPt = (recentRate - previousRate) * 100;
+    direction = earlyAbandonmentDirection(deltaPt);
+  }
+
+  return {
+    maxReviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+    startedTotal: ideationRuns.length,
+    earlyAbandonedCount,
+    earlyAbandonmentRate: earlyAbandonedCount / ideationRuns.length,
+    baselineStartedTotal,
+    baselineEarlyAbandonedCount,
+    baselineEarlyAbandonmentRate: baselineStartedTotal === 0 ? null : baselineEarlyAbandonedCount / baselineStartedTotal,
+    windowSize,
+    partial: windowSize < EARLY_ABANDONMENT_TREND_WINDOW,
+    recentRate,
+    previousRate,
+    deltaPt,
+    direction,
+    triggered: direction === 'increasing',
+    runs: ideationRuns,
+  };
+}
+
 /**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で

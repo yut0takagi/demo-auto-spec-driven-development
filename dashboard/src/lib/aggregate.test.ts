@@ -122,6 +122,9 @@ import {
   modelPairCompatibilityDivergence,
   MODEL_PAIR_MIN_SAMPLE,
   MODEL_PAIR_DIVERGENCE_THRESHOLD_PT,
+  ideationEarlyAbandonmentSignal,
+  EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+  EARLY_ABANDONMENT_TREND_WINDOW,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -5992,6 +5995,191 @@ function proposeAndStart(
     }),
   ];
 }
+
+describe('ideationEarlyAbandonmentSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationEarlyAbandonmentSignal([])).toBeNull();
+  });
+
+  it('nextIssuesを一度も出していない場合はnull（提案が無い）', () => {
+    const runs = [makeRun({ iteration: 1, nextIssues: [] })];
+    expect(ideationEarlyAbandonmentSignal(runs)).toBeNull();
+  });
+
+  it('提案はあるが着手されたissueが無ければnull', () => {
+    const runs = [makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] })];
+    expect(ideationEarlyAbandonmentSignal(runs)).toBeNull();
+  });
+
+  it(`reviseCyclesがEARLY_ABANDONMENT_MAX_REVISE_CYCLES(${EARLY_ABANDONMENT_MAX_REVISE_CYCLES})以下でabandonedになった着手を早期abandonmentとして数える`, () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    expect(signal!.earlyAbandonedCount).toBe(1);
+    expect(signal!.earlyAbandonmentRate).toBe(1);
+    expect(signal!.runs[0].isEarlyAbandonment).toBe(true);
+  });
+
+  it('reviseCyclesがしきい値を1回でも超えてabandonedになった場合は早期abandonmentに数えない（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: EARLY_ABANDONMENT_MAX_REVISE_CYCLES + 1,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.earlyAbandonedCount).toBe(0);
+    expect(signal!.earlyAbandonmentRate).toBe(0);
+    expect(signal!.runs[0].isEarlyAbandonment).toBe(false);
+  });
+
+  it('reviseCyclesが0でもverdictがabandoned以外なら早期abandonmentに数えない', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'merged',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.earlyAbandonedCount).toBe(0);
+  });
+
+  it('提案元自身のissue番号を含む自己参照はideation起源として数えず、baseline側に計上される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        issue: { number: 10, title: 'self', labels: [] },
+        nextIssues: [10],
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal).toBeNull();
+  });
+
+  it('ideation起源ではないissue(baseline。提案元反復自身のissueも含む)は別集計され、早期abandonment率の計算対象(startedTotal)には含めない', () => {
+    const runs = [
+      // issue1 は誰にも提案されていない(baseline)。同時に issue10 を提案する。
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10], verdict: 'merged' }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+      makeRun({
+        iteration: 3,
+        issue: { number: 999, title: 'human-authored', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    // baseline は issue1(提案元自身、merged) と issue999(abandoned, revise0) の2件
+    expect(signal!.baselineStartedTotal).toBe(2);
+    expect(signal!.baselineEarlyAbandonedCount).toBe(1);
+    expect(signal!.baselineEarlyAbandonmentRate).toBe(0.5);
+  });
+
+  it('runsが1件も無いissue.numberの重複が無ければbaselineStartedTotalは常に1以上になる（提案元反復自身も母集団に含まれるため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    // issue1(提案元反復自身)がideation起源ではないためbaselineに1件計上される
+    expect(signal!.baselineStartedTotal).toBe(1);
+    expect(signal!.baselineEarlyAbandonedCount).toBe(0);
+    expect(signal!.baselineEarlyAbandonmentRate).toBe(0);
+  });
+
+  it('同じissueが複数回dispatchされても最初の着手だけを1件として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({
+        iteration: 2,
+        issue: { number: 10, title: 'x', labels: [] },
+        verdict: 'abandoned',
+        reviseCycles: 0,
+      }),
+      makeRun({
+        iteration: 3,
+        issue: { number: 10, title: 'x-retry', labels: [] },
+        verdict: 'merged',
+      }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.startedTotal).toBe(1);
+    expect(signal!.runs[0].startIteration).toBe(2);
+  });
+
+  it(`直近window(${EARLY_ABANDONMENT_TREND_WINDOW})件が直前windowよりEARLY_ABANDONMENT_TREND_FLAT_THRESHOLD_PT以上悪化していれば increasing で発報する`, () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20, 30, 40, 50, 60] }),
+    ];
+    // 直前window(3件): 全てmerged(早期abandonmentなし)
+    for (const [i, issueNumber] of [10, 20, 30].entries()) {
+      runs.push(
+        makeRun({ iteration: 2 + i, issue: { number: issueNumber, title: 'x', labels: [] }, verdict: 'merged' }),
+      );
+    }
+    // 直近window(3件): 全てreviseゼロでabandoned
+    for (const [i, issueNumber] of [40, 50, 60].entries()) {
+      runs.push(
+        makeRun({
+          iteration: 5 + i,
+          issue: { number: issueNumber, title: 'x', labels: [] },
+          verdict: 'abandoned',
+          reviseCycles: 0,
+        }),
+      );
+    }
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.previousRate).toBe(0);
+    expect(signal!.recentRate).toBe(1);
+    expect(signal!.direction).toBe('increasing');
+    expect(signal!.triggered).toBe(true);
+    expect(signal!.partial).toBe(false);
+  });
+
+  it('直近と直前で変化がなければ flat で未発報のまま', () => {
+    const runs: RunRecord[] = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10, 20] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 20, title: 'y', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.triggered).toBe(false);
+    // 着手済みが2件(windowSizeの2倍未満)のため window は縮小される（partial）
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+  });
+
+  it('着手が1件のみなら直前windowが取れずtrendはnullのまま（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'gen', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const signal = ideationEarlyAbandonmentSignal(runs);
+    expect(signal!.windowSize).toBe(0);
+    expect(signal!.recentRate).toBeNull();
+    expect(signal!.previousRate).toBeNull();
+    expect(signal!.direction).toBe('flat');
+    expect(signal!.triggered).toBe(false);
+  });
+});
 
 describe('ideationToStartLeadTimeDistribution', () => {
   it('runsが空ならサンプル0件・数値は全て0・bucketsは空配列（境界値）', () => {

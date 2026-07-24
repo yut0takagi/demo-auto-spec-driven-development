@@ -54,6 +54,7 @@ import {
   ideationStartSuccessSummary,
   ideationDropRateSignal,
   ideationProposalQualityDropCorrelation,
+  ideationEarlyAbandonmentSignal,
   ideationToStartLeadTimeDistribution,
   ideationToStartBottlenecks,
   verdictTransitions,
@@ -1595,6 +1596,59 @@ test('Ideation提案品質（規模・単価）とドロップ率の関連分析
   await expect(lastRow).toContainText(
     lastBatch.dropRate === null ? '未判定' : `${(lastBatch.dropRate * 100).toFixed(0)}%`,
   );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation生成Issueの早期abandonment率パネルが実データから導出した率・trend・対象issueを表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationEarlyAbandonmentSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation起源issueの着手が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-early-abandonment-panel');
+  await expect(panel).toBeVisible();
+
+  // 率・件数は ideationEarlyAbandonmentSignal()（別の計算経路）と一致するはず
+  const ratePct = signal!.earlyAbandonmentRate * 100;
+  await expect(page.getByTestId('ideation-early-abandonment-value')).toHaveText(`${ratePct.toFixed(1)}%`);
+  await expect(page.getByTestId('ideation-early-abandonment-counts')).toContainText(
+    `着手 ${signal!.startedTotal}件中 ${signal!.earlyAbandonedCount}件が早期abandonment`,
+  );
+
+  const signalBlock = page.getByTestId('ideation-early-abandonment-signal');
+  await expect(signalBlock).toHaveAttribute('data-triggered', String(signal!.triggered));
+  await expect(page.getByTestId('ideation-early-abandonment-status')).toContainText(
+    signal!.triggered ? '発報' : '未発報',
+  );
+
+  // 直近10件（着手の新しい順）は個別に表示され、isEarlyAbandonmentがrose色で強調されるはず
+  const shown = [...signal!.runs].slice(Math.max(0, signal!.runs.length - 10)).reverse();
+  for (const r of shown) {
+    const row = page.getByTestId(`ideation-early-abandonment-issue-${r.issueNumber}`);
+    await expect(row).toBeVisible();
+    const verdictEl = page.getByTestId(`ideation-early-abandonment-verdict-${r.issueNumber}`);
+    await expect(verdictEl).toHaveText(r.verdict);
+    if (r.isEarlyAbandonment) {
+      expect(await verdictEl.getAttribute('class')).toContain('text-rose-400');
+    }
+  }
+
+  // 回帰防止（不変量）: 早期abandonmentと判定されたrunは必ずverdict===abandoned かつ
+  // reviseCycles <= maxReviseCycles
+  for (const r of signal!.runs.filter((x) => x.isEarlyAbandonment)) {
+    expect(r.verdict).toBe('abandoned');
+    expect(r.reviseCycles).toBeLessThanOrEqual(signal!.maxReviseCycles);
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
