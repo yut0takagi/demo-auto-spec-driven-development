@@ -2140,6 +2140,57 @@ export function costEfficiency(runs: RunRecord[]): CostEfficiency {
   };
 }
 
+export interface PlannerActivityTrendPoint {
+  iteration: number;
+  /** plannerUsd > 0（その反復で planner が実際に動いた） */
+  active: boolean;
+  usd: number;
+}
+
+export interface PlannerActivity {
+  /** cost.plannerUsd フィールドが記録されている反復数（旧レコードは対象外） */
+  trackedCount: number;
+  /** trackedCount のうち plannerUsd > 0 だった反復数 */
+  activeCount: number;
+  /** アクティブ反復の比率(0..100)。trackedCount が0ならnull */
+  activationRatePct: number | null;
+  /** アクティブ反復1件あたりの平均コスト(USD)。activeCountが0ならnull */
+  avgUsdPerActiveRun: number | null;
+  /** 計測対象反復の総コストに占める planner コストの割合(0..100)。計測対象総コストが0ならnull */
+  pctOfTrackedCost: number | null;
+  /** 計測対象反復ごとの推移（iteration昇順） */
+  trend: PlannerActivityTrendPoint[];
+}
+
+/**
+ * Planner（自律 spec+plan 生成、既定 OFF）の稼働状況とコスト効率。
+ * cost.plannerUsd は Plan 3 で追加された任意フィールドで、旧い反復には存在しない。
+ * フィールド未記録の反復を0扱いにすると稼働率が不当に薄まるため、plannerUsd が
+ * 記録されている反復だけを分母（trackedCount）にする。costEfficiency/costBreakdown
+ * と同じ方針で、verdict による絞り込みはせず failed run のコストも含める。
+ */
+export function plannerActivity(runs: RunRecord[]): PlannerActivity {
+  const tracked = byIterationAsc(runs).filter((r) => r.cost.plannerUsd !== undefined);
+  const trend: PlannerActivityTrendPoint[] = tracked.map((r) => {
+    const usd = r.cost.plannerUsd ?? 0;
+    return { iteration: r.iteration, active: usd > 0, usd };
+  });
+
+  const trackedCount = tracked.length;
+  const activeCount = trend.filter((p) => p.active).length;
+  const totalTrackedCostUsd = tracked.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+  const totalPlannerCostUsd = trend.reduce((sum, p) => sum + p.usd, 0);
+
+  return {
+    trackedCount,
+    activeCount,
+    activationRatePct: trackedCount === 0 ? null : (activeCount / trackedCount) * 100,
+    avgUsdPerActiveRun: activeCount === 0 ? null : totalPlannerCostUsd / activeCount,
+    pctOfTrackedCost: totalTrackedCostUsd === 0 ? null : (totalPlannerCostUsd / totalTrackedCostUsd) * 100,
+    trend,
+  };
+}
+
 export interface ModelReviseCyclesSummary {
   model: string;
   /** この model が builder として使われ、かつ verify に到達した反復数 */
