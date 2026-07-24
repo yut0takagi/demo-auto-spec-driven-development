@@ -13,6 +13,7 @@ import {
   gateReasonTrendSignal,
   gateReasonChains,
   gateFailureTypeBreakdown,
+  gateReasonSeveritySpectrum,
   costEfficiency,
   costPerApprovedPrTrend,
   breakerRunway,
@@ -577,6 +578,50 @@ test('ゲート失敗別 revise実質コストパネルが実データから導�
     rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('gate-reason-cost-row-', '')),
   );
   expect(renderedCategories).toEqual(breakdown.map((b) => b.category));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('ゲート理由の深刻度スペクトラムパネルが実データから導出した深刻度スコア・tier別復旧コストを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const spectrum = gateReasonSeveritySpectrum(runs);
+  expect(
+    spectrum.length,
+    'data/runs に failed/abandoned/needs-human で gateReasons を持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('gate-reason-severity-spectrum-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${spectrum.length}カテゴリ`);
+
+  // 各カテゴリ行が gateReasonSeveritySpectrum()（別の計算経路）と一致する深刻度スコア・
+  // tier別（failed/abandoned/needs-human）の反復数・平均コスト・revise平均回数を表示する
+  for (const s of spectrum) {
+    const scoreEl = page.getByTestId(`severity-spectrum-score-${s.category}`);
+    await expect(scoreEl).toHaveText(
+      `深刻度 ${s.severityScore.toFixed(2)}（平均$${s.avgCostUsdPerRun.toFixed(2)} / ${s.runCount}反復）`,
+    );
+
+    for (const t of s.tiers) {
+      const tierEl = page.getByTestId(`severity-spectrum-tier-${s.category}-${t.verdict}`);
+      await expect(tierEl).toContainText(
+        `${t.runCount}反復 / 平均$${t.avgCostUsdPerRun.toFixed(2)} / revise平均${t.avgReviseCyclesPerRun.toFixed(1)}回`,
+      );
+    }
+  }
+
+  // 深刻度スコア降順で描画されていること（スペクトラムの主張である「重度なほど上」の意味を持たせるため）
+  const rows = await page.locator('[data-testid^="severity-spectrum-row-"]').all();
+  const renderedCategories = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('severity-spectrum-row-', '')),
+  );
+  expect(renderedCategories).toEqual(spectrum.map((s) => s.category));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

@@ -25,6 +25,7 @@ import {
   GATE_REASON_TREND_WINDOW,
   GATE_REASON_TREND_FLAT_THRESHOLD,
   gateFailureTypeBreakdown,
+  gateReasonSeveritySpectrum,
   costEfficiency,
   costPerApprovedPrTrend,
   reviseCyclesByModel,
@@ -1396,6 +1397,121 @@ describe('gateReasonCostBreakdown', () => {
     ];
     const b = gateReasonCostBreakdown(runs);
     expect(b.map((x) => x.category)).toEqual(['e2eFailed', 'noChanges']);
+  });
+});
+
+describe('gateReasonSeveritySpectrum', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(gateReasonSeveritySpectrum([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(gateReasonSeveritySpectrum(runs)).toEqual([]);
+  });
+
+  it('全runがabandonedなカテゴリはseverityScoreが最小(1)になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['変更行数 500 が上限 400 を超えている'],
+        reviseCycles: 0,
+        cost: { builderUsd: 0.2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.2 },
+      }),
+    ];
+    const s = gateReasonSeveritySpectrum(runs);
+    expect(s).toHaveLength(1);
+    expect(s[0].category).toBe('changedLinesExceeded');
+    // SEVERITY_TIER_VERDICTS = [failed, abandoned, needs-human] のうち abandoned は中間(重み2)
+    expect(s[0].severityScore).toBeCloseTo(2, 5);
+    expect(s[0].runCount).toBe(1);
+    expect(s[0].iterations).toEqual([1]);
+    expect(s[0].avgCostUsdPerRun).toBeCloseTo(0.2, 5);
+    expect(s[0].tiers).toEqual([
+      {
+        verdict: 'abandoned',
+        runCount: 1,
+        totalCostUsd: 0.2,
+        avgCostUsdPerRun: 0.2,
+        totalReviseCycles: 0,
+        avgReviseCyclesPerRun: 0,
+      },
+    ]);
+  });
+
+  it('同一カテゴリがfailed/abandoned/needs-humanにまたがると加重平均でseverityScoreが動く', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'failed',
+        gateReasons: ['反復が例外で異常終了した: boom'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['反復が例外で異常終了した: boom2'],
+      }),
+    ];
+    const s = gateReasonSeveritySpectrum(runs);
+    expect(s[0].category).toBe('crashed');
+    // failed(重み3)が1件、abandoned(重み2)が1件 -> 平均2.5
+    expect(s[0].severityScore).toBeCloseTo(2.5, 5);
+    expect(s[0].tiers.map((t) => t.verdict)).toEqual(['failed', 'abandoned']);
+    // tier(verdict)をまたいでも反復番号は1つの昇順リストにまとまる
+    expect(s[0].iterations).toEqual([1, 2]);
+  });
+
+  it('needs-humanのみのカテゴリはseverityScoreが最小(1)になり、failedのみは最大(3)になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'needs-human',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: '既存の挙動を壊している' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        gateReasons: ['反復が例外で異常終了した: boom'],
+      }),
+    ];
+    const s = gateReasonSeveritySpectrum(runs);
+    const needsHumanRow = s.find((x) => x.category === 'adversaryNotApproved');
+    const crashedRow = s.find((x) => x.category === 'crashed');
+    expect(needsHumanRow?.severityScore).toBeCloseTo(1, 5);
+    expect(crashedRow?.severityScore).toBeCloseTo(3, 5);
+    // severityScore降順で返る
+    expect(s.map((x) => x.category)).toEqual(['crashed', 'adversaryNotApproved']);
+  });
+
+  it('1 run が同一カテゴリの reason を複数持っていても run 単位で1回だけ加算する（重複計上しない）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', 'adversary が approve していない'],
+        reviseCycles: 3,
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+      }),
+    ];
+    const s = gateReasonSeveritySpectrum(runs);
+    expect(s[0].runCount).toBe(1);
+    expect(s[0].avgCostUsdPerRun).toBeCloseTo(2, 5);
+    expect(s[0].tiers[0].totalReviseCycles).toBe(3);
+  });
+
+  it('paused/dry-runはgateReasonsが空という契約が破られても対象から除外する（防御的分岐）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'paused',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'dry-run',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+      }),
+    ];
+    expect(gateReasonSeveritySpectrum(runs)).toEqual([]);
   });
 });
 
