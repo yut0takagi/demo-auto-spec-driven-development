@@ -1,0 +1,42 @@
+{
+  "id": "20260724T084622Z-187",
+  "iteration": 117,
+  "issue": {
+    "number": 187,
+    "title": "issue チケット型別の提案品質・回収効率マトリックス",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/187-issue",
+  "startedAt": "2026-07-24T08:46:22Z",
+  "finishedAt": "2026-07-24T08:57:03Z",
+  "durationSec": 641,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 208,
+  "adversary": {
+    "approved": true,
+    "summary": "issue #187の要件を完全に満たす実装。提案品質（承認率）と回収効率（マージ率・merge単価）をlabel別に集計し、回収効率降順・同値はラベル名昇順で表示。approvalRate/usdPerMergedIterationのnull処理も正確。テストが単体・e2e両面で実装を実質的に検証しており、空データ・異常系も網羅。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 388,
+  "cost": {
+    "builderUsd": 3.715344,
+    "adversaryUsd": 0.093294,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 3.808638
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
