@@ -38,6 +38,7 @@ import {
   mergedStreak,
   modelEffectiveness,
   issueLabelSuccessRates,
+  issueLabelQualityRecoveryMatrix,
   modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
@@ -3534,6 +3535,98 @@ describe('issueLabelSuccessRates', () => {
     ];
     const result = issueLabelSuccessRates(runs);
     expect(result.every((r) => r.successRate === 0)).toBe(true);
+    expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
+  });
+});
+
+describe('issueLabelQualityRecoveryMatrix', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(issueLabelQualityRecoveryMatrix([])).toEqual([]);
+  });
+
+  it('labelが空配列の反復（issue特定不能）はどのバケットにも数えない', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', issue: { number: 0, title: '?', labels: [] } })];
+    expect(issueLabelQualityRecoveryMatrix(runs)).toEqual([]);
+  });
+
+  it('label別に提案品質(承認率)と回収効率(マージ率・コスト)を分けて集計する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug'] },
+        adversary: { approved: true, summary: '' },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        issue: { number: 2, title: 'b', labels: ['bug'] },
+        adversary: { approved: false, summary: '' },
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+      }),
+    ];
+
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result).toHaveLength(1);
+    const bug = result[0];
+    expect(bug.label).toBe('bug');
+    expect(bug.count).toBe(2);
+    expect(bug.completedCount).toBe(2);
+    expect(bug.approvalRate).toBeCloseTo(0.5, 10);
+    expect(bug.mergedCount).toBe(1);
+    expect(bug.recoveryRate).toBeCloseTo(0.5, 10);
+    expect(bug.totalCostUsd).toBeCloseTo(2, 10);
+    expect(bug.usdPerMergedIteration).toBeCloseTo(2, 10);
+    expect(bug.iterations).toEqual([1, 2]);
+  });
+
+  it('verify未到達の反復しか無いlabelはapprovalRateがnull（品質を測れない）、マージも無いのでrecoveryRate=0・usdPerMergedIterationもnull（回収実績なし）で欠落しない', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['crash'] } })];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result).toHaveLength(1);
+    expect(result[0]).toMatchObject({
+      label: 'crash',
+      count: 1,
+      completedCount: 0,
+      approvalRate: null,
+      mergedCount: 0,
+      recoveryRate: 0,
+    });
+    expect(result[0].usdPerMergedIteration).toBeNull();
+  });
+
+  it('1つのissueが複数labelを持つ場合、該当する全labelのバケットに数える', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        issue: { number: 1, title: 'a', labels: ['bug', 'urgent'] },
+        adversary: { approved: true, summary: '' },
+      }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.map((r) => r.label).sort()).toEqual(['bug', 'urgent']);
+    expect(result.every((r) => r.count === 1 && r.mergedCount === 1 && r.approvalRate === 1)).toBe(true);
+  });
+
+  it('回収効率(recoveryRate)降順、同値はlabel名昇順で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'abandoned', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 3, title: 'c', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.map((r) => r.label)).toEqual(['zeta', 'alpha']);
+  });
+
+  it('全labelのrecoveryRateが0のときも降順ソートが崩れずlabel名昇順にフォールバックする', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', issue: { number: 1, title: 'a', labels: ['zeta'] } }),
+      makeRun({ iteration: 2, verdict: 'failed', issue: { number: 2, title: 'b', labels: ['alpha'] } }),
+    ];
+    const result = issueLabelQualityRecoveryMatrix(runs);
+    expect(result.every((r) => r.recoveryRate === 0)).toBe(true);
     expect(result.map((r) => r.label)).toEqual(['alpha', 'zeta']);
   });
 });
