@@ -1,0 +1,43 @@
+{
+  "id": "20260724T014428Z-141",
+  "iteration": 86,
+  "issue": {
+    "number": 141,
+    "title": "Gate Reason Severity Spectrum — Recovery Cost Analysis",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/141-gate-reason-severity-spectrum-recovery-c",
+  "startedAt": "2026-07-24T01:44:28Z",
+  "finishedAt": "2026-07-24T01:50:57Z",
+  "durationSec": 389,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Gate Reason Severity Spectrum パネルを正しく実装。verdict の2軸分析で深刻度スコアを計算し、降順で可視化。既存コードとの整合性を保ち、テスト網羅度も十分。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.201034,
+    "adversaryUsd": 0.074131,
+    "ideationUsd": 0.0,
+    "totalUsd": 1.275165
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
