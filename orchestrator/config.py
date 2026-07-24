@@ -44,6 +44,8 @@ class Config:
     #: "native" | "h5i"
     orchestrator: str = "native"
     dry_run: bool = False
+    #: full-iteration に planner/plan_reviewer フックを本配線するかどうか。既定 OFF（live loop.yml は未設定のため無効のまま）。
+    planning_enabled: bool = False
     base_branch: str = "develop"
     ready_label: str = "loop:ready"
     #: 旧経路の名残。現行ループは needs-human を発行しない（[[abandoned_label]] を使う）。
@@ -71,5 +73,6 @@ class Config:
             ideation_model=env.get("IDEATION_MODEL", "claude-haiku-4-5"),
             orchestrator=env.get("ORCHESTRATOR", "native"),
             dry_run=_flag(env, "LOOP_DRY_RUN"),
+            planning_enabled=_flag(env, "LOOP_PLANNING"),
             base_branch=env.get("BASE_BRANCH", "develop"),
         )
