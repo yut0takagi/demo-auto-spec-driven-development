@@ -1,0 +1,41 @@
+{
+  "id": "20260724T063928Z-179",
+  "iteration": 107,
+  "issue": {
+    "number": 179,
+    "title": "Builder Model別×GateReason 相関分析パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/179-builder-model-gatereason",
+  "startedAt": "2026-07-24T06:39:28Z",
+  "finishedAt": "2026-07-24T06:52:51Z",
+  "durationSec": 803,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 192,
+  "adversary": {
+    "approved": true,
+    "summary": "実装は Builder モデル別×ゲート不通過理由の相関分析（lift 指標）を正しく計算・表示し、ユニットテストと e2e テストで実データに基づき検証している。既存コードへの破壊的な変更はなく、タスク要件を満たしている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 533,
+  "cost": {
+    "builderUsd": 3.892168,
+    "adversaryUsd": 0.145338,
+    "ideationUsd": 0.0,
+    "totalUsd": 4.037506
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
