@@ -109,6 +109,7 @@ import {
   IDEATION_TO_START_STILL_WAITING_MIN_ITERATIONS,
   verdictTransitions,
   verdictTransitionSummary,
+  verdictTransitionRootCausePatterns,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
   reviseSizeSuccessPatterns,
@@ -7620,6 +7621,80 @@ describe('verdictTransitions / verdictTransitionSummary', () => {
     ];
     // 3遷移すべてcount=1で同数 → 定義順
     expect(verdictTransitionSummary(runs).map((s) => s.kind)).toEqual(['sustainedSuccess', 'recovered', 'regressed']);
+  });
+});
+
+describe('verdictTransitionRootCausePatterns', () => {
+  const verifyFailedReason = 'verify(lint/typecheck/unit/build) が失敗している';
+  const e2eFailedReason = 'e2e(Playwright) が失敗している';
+
+  it('run が1件以下なら空配列を返す（比較対象となる隣接ペアが無い）', () => {
+    expect(verdictTransitionRootCausePatterns([])).toEqual([]);
+    expect(verdictTransitionRootCausePatterns([makeRun({ iteration: 1 })])).toEqual([]);
+  });
+
+  it('regressed/repeatedFailure/shiftedFailureはtoの、recoveredはfromのgateReasons[0]を根本原因として採用し、rowはVERDICT_TRANSITION_KIND_ORDER順で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed', gateReasons: [verifyFailedReason] }), // regressed: verifyFailed
+      makeRun({ iteration: 3, verdict: 'failed', gateReasons: [verifyFailedReason] }), // repeatedFailure: verifyFailed
+      makeRun({ iteration: 4, verdict: 'abandoned', gateReasons: [e2eFailedReason] }), // shiftedFailure: e2eFailed
+      makeRun({ iteration: 5, verdict: 'merged' }), // recovered: e2eFailed(iter4の原因を乗り越えた)
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    expect(rows).toEqual([
+      { kind: 'recovered', total: 1, cells: [{ rootCause: 'e2eFailed', count: 1, pct: 100 }] },
+      { kind: 'repeatedFailure', total: 1, cells: [{ rootCause: 'verifyFailed', count: 1, pct: 100 }] },
+      { kind: 'shiftedFailure', total: 1, cells: [{ rootCause: 'e2eFailed', count: 1, pct: 100 }] },
+      { kind: 'regressed', total: 1, cells: [{ rootCause: 'verifyFailed', count: 1, pct: 100 }] },
+    ]);
+  });
+
+  it('recoveredはfromのgateReasons[0]を「何を乗り越えて回復したか」として採用する（adversary.summaryを使った分類も反映する）', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない'],
+        adversary: { approved: false, summary: 'blocking な欠陥を指摘' },
+      }),
+      makeRun({ iteration: 2, verdict: 'merged' }), // recovered: adversaryNotApproved
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    expect(rows).toEqual([
+      { kind: 'recovered', total: 1, cells: [{ rootCause: 'adversaryNotApproved', count: 1, pct: 100 }] },
+    ]);
+  });
+
+  it('sustainedSuccessはgateReasonsが常に空のため対象外（rowが生成されない）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'merged' })];
+    expect(verdictTransitionRootCausePatterns(runs)).toEqual([]);
+  });
+
+  it('paused/dry-runはgateReasonsが常に空のため、その反復が関わる遷移は根本原因を特定できず集計から除く', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'paused', gateReasons: [] }), // regressed だが gateReasons が空
+    ];
+    expect(verdictTransitionRootCausePatterns(runs)).toEqual([]);
+  });
+
+  it('同じkind内で複数の根本原因が混在する場合、count降順でcellsを並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed', gateReasons: [e2eFailedReason] }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed', gateReasons: [verifyFailedReason] }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'failed', gateReasons: [verifyFailedReason] }),
+    ];
+    const rows = verdictTransitionRootCausePatterns(runs);
+    const regressedRow = rows.find((r) => r.kind === 'regressed')!;
+    expect(regressedRow.total).toBe(3);
+    expect(regressedRow.cells).toEqual([
+      { rootCause: 'verifyFailed', count: 2, pct: expect.closeTo(66.6666, 3) },
+      { rootCause: 'e2eFailed', count: 1, pct: expect.closeTo(33.3333, 3) },
+    ]);
   });
 });
 
