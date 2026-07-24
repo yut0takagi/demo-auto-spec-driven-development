@@ -17,6 +17,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   breakerRunway,
+  mergedStreak,
   modelEffectiveness,
   modelConfidenceWeightedScores,
   builderModelSwitchComparisons,
@@ -67,6 +68,7 @@ import {
   approvedButBuilderFailedIterations,
   reviseCycleCostRecovery,
   modelPairCompatibilityDivergence,
+  builderModelGateReasonCorrelation,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -380,6 +382,42 @@ test('ブレーカ発火までのランウェイパネルが実データから�
     await expect(panel).toContainText(`対象iteration: ${runway.iterations.join(', ')}`);
   } else {
     await expect(panel).not.toContainText('対象iteration');
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('連続成功ストリークパネルが実データから導出した現在の連続数・最長記録・対象iterationを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const streak = mergedStreak(runs);
+
+  const panel = page.getByTestId('merged-streak-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-is-record', String(streak.isRecord));
+
+  // 現在の連続数・最長記録は mergedStreak()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('merged-streak-current')).toHaveText(String(streak.current));
+  await expect(page.getByTestId('merged-streak-longest')).toHaveText(String(streak.longest));
+
+  // 対象iteration注記は、それぞれ該当データが1件以上あるときだけ表示される
+  if (streak.currentIterations.length > 0) {
+    await expect(page.getByTestId('merged-streak-current-iterations')).toContainText(
+      `現在のストリーク対象iteration: ${streak.currentIterations.join(', ')}`,
+    );
+  } else {
+    await expect(page.getByTestId('merged-streak-current-iterations')).toHaveCount(0);
+  }
+  if (streak.longestIterations.length > 0) {
+    await expect(page.getByTestId('merged-streak-longest-iterations')).toContainText(
+      `最長記録の対象iteration: ${streak.longestIterations.join(', ')}`,
+    );
+  } else {
+    await expect(page.getByTestId('merged-streak-longest-iterations')).toHaveCount(0);
   }
 
   const body = await bodyTextExcludingFreeform(page);
@@ -1137,6 +1175,59 @@ test('モデル別×Issue課題型別 成功率マトリクスパネルが実デ
   const rowEls = await page.locator('[data-testid^="model-issue-label-success-row-"]').all();
   const renderedModels = await Promise.all(
     rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('model-issue-label-success-row-', '')),
+  );
+  expect(renderedModels).toEqual(rows.map((r) => r.model));
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Builderモデル別×ゲート不通過理由の相関分析パネルが実データから導出したlift値・件数を表示する', async ({ page }) => {
+  await page.goto('/model');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const rows = builderModelGateReasonCorrelation(runs);
+  expect(
+    rows.length,
+    'data/runs にgateReasonsを持つ反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('builder-model-gate-reason-correlation-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${rows.length}モデル`);
+
+  // 各モデル行が builderModelGateReasonCorrelation()（別の計算経路）と一致する
+  // 理由出現総数・カテゴリ別のlift値・件数・自/全シェアを表示していること
+  for (const row of rows) {
+    const totalEl = page.getByTestId(`builder-model-gate-reason-total-${row.model}`);
+    await expect(totalEl).toContainText(`理由出現 ${row.total}件`);
+
+    for (const cell of row.cells) {
+      const liftEl = page.getByTestId(`builder-model-gate-reason-lift-${row.model}-${cell.category}`);
+      await expect(liftEl).toContainText(`lift ${cell.lift.toFixed(2)}x`);
+      await expect(liftEl).toContainText(`${cell.count}件`);
+      await expect(liftEl).toContainText(`自${cell.withinModelSharePct.toFixed(0)}%`);
+      await expect(liftEl).toContainText(`全${cell.baselineSharePct.toFixed(0)}%`);
+    }
+
+    // セルはlift降順で描画されていること（別経路の並び順と一致するはず）
+    const cellEls = await page
+      .locator(`[data-testid^="builder-model-gate-reason-cell-${row.model}-"]`)
+      .all();
+    const renderedCategories = await Promise.all(
+      cellEls.map(async (c) =>
+        (await c.getAttribute('data-testid'))!.replace(`builder-model-gate-reason-cell-${row.model}-`, ''),
+      ),
+    );
+    expect(renderedCategories).toEqual(row.cells.map((c) => c.category));
+  }
+
+  // total降順で描画されていること
+  const rowEls = await page.locator('[data-testid^="builder-model-gate-reason-row-"]').all();
+  const renderedModels = await Promise.all(
+    rowEls.map(async (r) => (await r.getAttribute('data-testid'))!.replace('builder-model-gate-reason-row-', '')),
   );
   expect(renderedModels).toEqual(rows.map((r) => r.model));
 

@@ -34,6 +34,7 @@ import {
   reviseCycleCostRecovery,
   durationByVerdict,
   breakerRunway,
+  mergedStreak,
   modelEffectiveness,
   issueLabelSuccessRates,
   modelIssueLabelSuccessMatrix,
@@ -77,6 +78,7 @@ import {
   gateReasonUnificationPatterns,
   gateReasonRecoverySteps,
   adversaryApprovalByReasonAndModel,
+  builderModelGateReasonCorrelation,
   issueResolutionTimeTrend,
   issueResolutionTimeTrendSignal,
   ISSUE_RESOLUTION_TIME_TREND_WINDOW,
@@ -452,6 +454,136 @@ describe('breakerRunway', () => {
     // 時系列: 1(merged) -> 2(failed) -> 3(failed)。1 で途切れるので 2,3 が連続。
     expect(r.streak).toBe(2);
     expect(r.iterations).toEqual([2, 3]);
+  });
+});
+
+describe('mergedStreak', () => {
+  it('run が無ければ全てゼロ・空配列で isRecord も false', () => {
+    const s = mergedStreak([]);
+    expect(s.current).toBe(0);
+    expect(s.longest).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longestIterations).toEqual([]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('全件 merged なら current と longest が run 数と一致し、isRecord は true', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(3);
+    expect(s.longest).toBe(3);
+    expect(s.currentIterations).toEqual([1, 2, 3]);
+    expect(s.longestIterations).toEqual([1, 2, 3]);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('最新反復が merged でなければ current は 0（longest は過去の記録を保持）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('過去に最長記録があり、現在のストリークがそれより短い場合は isRecord が false', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    // 最新の連続は iteration 5,6 の2件だが、過去に3連続(1,2,3)があるためそちらが最長
+    expect(s.current).toBe(2);
+    expect(s.currentIterations).toEqual([5, 6]);
+    expect(s.longest).toBe(3);
+    expect(s.longestIterations).toEqual([1, 2, 3]);
+    expect(s.isRecord).toBe(false);
+  });
+
+  it('現在進行中のストリークが過去最長を更新中なら isRecord は true（current と longest が一致）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+      makeRun({ iteration: 6, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(3);
+    expect(s.longest).toBe(3);
+    expect(s.currentIterations).toEqual([4, 5, 6]);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('paused/abandoned/dry-run 等 merged 以外の verdict は非マージとして連続を途切れさせる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(1);
+    expect(s.currentIterations).toEqual([4]);
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+  });
+
+  it('同じ長さの最長区間が複数ある場合は最初に出現した区間を longestIterations に採用する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'merged' }),
+      makeRun({ iteration: 3, verdict: 'failed' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+      makeRun({ iteration: 5, verdict: 'merged' }),
+    ];
+    const s = mergedStreak(runs);
+    // どちらも2連続だが、最初に出現した iteration 1,2 を longest として採用する
+    expect(s.longest).toBe(2);
+    expect(s.longestIterations).toEqual([1, 2]);
+    // 現在のストリーク(4,5)は longest とタイなので記録更新中扱い
+    expect(s.current).toBe(2);
+    expect(s.isRecord).toBe(true);
+  });
+
+  it('配列順に依存せず iteration の時系列順で連続を数える', () => {
+    const runs = [
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 1, verdict: 'merged' }),
+      makeRun({ iteration: 2, verdict: 'failed' }),
+    ];
+    const s = mergedStreak(runs);
+    // 時系列: 1(merged) -> 2(failed) -> 3(merged)。2で途切れるので最新の連続は iteration 3 の1件のみ。
+    expect(s.current).toBe(1);
+    expect(s.currentIterations).toEqual([3]);
+    expect(s.longest).toBe(1);
+  });
+
+  it('全件が非 merged なら current・longest ともに 0', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'abandoned' }),
+    ];
+    const s = mergedStreak(runs);
+    expect(s.current).toBe(0);
+    expect(s.longest).toBe(0);
+    expect(s.currentIterations).toEqual([]);
+    expect(s.longestIterations).toEqual([]);
+    expect(s.isRecord).toBe(false);
   });
 });
 
@@ -1663,6 +1795,141 @@ describe('adversaryApprovalByReasonAndModel', () => {
     ];
     const row = adversaryApprovalByReasonAndModel(runs).find((r) => r.category === 'verifyFailed')!;
     expect(row.cells.map((c) => c.model)).toEqual(['claude-haiku-4-5', 'claude-sonnet-5']);
+  });
+});
+
+describe('builderModelGateReasonCorrelation', () => {
+  it('run が無い/全runのgateReasonsが空なら空配列を返す', () => {
+    expect(builderModelGateReasonCorrelation([])).toEqual([]);
+    const runs = [makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] })];
+    expect(builderModelGateReasonCorrelation(runs)).toEqual([]);
+  });
+
+  it('あるカテゴリに偏って多く出会うモデルはlift>1、逆は<1になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        models: { builder: 'claude-haiku-4-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    // 全体: verifyFailed=2, e2eFailed=2, overallTotal=4 → baseline はどちらも50%
+    // claude-sonnet-5: verifyFailed=2/3(66.7%), e2eFailed=1/3(33.3%) → lift 1.33 / 0.67
+    // claude-haiku-4-5: e2eFailed=1/1(100%) → lift 2.0
+    const rows = builderModelGateReasonCorrelation(runs);
+    expect(rows).toHaveLength(2);
+
+    const sonnet = rows.find((r) => r.model === 'claude-sonnet-5')!;
+    expect(sonnet.total).toBe(3);
+    const sonnetVerify = sonnet.cells.find((c) => c.category === 'verifyFailed')!;
+    expect(sonnetVerify.count).toBe(2);
+    expect(sonnetVerify.withinModelSharePct).toBeCloseTo((2 / 3) * 100, 5);
+    expect(sonnetVerify.baselineSharePct).toBeCloseTo(50, 5);
+    expect(sonnetVerify.lift).toBeCloseTo((2 / 3) / 0.5, 5);
+    const sonnetE2e = sonnet.cells.find((c) => c.category === 'e2eFailed')!;
+    expect(sonnetE2e.lift).toBeCloseTo((1 / 3) / 0.5, 5);
+    // 過剰発生(verify)がlift降順で先頭に来る
+    expect(sonnet.cells.map((c) => c.category)).toEqual(['verifyFailed', 'e2eFailed']);
+
+    const haiku = rows.find((r) => r.model === 'claude-haiku-4-5')!;
+    expect(haiku.total).toBe(1);
+    const haikuE2e = haiku.cells.find((c) => c.category === 'e2eFailed')!;
+    expect(haikuE2e.lift).toBeCloseTo(2, 5);
+  });
+
+  it('1件のrunに複数カテゴリのgateReasonsがあれば、そのrunのbuilderモデルがそれぞれのカテゴリへ計上される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', '変更行数 500 が上限 400 を超えている'],
+        adversary: { approved: false, summary: '' },
+        models: { builder: 'claude-opus-4-8', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const rows = builderModelGateReasonCorrelation(runs);
+    expect(rows).toHaveLength(1);
+    const row = rows[0];
+    expect(row.model).toBe('claude-opus-4-8');
+    expect(row.total).toBe(2);
+    expect(row.cells.map((c) => c.category).sort()).toEqual(['adversaryNotApproved', 'changedLinesExceeded']);
+    // 単一モデルしか無いので baseline=モデル内シェアと一致し、両カテゴリとも lift は必ず1
+    for (const cell of row.cells) {
+      expect(cell.lift).toBeCloseTo(1, 5);
+    }
+  });
+
+  it('全反復が同一モデルのときは常にlift=1になり、同数カテゴリはcount降順・さらに固定カテゴリ順で並ぶ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['verify(lint/typecheck/unit/build) が失敗している'] }),
+      makeRun({ iteration: 3, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 4, verdict: 'abandoned', gateReasons: ['変更行数 500 が上限 400 を超えている'] }),
+    ];
+    const rows = builderModelGateReasonCorrelation(runs);
+    expect(rows).toHaveLength(1);
+    for (const cell of rows[0].cells) {
+      expect(cell.lift).toBeCloseTo(1, 5);
+    }
+    // verifyFailed(count2) が先頭、e2eFailed/changedLinesExceededは同数(1)なので
+    // GATE_REASON_CATEGORY_ORDER（gates.pyの積む順）でe2eFailedが先
+    expect(rows[0].cells.map((c) => c.category)).toEqual(['verifyFailed', 'e2eFailed', 'changedLinesExceeded']);
+  });
+
+  it('gateReasonsが空(merged等)の反復は集計から除外される', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', gateReasons: [] }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    const rows = builderModelGateReasonCorrelation(runs);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].model).toBe('claude-sonnet-5');
+    expect(rows[0].total).toBe(1);
+  });
+
+  it('行はtotal降順・同数はmodel名昇順で並ぶ', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        models: { builder: 'claude-sonnet-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している'],
+        models: { builder: 'claude-haiku-4-5', adversary: 'claude-haiku-4-5', ideation: 'claude-haiku-4-5' },
+      }),
+    ];
+    expect(builderModelGateReasonCorrelation(runs).map((r) => r.model)).toEqual([
+      'claude-haiku-4-5',
+      'claude-sonnet-5',
+    ]);
   });
 });
 

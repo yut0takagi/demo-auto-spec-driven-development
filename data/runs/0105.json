@@ -1,0 +1,41 @@
+{
+  "id": "20260724T061452Z-174",
+  "iteration": 105,
+  "issue": {
+    "number": 174,
+    "title": "連続成功ストリーク：現在の merged 連続数と最大記録",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/174-merged",
+  "startedAt": "2026-07-24T06:14:52Z",
+  "finishedAt": "2026-07-24T06:25:53Z",
+  "durationSec": 661,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 191,
+  "adversary": {
+    "approved": true,
+    "summary": "変更は #174 の要件「連続成功ストリーク：現在の merged 連続数と最大記録」を正しく実装している。mergedStreak() 関数は末尾追跡と全期間走査で両メトリクスを正確に計算し、MergedStreakPanel は実データから導出した値を適切に表示する。テストは境界値（空、全成功、破断、復帰）を網羅し、実装を実質的に検証している。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 391,
+  "cost": {
+    "builderUsd": 3.672228,
+    "adversaryUsd": 0.143997,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.816225
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

@@ -107,6 +107,63 @@ export function breakerRunway(runs: RunRecord[]): BreakerRunway {
   };
 }
 
+export interface MergedStreak {
+  /** 最新 iteration から遡って merged が連続している数（breakerStreak と同じトレイリング定義）。merged 以外に当たると途切れる。 */
+  current: number;
+  /** 過去全体で最長だった連続 merged 数。現在進行中の streak が最長を更新中ならそれも含む。 */
+  longest: number;
+  /** longest を記録した区間の反復番号（古い→新しい順）。複数区間が同じ長さで並ぶ場合は最初に出現した区間を採用する。 */
+  longestIterations: number[];
+  /** current 分の反復番号（古い→新しい順） */
+  currentIterations: number[];
+  /** current が 0 より大きく、かつ longest と等しい（＝現在の連続が過去最長に並んでいる/更新中） */
+  isRecord: boolean;
+}
+
+/**
+ * 連続成功（merged）ストリーク。breakerStreak/breakerRunway が「連続非マージ」を数えて
+ * サーキットブレーカへの近さを見るのに対し、こちらは逆にループが連続でマージへ成功して
+ * いる区間を数える。current は最新 iteration から遡った連続 merged 数、longest は
+ * data/runs 全期間で最長だった連続 merged 区間（現在の streak が過去最長を更新中の場合は
+ * current と一致する）。
+ */
+export function mergedStreak(runs: RunRecord[]): MergedStreak {
+  const sorted = byIterationAsc(runs);
+
+  let longest = 0;
+  let longestStartIdx = 0;
+  let runStartIdx = 0;
+  let runLength = 0;
+
+  sorted.forEach((run, i) => {
+    if (run.verdict === 'merged') {
+      if (runLength === 0) runStartIdx = i;
+      runLength++;
+      if (runLength > longest) {
+        longest = runLength;
+        longestStartIdx = runStartIdx;
+      }
+    } else {
+      runLength = 0;
+    }
+  });
+
+  let current = 0;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    if (sorted[i].verdict !== 'merged') break;
+    current++;
+  }
+
+  return {
+    current,
+    longest,
+    longestIterations:
+      longest === 0 ? [] : sorted.slice(longestStartIdx, longestStartIdx + longest).map((r) => r.iteration),
+    currentIterations: current === 0 ? [] : sorted.slice(sorted.length - current).map((r) => r.iteration),
+    isRecord: current > 0 && current === longest,
+  };
+}
+
 export interface TrendPoint {
   iteration: number;
   value: number;
@@ -1216,6 +1273,92 @@ export function adversaryApprovalByReasonAndModel(runs: RunRecord[]): AdversaryR
       if (b.total !== a.total) return b.total - a.total;
       return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
     });
+}
+
+export interface BuilderModelGateReasonCell {
+  category: GateReasonCategory;
+  /** この model×category の組み合わせが gateReasons に出現した件数 */
+  count: number;
+  /** この model 内での、全カテゴリ出現数に占める category の割合 (0..100) */
+  withinModelSharePct: number;
+  /** 全 model 合算での、category の割合 (0..100)。model 軸を無視した基準値 */
+  baselineSharePct: number;
+  /**
+   * withinModelSharePct / baselineSharePct。1.0が「平均通り」、1より大きいほどこの model で
+   * 当該理由が全体平均より過剰発生していることを示す（逆に1未満は平均より少ない）。
+   */
+  lift: number;
+}
+
+export interface BuilderModelGateReasonRow {
+  model: string;
+  /** この model が builder だった反復で gateReasons に出現した理由の総数（1反復が複数理由を持てば重複計上） */
+  total: number;
+  /** 実際に出現した (model, category) の組み合わせだけを lift 降順で持つ */
+  cells: BuilderModelGateReasonCell[];
+}
+
+/**
+ * builder モデル × ゲート不通過理由カテゴリの相関分析。adversaryApprovalByReasonAndModel が
+ * 「理由カテゴリ→モデル別のadversary承認率」という理由起点の集計なのに対し、こちらは builder
+ * モデル起点で「そのモデルが他モデルより有意に多く/少なく引き起こす理由は何か」を lift（相対
+ * 発生率）として見せる。lift = (そのモデル内でのカテゴリ占有率) / (全モデル平均でのカテゴリ
+ * 占有率)。単純な出現件数(count)だけだとサンプル数が多いモデルの値が全カテゴリで大きくなり
+ * どのカテゴリに「偏っているか」が読み取れないため、モデル内シェアを全体シェアで正規化した
+ * 相対値にしている。gateReasonsが空の反復（merged等）は対象外。
+ * 行は total 降順（同値は model 名昇順）。各行内のセルは lift 降順（同値は count 降順、
+ * さらに同値は GATE_REASON_CATEGORY_ORDER）。
+ */
+export function builderModelGateReasonCorrelation(runs: RunRecord[]): BuilderModelGateReasonRow[] {
+  const overallCounts = new Map<GateReasonCategory, number>();
+  let overallTotal = 0;
+  const byModel = new Map<string, Map<GateReasonCategory, number>>();
+  const modelTotals = new Map<string, number>();
+
+  for (const run of byIterationAsc(runs)) {
+    if (run.gateReasons.length === 0) continue;
+    const model = run.models.builder;
+    for (const reason of run.gateReasons) {
+      const category = classifyGateReason(reason, run.adversary.summary);
+
+      overallCounts.set(category, (overallCounts.get(category) ?? 0) + 1);
+      overallTotal++;
+
+      let categories = byModel.get(model);
+      if (!categories) {
+        categories = new Map();
+        byModel.set(model, categories);
+      }
+      categories.set(category, (categories.get(category) ?? 0) + 1);
+      modelTotals.set(model, (modelTotals.get(model) ?? 0) + 1);
+    }
+  }
+
+  if (overallTotal === 0) return [];
+
+  return [...byModel.entries()]
+    .map(([model, categories]) => {
+      const total = modelTotals.get(model) ?? 0;
+      const cells: BuilderModelGateReasonCell[] = [...categories.entries()]
+        .map(([category, count]) => {
+          const withinModelSharePct = (count / total) * 100;
+          const baselineSharePct = ((overallCounts.get(category) ?? 0) / overallTotal) * 100;
+          return {
+            category,
+            count,
+            withinModelSharePct,
+            baselineSharePct,
+            lift: withinModelSharePct / baselineSharePct,
+          };
+        })
+        .sort((a, b) => {
+          if (b.lift !== a.lift) return b.lift - a.lift;
+          if (b.count !== a.count) return b.count - a.count;
+          return GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category);
+        });
+      return { model, total, cells };
+    })
+    .sort((a, b) => (b.total !== a.total ? b.total - a.total : a.model.localeCompare(b.model)));
 }
 
 export interface GateReasonBurdenPoint {
