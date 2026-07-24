@@ -1,0 +1,41 @@
+{
+  "id": "20260724T001648Z-134",
+  "iteration": 80,
+  "issue": {
+    "number": 134,
+    "title": "ゲート連続失敗の「理由の単一化」パターン認識",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/134-task",
+  "startedAt": "2026-07-24T00:16:48Z",
+  "finishedAt": "2026-07-24T00:28:13Z",
+  "durationSec": 685,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 138,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件『ゲート連続失敗の理由単一化パターン認識』を正確に実装。gateReasonConsecutiveFailureChaosの結果を末尾の根本原因連続性で3水準分類し、収束開始反復と持続反復数を記録する。テストは各分岐・出力フィールドを明示的に検証し、UIは詳細正確。既存ロジックへの影響なし、変更行数内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 388,
+  "cost": {
+    "builderUsd": 3.686201,
+    "adversaryUsd": 0.064247,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.750448
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
