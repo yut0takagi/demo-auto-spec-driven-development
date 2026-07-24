@@ -1,0 +1,41 @@
+{
+  "id": "20260724T010135Z-142",
+  "iteration": 83,
+  "issue": {
+    "number": 142,
+    "title": "Issue Label Signal Mining — Success Rate by Issue Category",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/142-issue-label-signal-mining-success-rate-b",
+  "startedAt": "2026-07-24T01:01:35Z",
+  "finishedAt": "2026-07-24T01:11:31Z",
+  "durationSec": 596,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 144,
+  "adversary": {
+    "approved": true,
+    "summary": "Issue Label Signal Mining パネルが仕様（GitHub label 別の成功率集計、複数 label の重複カウント、empty label スキップ、成功率降順ソート）を完全に満たし、単体・React・e2e テストが実装を実質的に検証している。既存機能は変更されず、行数も制限内。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 318,
+  "cost": {
+    "builderUsd": 3.386515,
+    "adversaryUsd": 0.077703,
+    "ideationUsd": 0.0,
+    "totalUsd": 3.464218
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
