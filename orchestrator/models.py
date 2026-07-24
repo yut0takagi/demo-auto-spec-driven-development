@@ -52,6 +52,7 @@ class CostBreakdown:
     builder_usd: float = 0.0
     adversary_usd: float = 0.0
     ideation_usd: float = 0.0
+    planner_usd: float = 0.0
 
     @property
     def total_usd(self) -> float:

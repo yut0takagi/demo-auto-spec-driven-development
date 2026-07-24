@@ -34,6 +34,42 @@ def _utc_now() -> str:
 
 
 def main() -> int:
+    argv = sys.argv[1:]
+    sub = argv[0] if argv else None
+    if sub is None:
+        return _run_full_iteration()
+    if sub == "plan":
+        return _run_plan_phase()
+    if sub == "build":
+        return _run_build_phase()
+    if sub == "gate":
+        return _run_gate_phase()
+    print(json.dumps({"status": "failed", "error": f"unknown subcommand: {sub}"}, ensure_ascii=False))
+    return 2
+
+
+def _run_plan_phase() -> int:
+    """PLAN ジョブのエントリ(cross-process 配線は Phase B)。"""
+    print(json.dumps({"status": "not-implemented", "phase": "plan",
+                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    return 0
+
+
+def _run_build_phase() -> int:
+    """BUILD ジョブのエントリ(cross-process 配線は Phase B)。"""
+    print(json.dumps({"status": "not-implemented", "phase": "build",
+                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    return 0
+
+
+def _run_gate_phase() -> int:
+    """GATE ジョブのエントリ(cross-process 配線は Phase B)。"""
+    print(json.dumps({"status": "not-implemented", "phase": "gate",
+                      "note": "Phase B で handoff 経由に配線する"}, ensure_ascii=False))
+    return 0
+
+
+def _run_full_iteration() -> int:
     repo_root = Path(os.environ.get("REPO_ROOT", ".")).resolve()
     data_dir = repo_root / "data"
     cfg = Config.from_env(os.environ)
