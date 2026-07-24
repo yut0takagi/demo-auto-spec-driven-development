@@ -4253,6 +4253,102 @@ export function ideationEarlyAbandonmentSignal(runs: RunRecord[]): IdeationEarly
   };
 }
 
+/** 面が同時に何件以上悪化を示すとcriticalに引き上げるか。 */
+export const IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD = 3;
+/** batchSizeVsDropRateCorrelationがこの値以上(強い正の相関)ならbatchSizeCorrelation面を悪化とみなす。 */
+export const IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD = 0.5;
+
+export type IdeationQualityDegradationLevel = 'critical' | 'watch' | 'normal';
+
+export type IdeationQualityDegradationFacetKey =
+  | 'dropStreak'
+  | 'leadTime'
+  | 'earlyAbandonment'
+  | 'batchSizeCorrelation';
+
+export interface IdeationQualityDegradationFacet {
+  key: IdeationQualityDegradationFacetKey;
+  label: string;
+  /** この面の判定に必要なデータが揃っているか */
+  available: boolean;
+  /** 品質低下の兆候を示しているか(available=falseなら常にfalse) */
+  degraded: boolean;
+}
+
+export interface IdeationQualityDegradationSignal {
+  level: IdeationQualityDegradationLevel;
+  facets: IdeationQualityDegradationFacet[];
+  /** available=trueな面のうちdegraded=trueな数 */
+  degradedCount: number;
+  /** available=trueな面の数 */
+  availableCount: number;
+  criticalThreshold: number;
+}
+
+/**
+ * Ideation提案の品質低下を、生成側(dropStreak: 提案が拾われない)・消化の遅さ
+ * (leadTime: 着手が遅れる)・消化後の早期離脱(earlyAbandonment: 着手直後に見送られる)・
+ * 構造的傾向(batchSizeCorrelation: まとめて提案するほど質が落ちる)という性質の異なる
+ * 4つの既存シグナルを「面」として束ね、何面が同時に悪化しているかで早期警戒レベルを
+ * 算出する。単一指標だけではノイズと本当の劣化を区別しにくいが、複数面が同時に悪化して
+ * いれば劣化の可能性が高いと判断できる。各面は元シグナルがデータ不足でnullを返す場合
+ * availableをfalseにし悪化判定から除外する。全ての面が判定不可能な場合のみnullを返す。
+ */
+export function ideationQualityDegradationSignal(runs: RunRecord[]): IdeationQualityDegradationSignal | null {
+  const dropSignal = ideationDropRateSignal(runs);
+  const leadTimeSignal = ideationToStartLeadTimeTrendSignal(runs);
+  const abandonmentSignal = ideationEarlyAbandonmentSignal(runs);
+  const dropCorrelation = ideationProposalQualityDropCorrelation(runs);
+
+  const facets: IdeationQualityDegradationFacet[] = [
+    {
+      key: 'dropStreak',
+      label: '提案ドロップの連続',
+      available: dropSignal !== null,
+      degraded: dropSignal?.triggered ?? false,
+    },
+    {
+      key: 'leadTime',
+      label: '着手リードタイムの悪化傾向',
+      available: leadTimeSignal !== null,
+      degraded: leadTimeSignal?.direction === 'increasing',
+    },
+    {
+      key: 'earlyAbandonment',
+      label: '早期abandonmentの悪化傾向',
+      available: abandonmentSignal !== null,
+      degraded: abandonmentSignal?.triggered ?? false,
+    },
+    {
+      key: 'batchSizeCorrelation',
+      label: '提案規模とドロップ率の相関',
+      available: dropCorrelation.batchSizeVsDropRateCorrelation !== null,
+      degraded:
+        (dropCorrelation.batchSizeVsDropRateCorrelation ?? 0) >=
+        IDEATION_QUALITY_DEGRADATION_BATCH_SIZE_CORRELATION_THRESHOLD,
+    },
+  ];
+
+  const availableFacets = facets.filter((f) => f.available);
+  if (availableFacets.length === 0) return null;
+
+  const degradedCount = availableFacets.filter((f) => f.degraded).length;
+  const level: IdeationQualityDegradationLevel =
+    degradedCount >= IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD
+      ? 'critical'
+      : degradedCount > 0
+        ? 'watch'
+        : 'normal';
+
+  return {
+    level,
+    facets,
+    degradedCount,
+    availableCount: availableFacets.length,
+    criticalThreshold: IDEATION_QUALITY_DEGRADATION_CRITICAL_THRESHOLD,
+  };
+}
+
 /**
  * 昇順ソート済み配列に対する線形補間パーセンタイル(0..100)。要素0件なら0、1件ならその値。
  * median() と別関数にしているのは、median が「常に中央2要素の平均」という単一式で

@@ -74,6 +74,7 @@ import {
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
+  ideationQualityDegradationSignal,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1503,6 +1504,46 @@ test('Ideation→着手までのリードタイム・着手成功率観測パネ
   // 回帰防止（不変量）: 未着手issueと着手済みissueは重複しない
   for (const n of summary.notStartedIssueNumbers) {
     expect(issueNumbers).not.toContain(n);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation提案品質低下の多面的早期検知パネルが実データから導出したレベル・各面の判定を表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const signal = ideationQualityDegradationSignal(runs);
+  expect(
+    signal,
+    'data/runs に ideation が1件も提案を行っておらず、パネルの「データあり」経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('ideation-quality-degradation-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toHaveAttribute('data-level', signal!.level);
+  await expect(page.getByTestId('ideation-quality-degradation-counts')).toContainText(
+    `${signal!.degradedCount}/${signal!.availableCount}`,
+  );
+
+  // 各面の available/degraded は ideationQualityDegradationSignal()（別の計算経路）と一致するはず
+  for (const facet of signal!.facets) {
+    const facetEl = page.getByTestId(`ideation-quality-degradation-facet-${facet.key}`);
+    await expect(facetEl).toHaveAttribute('data-available', String(facet.available));
+    await expect(facetEl).toHaveAttribute('data-degraded', String(facet.degraded));
+    await expect(facetEl).toContainText(!facet.available ? 'データ不足' : facet.degraded ? '悪化' : '正常');
+  }
+
+  // 回帰防止（不変量）: レベルは degradedCount としきい値の関係から一意に決まる
+  if (signal!.degradedCount >= signal!.criticalThreshold) {
+    expect(signal!.level).toBe('critical');
+  } else if (signal!.degradedCount > 0) {
+    expect(signal!.level).toBe('watch');
+  } else {
+    expect(signal!.level).toBe('normal');
   }
 
   const body = await bodyTextExcludingFreeform(page);
