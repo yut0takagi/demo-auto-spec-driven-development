@@ -3613,10 +3613,21 @@ export function recentAdversaryComments(runs: RunRecord[]): AdversaryCommentDige
 }
 
 /**
+ * costPerApprovedPrTrend が返す点数の上限。CostEfficiencyPanel は各点を
+ * flex-1 + gap-1 の棒として描画するため、run数が増えるほど棒1本あたりの
+ * 幅が縮み、run数が数十〜百件規模になると隙間(gap)の合計だけでパネル幅を
+ * 超えてしまい、末尾の棒の実描画幅が0になって非表示扱いになる
+ * （e2e『Cost効率パネル』テストが最終点の棒を検出できなくなる）。
+ * 直近 COST_PER_APPROVED_PR_TREND_LIMIT 件に絞ることで棒の最小幅を確保する。
+ */
+export const COST_PER_APPROVED_PR_TREND_LIMIT = 30;
+
+/**
  * 承認PRあたり累計コストの推移。iteration 昇順に「その時点までの累計コスト ÷
  * その時点までの累計承認PR数」を各点に持つ。承認PRが1件も出ていない区間は
  * 分母が0で無意味なため、最初の承認PRが出た iteration 以降だけ点を持つ
- * （costTrend が全run区間で点を持つのとは異なる）。
+ * （costTrend が全run区間で点を持つのとは異なる）。点数は直近
+ * COST_PER_APPROVED_PR_TREND_LIMIT 件までに絞る（理由は同定数のコメント参照）。
  */
 export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
   let cumulativeCost = 0;
@@ -3631,7 +3642,7 @@ export function costPerApprovedPrTrend(runs: RunRecord[]): TrendPoint[] {
       points.push({ iteration: r.iteration, value });
     }
   }
-  return points;
+  return points.slice(-COST_PER_APPROVED_PR_TREND_LIMIT);
 }
 
 export interface IdeationBatchQuality {
@@ -4613,6 +4624,78 @@ export function ideationToStartBottlenecks(runs: RunRecord[]): IdeationToStartBo
   }
 
   return bottlenecks.sort((a, b) => a.proposedIteration - b.proposedIteration);
+}
+
+/** execution/consumption のどちらかの間隔がもう一方の何倍以上離れたら「ズレ」と判定するか。 */
+export const IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD = 2;
+
+/** execution-ahead: 生産過多(バックログ増加方向)。consumption-ahead: 消費過多(在庫枯渇方向)。 */
+export type IdeationExecutionConsumptionGapDirection = 'execution-ahead' | 'consumption-ahead' | 'aligned';
+
+export interface IdeationExecutionConsumptionGapSignal {
+  /** Ideationが1件以上issueを提案した(実行した)反復数 */
+  executionCount: number;
+  /** いずれかの提案issueが着手された反復数（ideationToStartLeadTimesの母集団と同じ） */
+  consumptionCount: number;
+  /** 実行反復どうしの反復番号の差の平均 */
+  avgExecutionIntervalIterations: number;
+  /** 着手反復どうしの反復番号の差の平均 */
+  avgConsumptionIntervalIterations: number;
+  /** avgConsumptionIntervalIterations / avgExecutionIntervalIterations。1に近いほどペースが一致 */
+  ratio: number;
+  direction: IdeationExecutionConsumptionGapDirection;
+  /** direction が 'aligned' 以外 */
+  triggered: boolean;
+  /** 実行があった反復番号(昇順) */
+  executionIterations: number[];
+  /** 着手があった反復番号(昇順) */
+  consumptionIterations: number[];
+}
+
+function averageConsecutiveInterval(sortedValues: number[]): number {
+  const diffs: number[] = [];
+  for (let i = 1; i < sortedValues.length; i++) diffs.push(sortedValues[i] - sortedValues[i - 1]);
+  return mean(diffs);
+}
+
+/**
+ * Ideationの「実行」（提案した反復。判定は ideationProposalConsumption と同じ）間隔と、
+ * 提案issueの「消費」（ideationToStartLeadTimes と同じ着手判定）間隔を比較し、issue単位の
+ * リードタイムではなく両イベントの発生リズムのズレを検知する。いずれかが2件未満ならnull。
+ */
+export function ideationExecutionConsumptionGapSignal(runs: RunRecord[]): IdeationExecutionConsumptionGapSignal | null {
+  const sorted = byIterationAsc(runs);
+
+  const executionIterations = sorted
+    .filter((r) => r.cost.ideationUsd > 0 && r.nextIssues.length > 0)
+    .map((r) => r.iteration);
+
+  const consumptionIterations = ideationToStartLeadTimes(runs).map((p) => p.startIteration);
+
+  if (executionIterations.length < 2 || consumptionIterations.length < 2) return null;
+
+  const avgExecutionIntervalIterations = averageConsecutiveInterval(executionIterations);
+  const avgConsumptionIntervalIterations = averageConsecutiveInterval(consumptionIterations);
+  const ratio = avgConsumptionIntervalIterations / avgExecutionIntervalIterations;
+
+  const direction: IdeationExecutionConsumptionGapDirection =
+    ratio >= IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD
+      ? 'execution-ahead'
+      : ratio <= 1 / IDEATION_EXECUTION_CONSUMPTION_GAP_RATIO_THRESHOLD
+        ? 'consumption-ahead'
+        : 'aligned';
+
+  return {
+    executionCount: executionIterations.length,
+    consumptionCount: consumptionIterations.length,
+    avgExecutionIntervalIterations,
+    avgConsumptionIntervalIterations,
+    ratio,
+    direction,
+    triggered: direction !== 'aligned',
+    executionIterations,
+    consumptionIterations,
+  };
 }
 
 /**
