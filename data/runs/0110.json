@@ -1,0 +1,41 @@
+{
+  "id": "20260724T071632Z-180",
+  "iteration": 110,
+  "issue": {
+    "number": 180,
+    "title": "Ideation生成Issue の品質低下検知（着手後の早期abandonment率）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/180-ideation-issue-abandonment",
+  "startedAt": "2026-07-24T07:16:32Z",
+  "finishedAt": "2026-07-24T07:32:41Z",
+  "durationSec": 969,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 199,
+  "adversary": {
+    "approved": true,
+    "summary": "Ideation生成Issue の着手後早期abandonment率を、トレンド検知と baseline比較により正確に実装。テストは境界値・異常系を含む実質的な検証で、UI も一致を確認。タスク要件を完全に満たし、既存挙動への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 610,
+  "cost": {
+    "builderUsd": 6.245532,
+    "adversaryUsd": 0.07142,
+    "ideationUsd": 0.0,
+    "totalUsd": 6.316952
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
