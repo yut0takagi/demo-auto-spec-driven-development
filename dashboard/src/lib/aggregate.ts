@@ -1996,6 +1996,80 @@ export function modelEffectiveness(runs: RunRecord[]): ModelEffectivenessSummary
     });
 }
 
+export interface ModelConfidenceWeightedScore {
+  model: string;
+  /** この model が builder として使われた反復数（verdict に関係なく全件） */
+  count: number;
+  /** 観測されたマージ率 0..1。母数が小さいほど1件の結果で暴れる（例: 1件でmerged なら100%） */
+  rawMergeRate: number;
+  /**
+   * 信頼度加重（ベイズ平均）後のマージ率 0..1。
+   * (count * rawMergeRate + CONFIDENCE_PRIOR_WEIGHT * globalMeanMergeRate) / (count + CONFIDENCE_PRIOR_WEIGHT)
+   * で計算し、件数が少ないモデルほど全体平均（事前分布）側に引き寄せる。
+   */
+  weightedScore: number;
+  /**
+   * rawMergeRate をどれだけ信用できるかの目安 0..1。count / (count + CONFIDENCE_PRIOR_WEIGHT)。
+   * count が CONFIDENCE_PRIOR_WEIGHT と同数のとき 0.5（生の値と事前平均を五分五分で混ぜている状態）。
+   */
+  confidence: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * modelEffectiveness の rawMergeRate（マージ率の単純比率）は、反復数が少ないモデルほど
+ * 1件の結果で大きく振れる（1件しかない新モデルが merged 1件なら「マージ率100%」と表示され、
+ * 実績十分な既存モデルより優れて見えてしまう）。これを緩和するため、件数が少ないモデルの
+ * スコアを全体平均（事前分布）側にベイズ的に縮約した重み付きスコアを算出する。
+ * CONFIDENCE_PRIOR_WEIGHT は「全体平均と同じ重みを持たせる仮想サンプル数」。値が大きいほど
+ * 縮約が強くかかる。runs が空なら空配列を返す。
+ * weightedScore の降順（同値はモデル名の昇順）で、信頼して良い順に並べる。
+ */
+const CONFIDENCE_PRIOR_WEIGHT = 5;
+
+export function modelConfidenceWeightedScores(
+  runs: RunRecord[],
+  priorWeight: number = CONFIDENCE_PRIOR_WEIGHT,
+): ModelConfidenceWeightedScore[] {
+  if (runs.length === 0) return [];
+
+  const byModel = new Map<string, RunRecord[]>();
+  for (const run of byIterationAsc(runs)) {
+    const model = run.models.builder;
+    const list = byModel.get(model);
+    if (list) {
+      list.push(run);
+    } else {
+      byModel.set(model, [run]);
+    }
+  }
+
+  const globalMergedCount = runs.filter((r) => r.verdict === 'merged').length;
+  const globalMeanMergeRate = globalMergedCount / runs.length;
+
+  return [...byModel.entries()]
+    .map(([model, modelRuns]) => {
+      const count = modelRuns.length;
+      const mergedCount = modelRuns.filter((r) => r.verdict === 'merged').length;
+      const rawMergeRate = mergedCount / count;
+      const weightedScore =
+        (count * rawMergeRate + priorWeight * globalMeanMergeRate) / (count + priorWeight);
+      return {
+        model,
+        count,
+        rawMergeRate,
+        weightedScore,
+        confidence: count / (count + priorWeight),
+        iterations: modelRuns.map((r) => r.iteration),
+      };
+    })
+    .sort((a, b) => {
+      if (b.weightedScore !== a.weightedScore) return b.weightedScore - a.weightedScore;
+      return a.model.localeCompare(b.model);
+    });
+}
+
 export interface ModelEfficiencyEntry {
   model: string;
   /** この role でこの model が使われた反復数（verdict に関係なく全件） */
