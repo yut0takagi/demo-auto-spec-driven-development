@@ -24,6 +24,7 @@ import {
   ideationFailureSummary,
   ideationFailureRateTrend,
   ideationCostQualityCorrelation,
+  ideationProposalConsumption,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
   e2eFailureBuilderWorkloadSeparation,
@@ -1427,6 +1428,58 @@ test('Ideationコスト効率と生成品質の関連性パネルが実データ
   await expect(page.getByTestId(`ideation-cost-quality-row-${lastBatch.iteration}`)).toContainText(
     `$${lastBatch.costPerIssueUsd.toFixed(3)}`,
   );
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation提案と実消費の対応関係パネルが実データから導出した提案issueごとの見積り・実績を表示する', async ({ page }) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  const stats = ideationProposalConsumption(runs);
+  expect(
+    stats.proposedCount,
+    'data/runs に ideation が提案を行った issue が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+  expect(
+    stats.startedCount,
+    'data/runs に提案issueが実際に着手された反復が1件も無く、実消費の対応付け経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-proposal-consumption-panel');
+  await expect(panel).toBeVisible();
+
+  await expect(page.getByTestId('ideation-proposal-consumption-proposed-count')).toHaveText(
+    String(stats.proposedCount),
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-started-count')).toHaveText(
+    String(stats.startedCount),
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-proposed-total')).toHaveText(
+    `$${stats.proposedTotalUsd.toFixed(3)}`,
+  );
+  await expect(page.getByTestId('ideation-proposal-consumption-actual-total')).toHaveText(
+    `$${stats.actualConsumedTotalUsd.toFixed(3)}`,
+  );
+
+  const ratioEl = page.getByTestId('ideation-proposal-consumption-ratio');
+  if (stats.consumptionRatio === null) {
+    await expect(ratioEl).toHaveText('算出不可');
+  } else {
+    await expect(ratioEl).toHaveText(`${stats.consumptionRatio.toFixed(1)}倍`);
+  }
+
+  // 行数は ideationProposalConsumption()（別の計算経路）と同数のはず
+  const rows = page.locator('[data-testid^="ideation-proposal-consumption-row-"]');
+  await expect(rows).toHaveCount(stats.rows.length);
+  const startedRow = stats.rows.find((r) => r.startIteration !== null);
+  if (startedRow) {
+    await expect(page.getByTestId(`ideation-proposal-consumption-row-${startedRow.issueNumber}`)).toContainText(
+      `$${(startedRow.actualCostUsd as number).toFixed(3)}`,
+    );
+  }
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');

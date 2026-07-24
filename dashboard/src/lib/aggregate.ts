@@ -3736,6 +3736,95 @@ export function ideationCostQualityCorrelation(runs: RunRecord[]): IdeationCostQ
   };
 }
 
+export interface IdeationProposalConsumptionRow {
+  /** 提案されたissue番号 */
+  issueNumber: number;
+  /** 提案した(nextIssuesに含めた)反復番号 */
+  proposedIteration: number;
+  /** 提案時点の単価(USD) = 提案元反復の cost.ideationUsd ÷ 提案件数 */
+  proposedCostUsd: number;
+  /** 実際にissue.numberとして着手された反復番号。未着手ならnull */
+  startIteration: number | null;
+  /** 着手反復が実際に消費した総コスト(USD) = 着手反復の cost.totalUsd。未着手ならnull */
+  actualCostUsd: number | null;
+  /** 着手反復の結果。未着手ならnull */
+  verdict: Verdict | null;
+}
+
+export interface IdeationProposalConsumption {
+  /** 提案issueごとの対応行。提案された順（提案元反復のiteration昇順、同反復内はnextIssuesの記載順） */
+  rows: IdeationProposalConsumptionRow[];
+  /** ユニーク提案issue数 */
+  proposedCount: number;
+  /** 実際に着手された件数 */
+  startedCount: number;
+  /** 提案時点の単価の合計(USD)。着手有無を問わず全提案issue分を含む */
+  proposedTotalUsd: number;
+  /** 着手済みissueが実際に消費した総コスト(USD)の合計 */
+  actualConsumedTotalUsd: number;
+  /**
+   * 着手済みissueに限定した「実消費 ÷ 提案時点コスト」の倍率。1より大きいほど、提案段階の
+   * コスト単価に対して実際の生成コストが上回っていることを示す。着手0件、または着手済みissueの
+   * 提案コスト合計が0ならnull。
+   */
+  consumptionRatio: number | null;
+}
+
+/**
+ * Ideationが提案した issue と、その issue が実際に着手されたときに消費した実コストとの
+ * 1件ずつの対応関係。ideationCostQualityCorrelation が反復(batch)単位で単価と承認率/マージ率の
+ * 相関を見るのに対し、こちらは issue 単位で「見積り（提案時点の単価）」と「実績（着手反復の
+ * cost.totalUsd）」を直接突き合わせる。着手判定・自己参照の除外は ideationCostQualityCorrelation /
+ * ideationToStartLeadTimes と同じ（提案元より後のiterationでissue.numberとして現れた最初の反復）。
+ */
+export function ideationProposalConsumption(runs: RunRecord[]): IdeationProposalConsumption {
+  const sorted = byIterationAsc(runs);
+
+  const proposedBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    if (r.cost.ideationUsd <= 0 || r.nextIssues.length === 0) continue;
+    for (const issueNumber of r.nextIssues) {
+      if (!proposedBy.has(issueNumber)) proposedBy.set(issueNumber, r);
+    }
+  }
+
+  const startedBy = new Map<number, RunRecord>();
+  for (const r of sorted) {
+    const proposer = proposedBy.get(r.issue.number);
+    if (!proposer || proposer.iteration >= r.iteration) continue;
+    if (!startedBy.has(r.issue.number)) startedBy.set(r.issue.number, r);
+  }
+
+  const rows: IdeationProposalConsumptionRow[] = Array.from(proposedBy.entries()).map(([issueNumber, proposer]) => {
+    const started = startedBy.get(issueNumber) ?? null;
+    return {
+      issueNumber,
+      proposedIteration: proposer.iteration,
+      proposedCostUsd: proposer.cost.ideationUsd / proposer.nextIssues.length,
+      startIteration: started ? started.iteration : null,
+      actualCostUsd: started ? started.cost.totalUsd : null,
+      verdict: started ? started.verdict : null,
+    };
+  });
+
+  const startedRows = rows.filter((r) => r.startIteration !== null);
+  const proposedTotalUsd = rows.reduce((sum, r) => sum + r.proposedCostUsd, 0);
+  const actualConsumedTotalUsd = startedRows.reduce((sum, r) => sum + (r.actualCostUsd as number), 0);
+  const startedProposedTotalUsd = startedRows.reduce((sum, r) => sum + r.proposedCostUsd, 0);
+
+  return {
+    rows,
+    proposedCount: rows.length,
+    startedCount: startedRows.length,
+    proposedTotalUsd,
+    actualConsumedTotalUsd,
+    consumptionRatio:
+      startedRows.length === 0 || startedProposedTotalUsd === 0
+        ? null
+        : actualConsumedTotalUsd / startedProposedTotalUsd,
+  };
+}
+
 export interface IdeationToStartLeadTimePoint {
   issueNumber: number;
   /** issue を提案した(nextIssuesに含めた)反復番号 */
