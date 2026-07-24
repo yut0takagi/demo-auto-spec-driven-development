@@ -1,0 +1,41 @@
+{
+  "id": "20260724T075358Z-185",
+  "iteration": 113,
+  "issue": {
+    "number": 185,
+    "title": "ドライラン・一時停止の再開成功率トレンド",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/185-task",
+  "startedAt": "2026-07-24T07:53:58Z",
+  "finishedAt": "2026-07-24T08:22:56Z",
+  "durationSec": 1738,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 201,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク #185 で要求された「ドライラン・一時停止の再開成功率トレンド」を正確に実装。paused/dry-run反復の再実行判定、成功定義、累積成功率のトレンド化が全て要件通り。単体・E2Eテストが各経路（データなし、再開なし、複数再実行、単一点）を網羅的にカバーし、実装と正確に対応している。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 356,
+  "cost": {
+    "builderUsd": 11.131077,
+    "adversaryUsd": 0.145666,
+    "ideationUsd": 0.0,
+    "totalUsd": 11.276743
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
