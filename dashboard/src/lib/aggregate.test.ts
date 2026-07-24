@@ -156,6 +156,9 @@ import {
   costQualityElasticityTrend,
   costQualityElasticityTrendSignal,
   ELASTICITY_WINDOW,
+  ideationGenerationDecaySignal,
+  GENERATION_DECAY_WINDOW,
+  GENERATION_DECAY_STREAK_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -9627,6 +9630,87 @@ describe('backlogGenerationRateSignal', () => {
       { iteration: 3, generated: 0 },
     ]);
     expect(s!.lowRateStreak).toBe(2);
+  });
+});
+
+/** iteration 1..counts.length の run を、各反復 nextIssues 長 counts[i] で生成する。 */
+function makeGenerationRuns(counts: number[]): RunRecord[] {
+  return counts.map((n, i) =>
+    makeRun({ iteration: i + 1, nextIssues: Array.from({ length: n }, (_, j) => (i + 1) * 1000 + j) }),
+  );
+}
+
+describe('ideationGenerationDecaySignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationGenerationDecaySignal([])).toBeNull();
+  });
+
+  it(`データ点数がGENERATION_DECAY_WINDOW(${GENERATION_DECAY_WINDOW})未満なら移動平均は全てnullで、ピーク/減衰は未検出`, () => {
+    const runs = makeGenerationRuns([3, 2]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s).not.toBeNull();
+    expect(s!.points.every((p) => p.movingAverage === null)).toBe(true);
+    expect(s!.peakIteration).toBeNull();
+    expect(s!.peakMovingAverage).toBeNull();
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(0);
+    expect(s!.declineFromPeakPct).toBeNull();
+  });
+
+  it('生成本数が単調増加のみなら、ピークはデータ終端になり減衰は未検出', () => {
+    const runs = makeGenerationRuns([1, 2, 3, 4, 5, 6]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(6);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(0);
+  });
+
+  it(`山型（上昇→ピーク→${GENERATION_DECAY_STREAK_THRESHOLD}回連続下降）で減衰開始点と発報点を検出する（境界値ちょうど）`, () => {
+    // 移動平均(window=3): iter3=5, iter4=5, iter5=4.667, iter6=4, iter7=3, iter8=2
+    const runs = makeGenerationRuns([5, 5, 5, 5, 4, 3, 2, 1]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.peakMovingAverage).toBeCloseTo(5);
+    expect(s!.decayStartIteration).toBe(5);
+    expect(s!.decayConfirmedIteration).toBe(6);
+    expect(s!.triggered).toBe(true);
+    expect(s!.currentStreak).toBe(4);
+    expect(s!.declineFromPeakPct).toBeCloseTo(60);
+  });
+
+  it('ピーク後の下降がGENERATION_DECAY_STREAK_THRESHOLD-1回でデータが終端する場合は未発報（閾値未満の境界値）', () => {
+    // 移動平均: iter3=5(peak), iter4=4.667（下降1回のみでデータ終端）
+    const runs = makeGenerationRuns([5, 5, 5, 4]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(1);
+  });
+
+  it('1回だけ下降して回復する場合はストリークがリセットされ、以降の下降が閾値未満なら未発報', () => {
+    // 移動平均: iter3=5(peak), iter4=4.667(下降1,streak1), iter5=4.667(横ばいでリセット), iter6=4.333(下降1,streak1で終端)
+    const runs = makeGenerationRuns([5, 5, 5, 4, 5, 4]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(1);
+  });
+
+  it('iteration降順など入力順に依存せず、iteration昇順に整列してから集計する', () => {
+    const sorted = makeGenerationRuns([5, 5, 5, 4]);
+    const shuffled = [sorted[3], sorted[1], sorted[0], sorted[2]];
+    const s = ideationGenerationDecaySignal(shuffled);
+    expect(s!.points.map((p) => p.iteration)).toEqual([1, 2, 3, 4]);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.currentStreak).toBe(1);
   });
 });
 

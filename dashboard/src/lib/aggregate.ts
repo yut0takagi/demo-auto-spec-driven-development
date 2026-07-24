@@ -6539,6 +6539,142 @@ export function backlogGenerationRateSignal(runs: RunRecord[]): BacklogGeneratio
   };
 }
 
+/** 移動平均でノイズを均すウィンドウ幅。cycleTimeTrendSignal の CYCLE_TIME_TREND_WINDOW と同水準。 */
+export const GENERATION_DECAY_WINDOW = 3;
+
+/**
+ * ピーク以降、移動平均が何反復連続で下降したら「減衰開始」を確定するか。
+ * builderUtilizationDeclineSignal の BUILDER_UTILIZATION_DECLINE_STREAK_THRESHOLD と同じ考え方
+ * （1回程度の下降はノイズとして許容し、連続して初めて強いシグナルとして扱う）。
+ */
+export const GENERATION_DECAY_STREAK_THRESHOLD = 2;
+
+export interface IdeationGenerationDecayPoint {
+  iteration: number;
+  /** その反復が ideation で生成した issue 数（nextIssues.length）。 */
+  generated: number;
+  /** 直近 GENERATION_DECAY_WINDOW 反復の移動平均。window に満たない先頭点は null。 */
+  movingAverage: number | null;
+}
+
+export interface IdeationGenerationDecaySignal {
+  /** 全反復の生成点列（古い→新しい順、moving average 込み）。 */
+  points: IdeationGenerationDecayPoint[];
+  /** 移動平均が算出できた点の中での最大値を記録した最初のiteration。算出可能な点が無ければnull。 */
+  peakIteration: number | null;
+  /** ピーク時点の移動平均値。peakIteration が null なら null。 */
+  peakMovingAverage: number | null;
+  /** ピーク以降、連続下降が最初に始まったiteration（減衰開始点）。未検出ならnull。 */
+  decayStartIteration: number | null;
+  /** 連続下降streakが GENERATION_DECAY_STREAK_THRESHOLD に達し、減衰が確定したiteration（発報点）。未検出ならnull。 */
+  decayConfirmedIteration: number | null;
+  /** decayConfirmedIteration !== null（減衰を検出し発報）。 */
+  triggered: boolean;
+  /** ピーク以降のデータ終端時点で連続している下降streak数（発報の成否に関わらない現在値）。 */
+  currentStreak: number;
+  /** ピーク時の移動平均から、データ終端の移動平均への下落率(%)。ピークが算出できない、またはピーク移動平均が0の場合はnull。 */
+  declineFromPeakPct: number | null;
+}
+
+/**
+ * Ideation生成本数（nextIssues.length）の「減衰開始点」検出。backlogGenerationRateSignal と
+ * 同じデータ源（生成本数の時系列）を使うが、こちらは「生成が持続可能水準を割ったか」ではなく
+ * 「ピークを打った後、継続的に下降トレンドへ転じたか」を監視する。ノイズを均すため
+ * cycleTimeTrendSignal と同水準のローリング移動平均を取り、ピーク以降で移動平均が
+ * GENERATION_DECAY_STREAK_THRESHOLD 回連続して下降した最初のランを
+ * builderUtilizationDeclineSignal と同じ考え方で「減衰」として確定する
+ * （回復すればストリークをリセットし、最初に閾値へ到達したランのみを採用する）。runsが空ならnull。
+ */
+export function ideationGenerationDecaySignal(runs: RunRecord[]): IdeationGenerationDecaySignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return null;
+
+  const generatedSeries = sorted.map((run) => run.nextIssues.length);
+  const points: IdeationGenerationDecayPoint[] = sorted.map((run, i) => {
+    if (i < GENERATION_DECAY_WINDOW - 1) {
+      return { iteration: run.iteration, generated: generatedSeries[i], movingAverage: null };
+    }
+    const windowSlice = generatedSeries.slice(i - GENERATION_DECAY_WINDOW + 1, i + 1);
+    const movingAverage = windowSlice.reduce((sum, v) => sum + v, 0) / GENERATION_DECAY_WINDOW;
+    return { iteration: run.iteration, generated: generatedSeries[i], movingAverage };
+  });
+
+  let peakIndex = -1;
+  let peakMovingAverage: number | null = null;
+  for (let i = 0; i < points.length; i++) {
+    const ma = points[i].movingAverage;
+    if (ma === null) continue;
+    if (peakMovingAverage === null || ma > peakMovingAverage) {
+      peakMovingAverage = ma;
+      peakIndex = i;
+    }
+  }
+
+  if (peakIndex === -1) {
+    return {
+      points,
+      peakIteration: null,
+      peakMovingAverage: null,
+      decayStartIteration: null,
+      decayConfirmedIteration: null,
+      triggered: false,
+      currentStreak: 0,
+      declineFromPeakPct: null,
+    };
+  }
+
+  const peakIteration = points[peakIndex].iteration;
+
+  let streak = 0;
+  let runStartIteration: number | null = null;
+  let decayStartIteration: number | null = null;
+  let decayConfirmedIteration: number | null = null;
+  for (let i = peakIndex + 1; i < points.length; i++) {
+    const prevMa = points[i - 1].movingAverage as number;
+    const currMa = points[i].movingAverage as number;
+    if (currMa < prevMa) {
+      if (streak === 0) runStartIteration = points[i].iteration;
+      streak += 1;
+    } else {
+      streak = 0;
+      runStartIteration = null;
+    }
+    if (decayConfirmedIteration === null && streak >= GENERATION_DECAY_STREAK_THRESHOLD) {
+      decayStartIteration = runStartIteration;
+      decayConfirmedIteration = points[i].iteration;
+      break;
+    }
+  }
+
+  let currentStreak = 0;
+  for (let i = points.length - 1; i > peakIndex; i--) {
+    const prevMa = points[i - 1].movingAverage as number;
+    const currMa = points[i].movingAverage as number;
+    if (currMa < prevMa) {
+      currentStreak += 1;
+    } else {
+      break;
+    }
+  }
+
+  const latestMovingAverage = points[points.length - 1].movingAverage;
+  const declineFromPeakPct =
+    peakMovingAverage !== null && peakMovingAverage !== 0 && latestMovingAverage !== null
+      ? ((peakMovingAverage - latestMovingAverage) / peakMovingAverage) * 100
+      : null;
+
+  return {
+    points,
+    peakIteration,
+    peakMovingAverage,
+    decayStartIteration,
+    decayConfirmedIteration,
+    triggered: decayConfirmedIteration !== null,
+    currentStreak,
+    declineFromPeakPct,
+  };
+}
+
 /** コスト-品質弾性トレンドの比較に使う直近/直前ウィンドウの反復数。 */
 export const ELASTICITY_WINDOW = 5;
 /** 弾性(絶対値)の変化率(%)がこの値未満なら「横ばい」とする。cycleTimeTrendSignalの5%よりブレが大きいため緩めの10%。 */

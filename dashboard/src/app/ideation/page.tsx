@@ -12,6 +12,7 @@ import { IdeationConfidenceTrendPanel } from '@/components/IdeationConfidenceTre
 import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 import { BacklogFlowPanel } from '@/components/BacklogFlowPanel';
 import { BacklogGenerationRatePanel } from '@/components/BacklogGenerationRatePanel';
+import { IdeationGenerationDecayPanel } from '@/components/IdeationGenerationDecayPanel';
 import { IdeationExecutionConsumptionGapPanel } from '@/components/IdeationExecutionConsumptionGapPanel';
 
 export default function IdeationPage() {
@@ -40,6 +41,7 @@ export default function IdeationPage() {
         <BacklogLowWaterEtaPanel runs={runs} />
         <BacklogFlowPanel runs={runs} />
         <BacklogGenerationRatePanel runs={runs} />
+        <IdeationGenerationDecayPanel runs={runs} />
         <IdeationExecutionConsumptionGapPanel runs={runs} />
       </div>
     </main>
