@@ -1,0 +1,46 @@
+{
+  "id": "20260724T114159Z-213",
+  "iteration": 131,
+  "issue": {
+    "number": 213,
+    "title": "Verdict別マージまでの経路長パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/213-verdict",
+  "startedAt": "2026-07-24T11:41:59Z",
+  "finishedAt": "2026-07-24T11:56:42Z",
+  "durationSec": 883,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 234,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク #213 の要件（Verdict別マージまでの経路長パネル）を集計ロジック + UI + テストで完全実装。既存コード無傷、統計計算・ソート・UI の振る舞いを境界値を含めて実質検証。ゲート準拠。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 341,
+  "cost": {
+    "builderUsd": 4.161468,
+    "adversaryUsd": 0.079344,
+    "ideationUsd": 0.17058289999999998,
+    "plannerUsd": 0.0,
+    "totalUsd": 4.411395
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    231,
+    232,
+    233
+  ]
+}
