@@ -76,6 +76,9 @@ import {
   ISSUE_RESOLUTION_TIME_TREND_FLAT_THRESHOLD_PCT,
   pausedDryRunDetails,
   pausedDryRunSummary,
+  gatePauseClassifications,
+  gatePauseSummary,
+  GATE_PAUSE_STALE_THRESHOLD_ITERATIONS,
   adversaryOutcomeDivergence,
   adversaryModelVerdictMissMatrix,
   ideationToStartLeadTimes,
@@ -5243,6 +5246,172 @@ describe('pausedDryRunSummary', () => {
     expect(s.longestSurviving?.iteration).toBe(1);
     expect(s.longestSurviving?.issueTitle).toBe('古い');
     expect(s.longestSurviving?.survivalIterations).toBe(9);
+  });
+});
+
+describe('gatePauseClassifications', () => {
+  it('空配列は空配列を返す（境界値）', () => {
+    expect(gatePauseClassifications([])).toEqual([]);
+  });
+
+  it('paused以外（dry-run含む）を除外する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused' }),
+      makeRun({ iteration: 2, verdict: 'dry-run' }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+      makeRun({ iteration: 4, verdict: 'failed' }),
+    ];
+    expect(gatePauseClassifications(runs).map((c) => c.iteration)).toEqual([1]);
+  });
+
+  it('reviseCyclesが0ならclean-pause、1以上ならcontested-pauseに分類する（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', reviseCycles: 0 }),
+      makeRun({ iteration: 2, verdict: 'paused', reviseCycles: 1 }),
+      makeRun({ iteration: 3, verdict: 'merged' }),
+    ];
+    const classifications = gatePauseClassifications(runs);
+    expect(classifications.find((c) => c.iteration === 1)?.pattern).toBe('clean-pause');
+    expect(classifications.find((c) => c.iteration === 2)?.pattern).toBe('contested-pause');
+  });
+
+  it('同じissueが後続反復で再実行されていればreattemptedとなり、再実行反復番号を昇順で持つ', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 7, title: '止まったissue', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'merged', issue: { number: 1, title: '別issue', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'failed', issue: { number: 7, title: '止まったissue', labels: [] } }),
+      makeRun({ iteration: 8, verdict: 'merged', issue: { number: 7, title: '止まったissue', labels: [] } }),
+    ];
+    const [classification] = gatePauseClassifications(runs);
+    expect(classification.abandonmentStatus).toBe('reattempted');
+    expect(classification.reattemptedAtIterations).toEqual([5, 8]);
+  });
+
+  it(
+    `再実行が無くsurvivalIterationsがちょうど${GATE_PAUSE_STALE_THRESHOLD_ITERATIONS}ならstalled、1少なければpending（閾値の境界値）`,
+    () => {
+      const latest = GATE_PAUSE_STALE_THRESHOLD_ITERATIONS + 2;
+      const runs = [
+        // survival = latest - iteration。atThresholdはちょうど閾値、belowThresholdは閾値-1。
+        makeRun({ iteration: latest - GATE_PAUSE_STALE_THRESHOLD_ITERATIONS, verdict: 'paused' }),
+        makeRun({
+          iteration: latest - GATE_PAUSE_STALE_THRESHOLD_ITERATIONS + 1,
+          verdict: 'paused',
+          issue: { number: 2, title: 'x', labels: [] },
+        }),
+        makeRun({ iteration: latest, verdict: 'merged', issue: { number: 99, title: 'latest', labels: [] } }),
+      ];
+      const classifications = gatePauseClassifications(runs);
+      const atThreshold = classifications.find((c) => c.iteration === latest - GATE_PAUSE_STALE_THRESHOLD_ITERATIONS);
+      const belowThreshold = classifications.find(
+        (c) => c.iteration === latest - GATE_PAUSE_STALE_THRESHOLD_ITERATIONS + 1,
+      );
+      expect(atThreshold?.survivalIterations).toBe(GATE_PAUSE_STALE_THRESHOLD_ITERATIONS);
+      expect(atThreshold?.abandonmentStatus).toBe('stalled');
+      expect(belowThreshold?.survivalIterations).toBe(GATE_PAUSE_STALE_THRESHOLD_ITERATIONS - 1);
+      expect(belowThreshold?.abandonmentStatus).toBe('pending');
+    },
+  );
+
+  it('新しい反復から順に並べる', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'paused', issue: { number: 2, title: 'y', labels: [] } }),
+      makeRun({ iteration: 10, verdict: 'merged' }),
+    ];
+    expect(gatePauseClassifications(runs).map((c) => c.iteration)).toEqual([4, 1]);
+  });
+
+  it('reattemptedAtIterationsが空の場合はreattemptedにならない（再実行無しの境界値）', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'paused' })];
+    const [classification] = gatePauseClassifications(runs);
+    expect(classification.reattemptedAtIterations).toEqual([]);
+    expect(classification.abandonmentStatus).not.toBe('reattempted');
+  });
+
+  it('各フィールドを元のrunと一致する値で返す（prNumberがnullの境界値含む）', () => {
+    const runs = [
+      makeRun({
+        iteration: 3,
+        issue: { number: 9, title: '止まったissue', labels: [] },
+        verdict: 'paused',
+        prNumber: null,
+        reviseCycles: 2,
+        durationSec: 180,
+        cost: { builderUsd: 0.2, adversaryUsd: 0.03, ideationUsd: 0, totalUsd: 0.23 },
+      }),
+    ];
+    const [classification] = gatePauseClassifications(runs);
+    expect(classification).toEqual({
+      iteration: 3,
+      issueNumber: 9,
+      issueTitle: '止まったissue',
+      prNumber: null,
+      pattern: 'contested-pause',
+      reviseCycles: 2,
+      survivalIterations: 0,
+      abandonmentStatus: 'pending',
+      reattemptedAtIterations: [],
+      costUsd: 0.23,
+      durationSec: 180,
+    });
+  });
+});
+
+describe('gatePauseSummary', () => {
+  it('空配列は count 0・空配列・mostAtRisk null を返す（境界値）', () => {
+    expect(gatePauseSummary([])).toEqual({ count: 0, patterns: [], abandonment: [], mostAtRisk: null });
+  });
+
+  it('pausedが1件も無ければmerged/failedだけでもcount 0になる', () => {
+    const runs = [makeRun({ iteration: 1, verdict: 'merged' }), makeRun({ iteration: 2, verdict: 'failed' })];
+    const s = gatePauseSummary(runs);
+    expect(s.count).toBe(0);
+    expect(s.patterns).toEqual([]);
+    expect(s.abandonment).toEqual([]);
+    expect(s.mostAtRisk).toBeNull();
+  });
+
+  it('pattern別・abandonmentStatus別の件数を、該当0件を除いて集計する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', reviseCycles: 0, issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'paused', reviseCycles: 2, issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 3, verdict: 'merged', issue: { number: 2, title: 'b', labels: [] } }),
+      makeRun({ iteration: 20, verdict: 'merged', issue: { number: 99, title: 'latest', labels: [] } }),
+    ];
+    const s = gatePauseSummary(runs);
+    expect(s.count).toBe(2);
+    // iteration1: reviseCycles0→clean-pause、再実行無し・survival19→stalled
+    // iteration2: reviseCycles2→contested-pause、issue2がiteration3で再実行→reattempted
+    expect(s.patterns).toEqual([
+      { pattern: 'clean-pause', count: 1 },
+      { pattern: 'contested-pause', count: 1 },
+    ]);
+    expect(s.abandonment).toEqual([
+      { status: 'reattempted', count: 1 },
+      { status: 'stalled', count: 1 },
+    ]);
+  });
+
+  it('mostAtRiskはstalledのうちsurvivalIterationsが最大のものを返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: '最も古い', labels: [] } }),
+      makeRun({ iteration: 5, verdict: 'paused', issue: { number: 2, title: '中間', labels: [] } }),
+      makeRun({ iteration: 20, verdict: 'merged', issue: { number: 99, title: 'latest', labels: [] } }),
+    ];
+    const s = gatePauseSummary(runs);
+    expect(s.mostAtRisk?.iteration).toBe(1);
+    expect(s.mostAtRisk?.issueTitle).toBe('最も古い');
+  });
+
+  it('stalledが1件も無ければmostAtRiskはnull（reattempted/pendingのみの境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'paused', issue: { number: 1, title: 'a', labels: [] } }),
+      makeRun({ iteration: 2, verdict: 'merged', issue: { number: 1, title: 'a', labels: [] } }),
+    ];
+    const s = gatePauseSummary(runs);
+    expect(s.abandonment).toEqual([{ status: 'reattempted', count: 1 }]);
+    expect(s.mostAtRisk).toBeNull();
   });
 });
 

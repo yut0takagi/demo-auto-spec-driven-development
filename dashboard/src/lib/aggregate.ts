@@ -3409,6 +3409,144 @@ export function pausedDryRunSummary(runs: RunRecord[]): PausedDryRunSummary {
   return { count: details.length, reasons, longestSurviving };
 }
 
+/**
+ * `paused`（ゲート通過後、キルスイッチでマージ直前に止まった）反復を「どう止まったか」
+ * (pattern) と「その後どうなったか」(abandonmentStatus) の2軸で分類する。
+ * pausedDryRunSummary が paused/dry-run をまとめて「停止理由」と「生存時間」だけを見るのに
+ * 対し、こちらは paused 単体に絞り込み、gate通過からマージまでの「離脱」を検知する:
+ * 同じ issue が後続反復で再度実行されていれば、そのpausedは実質的に見捨てられ
+ * やり直された(reattempted)と判定できる。再実行が無い場合は、生存時間が
+ * GATE_PAUSE_STALE_THRESHOLD_ITERATIONS 以上なら「放置され続けている」(stalled)、
+ * 未満ならまだ判断がつかない(pending)とする。dry-run は最初からマージしない設定であり
+ * 「マージ直前で離脱した」わけではないため対象に含めない。
+ */
+export type GatePausePattern = 'clean-pause' | 'contested-pause';
+
+/**
+ * これ以上 survivalIterations が経過しても再実行されていない paused を「放置(stalled)」と
+ * みなす閾値。BREAKER_THRESHOLD/EARLY_WARNING_WINDOW と同じ3回を表示用の目安として使う。
+ */
+export const GATE_PAUSE_STALE_THRESHOLD_ITERATIONS = 3;
+
+export type GatePauseAbandonmentStatus = 'reattempted' | 'stalled' | 'pending';
+
+export interface GatePauseClassification {
+  iteration: number;
+  issueNumber: number;
+  issueTitle: string;
+  prNumber: number | null;
+  /** clean-pause: revise無しで承認され即pause / contested-pause: revise後に承認されてpause */
+  pattern: GatePausePattern;
+  reviseCycles: number;
+  /** pausedDryRunDetail.survivalIterations と同じ定義（runs全体の最新反復からの経過反復数） */
+  survivalIterations: number;
+  abandonmentStatus: GatePauseAbandonmentStatus;
+  /** abandonmentStatus が reattempted のとき、同じissueが再実行された反復番号（iteration昇順）。それ以外は空配列 */
+  reattemptedAtIterations: number[];
+  costUsd: number;
+  durationSec: number;
+}
+
+/**
+ * paused 反復ごとの分類一覧。abandonedIterationDetails/pausedDryRunDetails と同様、
+ * 新しい反復から順に並べる。survivalIterations・reattempt判定の基準となる「最新反復」は
+ * runs 全体（pausedに絞る前）から決める: pausedDryRunDetails と同じ理由で、
+ * 「他のpaused反復と比べて」ではなく「ループ全体で何反復進んだか」を測るため。
+ */
+export function gatePauseClassifications(runs: RunRecord[]): GatePauseClassification[] {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length === 0) return [];
+  const latestIteration = sorted[sorted.length - 1].iteration;
+
+  return sorted
+    .filter((r) => r.verdict === 'paused')
+    .map((r) => {
+      const survivalIterations = latestIteration - r.iteration;
+      const reattemptedAtIterations = sorted
+        .filter((other) => other.issue.number === r.issue.number && other.iteration > r.iteration)
+        .map((other) => other.iteration);
+
+      const abandonmentStatus: GatePauseAbandonmentStatus =
+        reattemptedAtIterations.length > 0
+          ? 'reattempted'
+          : survivalIterations >= GATE_PAUSE_STALE_THRESHOLD_ITERATIONS
+            ? 'stalled'
+            : 'pending';
+      const pattern: GatePausePattern = r.reviseCycles === 0 ? 'clean-pause' : 'contested-pause';
+
+      return {
+        iteration: r.iteration,
+        issueNumber: r.issue.number,
+        issueTitle: r.issue.title,
+        prNumber: r.prNumber,
+        pattern,
+        reviseCycles: r.reviseCycles,
+        survivalIterations,
+        abandonmentStatus,
+        reattemptedAtIterations,
+        costUsd: r.cost.totalUsd,
+        durationSec: r.durationSec,
+      };
+    })
+    .reverse();
+}
+
+const GATE_PAUSE_PATTERN_ORDER: readonly GatePausePattern[] = ['clean-pause', 'contested-pause'];
+const GATE_PAUSE_ABANDONMENT_STATUS_ORDER: readonly GatePauseAbandonmentStatus[] = [
+  'reattempted',
+  'stalled',
+  'pending',
+];
+
+export interface GatePausePatternCount {
+  pattern: GatePausePattern;
+  count: number;
+}
+
+export interface GatePauseAbandonmentCount {
+  status: GatePauseAbandonmentStatus;
+  count: number;
+}
+
+export interface GatePauseSummary {
+  /** paused だった反復数の合計 */
+  count: number;
+  /** pattern別の内訳。該当反復が0件のpatternはここに含めない */
+  patterns: GatePausePatternCount[];
+  /** abandonmentStatus別の内訳。該当反復が0件のstatusはここに含めない */
+  abandonment: GatePauseAbandonmentCount[];
+  /** stalled のうち survivalIterations が最大（最も離脱リスクが高い）反復。stalledが1件も無ければ null */
+  mostAtRisk: GatePauseClassification | null;
+}
+
+/**
+ * gatePauseClassifications を pattern別・abandonmentStatus別に集計し、あわせて最も
+ * 離脱リスクが高い(stalledかつ最長放置)反復を返す。pausedDryRunSummary が停止理由の
+ * 2値で分岐するのに対し、こちらは「ゲート通過後の停止のされ方」と「その後離脱したか」の
+ * 2軸で paused 単体を分析する。
+ */
+export function gatePauseSummary(runs: RunRecord[]): GatePauseSummary {
+  const classifications = gatePauseClassifications(runs);
+
+  const patterns = GATE_PAUSE_PATTERN_ORDER.map((pattern) => ({
+    pattern,
+    count: classifications.filter((c) => c.pattern === pattern).length,
+  })).filter((p) => p.count > 0);
+
+  const abandonment = GATE_PAUSE_ABANDONMENT_STATUS_ORDER.map((status) => ({
+    status,
+    count: classifications.filter((c) => c.abandonmentStatus === status).length,
+  })).filter((s) => s.count > 0);
+
+  const stalled = classifications.filter((c) => c.abandonmentStatus === 'stalled');
+  const mostAtRisk =
+    stalled.length === 0
+      ? null
+      : stalled.reduce((worst, c) => (c.survivalIterations > worst.survivalIterations ? c : worst));
+
+  return { count: classifications.length, patterns, abandonment, mostAtRisk };
+}
+
 export interface AdversaryOutcomeDivergenceSummary {
   model: string;
   /** adversary の判定対象になった件数（verify に到達した run のみ。failed はレビュー自体に未到達のため除く） */
