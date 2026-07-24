@@ -51,3 +51,14 @@ def test_propose_plan_calls_planner_model():
     assert cmd[cmd.index("--model") + 1] == "claude-sonnet-5"
     assert res.trivial is False
     assert "複数ページ化" in cmd[2]  # プロンプトにタスクが入っている
+
+
+def test_string_false_is_not_treated_as_trivial():
+    # モデルが JSON boolean でなく文字列 "false" を返しても trivial にしない（bool("false")==True 罠）。
+    res = parse_plan('```json\n{"trivial": "false", "design": "d", "tasks": [], "acceptance": []}\n```', cost=0.0)
+    assert res.trivial is False
+
+
+def test_only_real_json_true_is_trivial():
+    res = parse_plan('```json\n{"trivial": true, "design": "", "tasks": [], "acceptance": []}\n```', cost=0.0)
+    assert res.trivial is True

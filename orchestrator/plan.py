@@ -62,7 +62,7 @@ def parse_plan(text: str, *, cost: float) -> PlanResult:
             continue
         if not isinstance(data, dict):
             continue
-        trivial = bool(data.get("trivial", False))
+        trivial = data.get("trivial") is True
         plan_text = _render(
             str(data.get("design", "")),
             list(data.get("tasks", [])),
