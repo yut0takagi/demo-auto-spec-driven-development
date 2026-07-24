@@ -44,6 +44,7 @@ import {
   ideationFailureRateTrend,
   e2eFailureReviseCorrelation,
   e2eFailureDiffSizeCorrelation,
+  builderVolumeApprovalCoupling,
   cycleTimeTrend,
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
@@ -3761,6 +3762,127 @@ describe('e2eFailureDiffSizeCorrelation', () => {
     const result = e2eFailureDiffSizeCorrelation(runs);
     expect(result.delta).toBeCloseTo(-400, 10);
     expect(result.correlationCoefficient!).toBeLessThan(0);
+  });
+});
+
+describe('builderVolumeApprovalCoupling', () => {
+  it('run が0件なら null（比較対象が存在しない）', () => {
+    expect(builderVolumeApprovalCoupling([])).toBeNull();
+  });
+
+  it('verify に到達した run が1件だけなら直前ウィンドウが取れず null（境界値）', () => {
+    const runs = [makeRun({ iteration: 1, changedLines: 100 })];
+    expect(builderVolumeApprovalCoupling(runs)).toBeNull();
+  });
+
+  it('verify に到達していない failed run は母集団から除外し、残り1件だけなら null', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', verify: { unitPassed: false, e2ePassed: false, coveragePct: 0 }, changedLines: 0 }),
+      makeRun({ iteration: 2, changedLines: 100 }),
+    ];
+    expect(builderVolumeApprovalCoupling(runs)).toBeNull();
+  });
+
+  it('生成量↑・承認率↓の2件で inverse 判定、相関係数は完全な負の相関(-1)になる（境界値: window=1）', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 100, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 200, adversary: { approved: false, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.sampleSize).toBe(2);
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.recentAvgChangedLines).toBeCloseTo(200, 10);
+    expect(signal!.previousAvgChangedLines).toBeCloseTo(100, 10);
+    expect(signal!.recentApprovalRate).toBeCloseTo(0, 10);
+    expect(signal!.previousApprovalRate).toBeCloseTo(1, 10);
+    expect(signal!.volumeDeltaPct).toBeCloseTo(100, 10);
+    expect(signal!.approvalRateDelta).toBeCloseTo(-1, 10);
+    expect(signal!.direction).toBe('inverse');
+    expect(signal!.correlationCoefficient).toBeCloseTo(-1, 10);
+    expect(signal!.recentIterations).toEqual([2]);
+    expect(signal!.previousIterations).toEqual([1]);
+  });
+
+  it('生成量↑・承認率↑がともに閾値を超えて動くと direct 判定になる', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 100, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 300, adversary: { approved: true, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.volumeDeltaPct).toBeCloseTo(200, 10);
+    expect(signal!.approvalRateDelta).toBeCloseTo(1, 10);
+    expect(signal!.direction).toBe('direct');
+  });
+
+  it('生成量の変化率が閾値(5%)未満だと承認率が大きく動いても flat 判定になる（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 100, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 104, adversary: { approved: true, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.volumeDeltaPct).toBeCloseTo(4, 10);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('直前ウィンドウの平均変更行数が0だと変化率はnullになり flat 扱いになる（0除算回避、境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 0, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 50, adversary: { approved: false, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.volumeDeltaPct).toBeNull();
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('承認率の変化が閾値(0.05)未満だと生成量が大きく動いても flat 判定になる（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 100, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 100, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 3, changedLines: 100, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 4, changedLines: 500, adversary: { approved: false, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.windowSize).toBe(2);
+    expect(signal!.partial).toBe(true);
+    expect(signal!.previousApprovalRate).toBeCloseTo(0.5, 10);
+    expect(signal!.recentApprovalRate).toBeCloseTo(0.5, 10);
+    expect(signal!.approvalRateDelta).toBeCloseTo(0, 10);
+    expect(signal!.volumeDeltaPct).toBeCloseTo(200, 10);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('6件・window=3で生成量3倍/承認率0への低下という明確な逆連動を検出し、r=-1/√2を算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 100, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 100, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 3, changedLines: 100, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 4, changedLines: 300, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 5, changedLines: 300, adversary: { approved: false, summary: '' } }),
+      makeRun({ iteration: 6, changedLines: 300, adversary: { approved: false, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.sampleSize).toBe(6);
+    expect(signal!.windowSize).toBe(3);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgChangedLines).toBeCloseTo(100, 10);
+    expect(signal!.recentAvgChangedLines).toBeCloseTo(300, 10);
+    expect(signal!.previousApprovalRate).toBeCloseTo(2 / 3, 10);
+    expect(signal!.recentApprovalRate).toBeCloseTo(0, 10);
+    expect(signal!.direction).toBe('inverse');
+    expect(signal!.correlationCoefficient).toBeCloseTo(-1 / Math.sqrt(2), 10);
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('changedLinesが全run同値（分散0）だと相関係数はnull（境界値）', () => {
+    const runs = [
+      makeRun({ iteration: 1, changedLines: 42, adversary: { approved: true, summary: '' } }),
+      makeRun({ iteration: 2, changedLines: 42, adversary: { approved: false, summary: '' } }),
+    ];
+    const signal = builderVolumeApprovalCoupling(runs);
+    expect(signal!.correlationCoefficient).toBeNull();
   });
 });
 

@@ -56,6 +56,7 @@ import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratifica
 import { IdeationFailurePanel } from '@/components/IdeationFailurePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
+import { BuilderVolumeApprovalCouplingPanel } from '@/components/BuilderVolumeApprovalCouplingPanel';
 import { CycleTimeTrendPanel } from '@/components/CycleTimeTrendPanel';
 import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
@@ -148,6 +149,7 @@ export default function Home() {
         <VerdictTransitionPanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
+        <BuilderVolumeApprovalCouplingPanel runs={runs} />
         <ModelEffectivenessPanel runs={runs} />
         <ModelConfidenceWeightedScorePanel runs={runs} />
         <ModelEfficiencyPanel runs={runs} />
