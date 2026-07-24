@@ -1,0 +1,44 @@
+{
+  "id": "20260724T113556Z-212",
+  "iteration": 130,
+  "issue": {
+    "number": 212,
+    "title": "Backlog生成レート監視パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/212-backlog",
+  "startedAt": "2026-07-24T11:35:56Z",
+  "finishedAt": "2026-07-24T11:41:57Z",
+  "durationSec": 361,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "バックログ生成レート監視パネルが完全に実装され、直近5反復と全体平均の独立表示、生成不足3連続の発報ロジック、3段階のステータス表示が要件通り。ユニット・コンポーネント・e2e テストが実装を実質的に検証し、既存機能を破壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.028713,
+    "adversaryUsd": 0.070081,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 1.098794
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
