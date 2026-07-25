@@ -1,0 +1,44 @@
+{
+  "id": "20260725T064008Z-255",
+  "iteration": 190,
+  "issue": {
+    "number": 255,
+    "title": "Gate Reason 無発生の「快適性」トレンドパネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/255-gate-reason",
+  "startedAt": "2026-07-25T06:40:08Z",
+  "finishedAt": "2026-07-25T06:47:46Z",
+  "durationSec": 458,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を完全に満たし、テストで実装の正確性を検証。既存機能への影響なし。400行制限内・保護パス変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 1.08122,
+    "adversaryUsd": 0.110202,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.28649270000000004,
+    "totalUsd": 1.477915
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
