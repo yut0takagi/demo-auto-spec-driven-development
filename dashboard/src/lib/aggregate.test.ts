@@ -77,6 +77,7 @@ import {
   ADVERSARY_COMMENT_TREND_WINDOW,
   ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT,
   adversaryApprovalCommentStats,
+  reviseCountAdversaryComparison,
   recentAdversaryComments,
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
@@ -6421,6 +6422,57 @@ describe('adversaryApprovalCommentStats', () => {
       rejectedMedianLength: 0,
       delta: 0,
     });
+  });
+});
+
+describe('reviseCountAdversaryComparison', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseCountAdversaryComparison([])).toEqual([]);
+  });
+
+  it('全runがfailedのとき空配列を返す（reachedVerifyで除外されるため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 1, adversary: { approved: false, summary: 'レビューに到達しなかった。' } }),
+      makeRun({ iteration: 2, verdict: 'failed', reviseCycles: 2, adversary: { approved: false, summary: 'レビューに到達しなかった。' } }),
+    ];
+    expect(reviseCountAdversaryComparison(runs)).toEqual([]);
+  });
+
+  it('単一bucketに承認/却下混在runが集まったときapprovalRate/meanSummaryLength/medianSummaryLengthを正しく算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 1, adversary: { approved: false, summary: 'x'.repeat(60) } }),
+    ];
+    const [bucket1] = reviseCountAdversaryComparison(runs);
+    expect(bucket1.bucket).toBe('1');
+    expect(bucket1.count).toBe(3);
+    expect(bucket1.approvedCount).toBe(2);
+    expect(bucket1.approvalRate).toBeCloseTo(2 / 3, 10);
+    expect(bucket1.meanSummaryLength).toBeCloseTo(30, 10);
+    expect(bucket1.medianSummaryLength).toBeCloseTo(20, 10);
+    expect(bucket1.iterations).toEqual([1, 2, 3]);
+  });
+
+  it('データに出現しない区分（3+など）は結果に含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'ok' } }),
+    ];
+    const result = reviseCountAdversaryComparison(runs);
+    expect(result.map((b) => b.bucket)).toEqual(['0', '1']);
+    expect(result.some((b) => b.bucket === '3+')).toBe(false);
+  });
+
+  it('出現した区分は入力順に関係なく 0→1→2→3+ の順で返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 2, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'ok' } }),
+    ];
+    const result = reviseCountAdversaryComparison(runs);
+    expect(result.map((b) => b.bucket)).toEqual(['0', '1', '2', '3+']);
   });
 });
 
