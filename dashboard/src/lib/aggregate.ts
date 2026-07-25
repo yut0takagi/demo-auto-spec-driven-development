@@ -7050,6 +7050,116 @@ export function costQualityElasticityTrendSignal(runs: RunRecord[]): CostQuality
   };
 }
 
+/** revise単価トレンドの比較に使う直近/直前ウィンドウの反復数。costQualityElasticityTrendと同じスライド窓方式だが窓幅は3。 */
+export const RETRY_COST_EFFICIENCY_WINDOW = 3;
+/** costPerCycleChangePct(%)の変化がこの値未満なら「横ばい」とする。ELASTICITY_TREND_FLAT_THRESHOLD_PCTと同じ緩めの閾値。 */
+export const RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT = 10;
+
+/** recentQualityPct/previousQualityPctは0..100（verify.coveragePct平均）。costPerReviseCycleUsd系は該当反復が窓内に無ければnull。 */
+export interface RetryCostEfficiencyPoint {
+  iteration: number;
+  recentQualityPct: number;
+  previousQualityPct: number;
+  recentCostPerReviseCycleUsd: number | null;
+  previousCostPerReviseCycleUsd: number | null;
+  /** 直前→直近の変化率(%)。previousがnull/0ならnull */
+  costPerCycleChangePct: number | null;
+  /** recentQualityPct / recentCostPerReviseCycleUsd。コストがnull/0ならnull */
+  efficiency: number | null;
+  qualityDeclining: boolean;
+}
+
+/** groupのうちreviseCycles>0の反復のcost.totalUsd合計 ÷ reviseCycles合計（revise 1回あたり単価）。該当反復が無ければnull。 */
+function costPerReviseCycleUsd(group: RunRecord[]): number | null {
+  const withRevise = group.filter((r) => r.reviseCycles > 0);
+  if (withRevise.length === 0) return null;
+  const totalCostUsd = withRevise.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+  const totalCycles = withRevise.reduce((sum, r) => sum + r.reviseCycles, 0);
+  return totalCycles === 0 ? null : totalCostUsd / totalCycles;
+}
+
+/**
+ * revise 1回あたりの実コスト（reviseCycles>0の反復に限定したcost.totalUsd合計 ÷ reviseCycles合計）と
+ * 品質(verify.coveragePct平均)のスライド窓トレンド。costQualityElasticityTrendが承認率×総コストの
+ * 弾性を見るのに対し、こちらは品質シグナルにcoveragePctを使い、コスト側はrevise 1回あたり単価に
+ * 絞り込んだうえで「品質が下がっている局面で単価がどう推移しているか」を時系列比較する。
+ * RETRY_COST_EFFICIENCY_WINDOW幅の「直前→直近」ウィンドウを1反復ずつスライドさせて点列を返す。
+ * 完了反復数がRETRY_COST_EFFICIENCY_WINDOWの2倍未満なら空配列。
+ */
+export function retryCostEfficiencyTrend(runs: RunRecord[]): RetryCostEfficiencyPoint[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const w = RETRY_COST_EFFICIENCY_WINDOW;
+  if (completed.length < w * 2) return [];
+  const points: RetryCostEfficiencyPoint[] = [];
+  for (let i = w * 2 - 1; i < completed.length; i++) {
+    const recent = completed.slice(i - w + 1, i + 1);
+    const previous = completed.slice(i - w * 2 + 1, i - w + 1);
+    const recentQualityPct = mean(recent.map((r) => r.verify.coveragePct));
+    const previousQualityPct = mean(previous.map((r) => r.verify.coveragePct));
+    const recentCostPerReviseCycleUsd = costPerReviseCycleUsd(recent);
+    const previousCostPerReviseCycleUsd = costPerReviseCycleUsd(previous);
+    const costPerCycleChangePct =
+      previousCostPerReviseCycleUsd === null ||
+      previousCostPerReviseCycleUsd === 0 ||
+      recentCostPerReviseCycleUsd === null
+        ? null
+        : ((recentCostPerReviseCycleUsd - previousCostPerReviseCycleUsd) / previousCostPerReviseCycleUsd) * 100;
+    const efficiency =
+      recentCostPerReviseCycleUsd === null || recentCostPerReviseCycleUsd === 0
+        ? null
+        : recentQualityPct / recentCostPerReviseCycleUsd;
+    points.push({
+      iteration: completed[i].iteration,
+      recentQualityPct,
+      previousQualityPct,
+      recentCostPerReviseCycleUsd,
+      previousCostPerReviseCycleUsd,
+      costPerCycleChangePct,
+      efficiency,
+      qualityDeclining: recentQualityPct < previousQualityPct,
+    });
+  }
+  return points;
+}
+
+/** worsening: 品質低下局面でrevise単価が上昇。improving: 品質改善局面で単価が低下。flat: それ以外・判定不能。 */
+export type RetryCostEfficiencyDirection = 'worsening' | 'improving' | 'flat';
+export interface RetryCostEfficiencyTrendSignal {
+  latestIteration: number;
+  latestCostPerCycleChangePct: number | null;
+  qualityDeclining: boolean;
+  direction: RetryCostEfficiencyDirection;
+}
+
+function retryCostEfficiencyDirection(point: RetryCostEfficiencyPoint): RetryCostEfficiencyDirection {
+  if (point.costPerCycleChangePct === null) return 'flat';
+  if (point.qualityDeclining && point.costPerCycleChangePct > RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT) {
+    return 'worsening';
+  }
+  const qualityImproving = point.recentQualityPct > point.previousQualityPct;
+  if (qualityImproving && point.costPerCycleChangePct < -RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT) {
+    return 'improving';
+  }
+  return 'flat';
+}
+
+/**
+ * retryCostEfficiencyTrend の最新点が「品質低下+単価上昇」「品質改善+単価低下」のどちらかに
+ * 該当するかを判定する。costPerCycleChangePctの変化率(絶対値)がRETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT
+ * 未満、またはいずれの条件にも合致しない場合はflat。trendが空配列ならnull。
+ */
+export function retryCostEfficiencyTrendSignal(runs: RunRecord[]): RetryCostEfficiencyTrendSignal | null {
+  const points = retryCostEfficiencyTrend(runs);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  return {
+    latestIteration: latest.iteration,
+    latestCostPerCycleChangePct: latest.costPerCycleChangePct,
+    qualityDeclining: latest.qualityDeclining,
+    direction: retryCostEfficiencyDirection(latest),
+  };
+}
+
 export type VerdictJumpKind = 'spikeFailure' | 'spikeSuccess';
 
 /** ジャンプ判定に使う前後の窓幅（反復件数）。 */

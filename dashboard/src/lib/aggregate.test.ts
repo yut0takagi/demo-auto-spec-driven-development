@@ -169,6 +169,9 @@ import {
   ideationGenerationDecaySignal,
   GENERATION_DECAY_WINDOW,
   GENERATION_DECAY_STREAK_THRESHOLD,
+  retryCostEfficiencyTrend,
+  retryCostEfficiencyTrendSignal,
+  RETRY_COST_EFFICIENCY_WINDOW,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -10286,5 +10289,102 @@ describe('costQualityElasticityTrendSignal', () => {
     const runs = makeElasticityRuns(costs, approved);
     expect(costQualityElasticityTrend(runs).at(-1)!.elasticity).toBeNull();
     expect(costQualityElasticityTrendSignal(runs)).toBeNull();
+  });
+});
+
+/** iteration 1..coverages.length の完了(reachedVerify)runを、coveragePct・reviseCycles・cost(USD)から生成する。 */
+function makeRetryCostRuns(coverages: number[], reviseCycles: number[], costs: number[]): RunRecord[] {
+  return coverages.map((coveragePct, i) =>
+    makeRun({
+      iteration: i + 1,
+      verify: { unitPassed: true, e2ePassed: true, coveragePct },
+      reviseCycles: reviseCycles[i],
+      cost: { builderUsd: costs[i], adversaryUsd: 0, ideationUsd: 0, totalUsd: costs[i] },
+    }),
+  );
+}
+
+describe('retryCostEfficiencyTrend', () => {
+  it('runsが空なら空配列、ウィンドウ2倍未満(境界値)も空配列', () => {
+    expect(retryCostEfficiencyTrend([])).toEqual([]);
+    const short = Array(RETRY_COST_EFFICIENCY_WINDOW * 2 - 1).fill(80);
+    expect(
+      retryCostEfficiencyTrend(makeRetryCostRuns(short, short.map(() => 1), short.map(() => 1))),
+    ).toEqual([]);
+  });
+
+  it('ちょうどRETRY_COST_EFFICIENCY_WINDOWの2倍件数だと点が1件だけ、期待通りの単価・効率になる（境界値）', () => {
+    const coverages = [90, 90, 90, 90, 90, 90];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const points = retryCostEfficiencyTrend(makeRetryCostRuns(coverages, cycles, costs));
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(6);
+    expect(points[0].previousCostPerReviseCycleUsd).toBeCloseTo(1, 10);
+    expect(points[0].recentCostPerReviseCycleUsd).toBeCloseTo(2, 10);
+    expect(points[0].costPerCycleChangePct).toBeCloseTo(100, 10);
+    expect(points[0].recentQualityPct).toBeCloseTo(90, 10);
+    expect(points[0].previousQualityPct).toBeCloseTo(90, 10);
+    expect(points[0].qualityDeclining).toBe(false);
+    expect(points[0].efficiency).toBeCloseTo(45, 10);
+  });
+
+  it('窓内にreviseCycles>0の反復が1件も無い場合、costPerReviseCycleUsd/efficiencyはnull（0除算にならない）', () => {
+    const coverages = [80, 80, 80, 60, 60, 60];
+    const cycles = [0, 0, 0, 0, 0, 0];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const points = retryCostEfficiencyTrend(makeRetryCostRuns(coverages, cycles, costs));
+    expect(points).toHaveLength(1);
+    expect(points[0].previousCostPerReviseCycleUsd).toBeNull();
+    expect(points[0].recentCostPerReviseCycleUsd).toBeNull();
+    expect(points[0].costPerCycleChangePct).toBeNull();
+    expect(points[0].efficiency).toBeNull();
+    expect(points[0].qualityDeclining).toBe(true);
+  });
+});
+
+describe('retryCostEfficiencyTrendSignal', () => {
+  it('runsが空、またはウィンドウ2倍未満(境界値)ならnull', () => {
+    expect(retryCostEfficiencyTrendSignal([])).toBeNull();
+    const short = Array(RETRY_COST_EFFICIENCY_WINDOW * 2 - 1).fill(80);
+    expect(
+      retryCostEfficiencyTrendSignal(makeRetryCostRuns(short, short.map(() => 1), short.map(() => 1))),
+    ).toBeNull();
+  });
+
+  it('品質悪化(直近<直前)かつrevise単価が閾値を超えて上昇していると worsening', () => {
+    const coverages = [90, 90, 90, 50, 50, 50];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [1, 1, 1, 4, 4, 4]; // per-cycle 1 → 4 (+300%)
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.latestCostPerCycleChangePct).toBeCloseTo(300, 10);
+    expect(signal!.qualityDeclining).toBe(true);
+    expect(signal!.direction).toBe('worsening');
+  });
+
+  it('品質改善(直近>直前)かつrevise単価が閾値を超えて下落していると improving', () => {
+    const coverages = [50, 50, 50, 90, 90, 90];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [4, 4, 4, 1, 1, 1]; // per-cycle 4 → 1 (-75%)
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestCostPerCycleChangePct).toBeCloseTo(-75, 10);
+    expect(signal!.qualityDeclining).toBe(false);
+    expect(signal!.direction).toBe('improving');
+  });
+
+  it('前ウィンドウにrevise発生反復が無くcostPerCycleChangePctがnullなら flat', () => {
+    const coverages = [80, 80, 80, 60, 60, 60];
+    const cycles = [0, 0, 0, 0, 0, 0];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestCostPerCycleChangePct).toBeNull();
+    expect(signal!.direction).toBe('flat');
   });
 });
