@@ -1551,6 +1551,75 @@ export function gateReasonTrendSignal(runs: RunRecord[]): GateReasonTrendSignal 
   };
 }
 
+/** gateReasons無発生（快適）トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。gateReasonTrendSignal等と揃えている。 */
+export const GATE_REASON_COMFORT_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウのcomfort率（gateReasonsが空だった反復の割合）が直前ウィンドウより
+ * この値（比率、0.1=10pt）以上変化して初めて「改善」「悪化」と判定する。
+ */
+export const GATE_REASON_COMFORT_TREND_FLAT_THRESHOLD = 0.1;
+
+/** improving: 直近の方がcomfort率が高い（快適な反復が増えた）。worsening: 直近の方が低い（悪化）。 */
+export type GateReasonComfortTrendDirection = 'improving' | 'worsening' | 'flat';
+
+export interface GateReasonComfortTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は GATE_REASON_COMFORT_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が GATE_REASON_COMFORT_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  /** 直近ウィンドウでgateReasonsが空だった run の割合（0〜1） */
+  recentComfortRatio: number;
+  /** 直前ウィンドウでgateReasonsが空だった run の割合（0〜1） */
+  previousComfortRatio: number;
+  /** recentComfortRatio - previousComfortRatio。正なら改善（快適な反復が増えている） */
+  delta: number;
+  direction: GateReasonComfortTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function gateReasonComfortDirection(delta: number): GateReasonComfortTrendDirection {
+  if (Math.abs(delta) < GATE_REASON_COMFORT_TREND_FLAT_THRESHOLD) return 'flat';
+  return delta > 0 ? 'improving' : 'worsening';
+}
+
+function comfortRatio(runs: RunRecord[]): number {
+  return mean(runs.map((r) => (r.gateReasons.length === 0 ? 1 : 0)));
+}
+
+/**
+ * gateReasons無発生（＝ゲート不通過理由が一件も起きなかった＝快適）だった反復の比率を
+ * 直近window/直前windowのローリング窓で比較するトレンド観測。gateReasonTrendSignalが
+ * gateReasonsを持つ run のみを対象にカテゴリ別の出現件数の悪化/改善を見るのに対し、
+ * こちらは全run（merged/paused/dry-run含む）を母集団に「何も起きなかった」比率を追う。
+ * 比較対象となる「直前」ウィンドウが取れない（対象点が1件以下）場合は null。
+ */
+export function gateReasonComfortTrendSignal(runs: RunRecord[]): GateReasonComfortTrendSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length < 2) return null;
+
+  const windowSize = Math.min(GATE_REASON_COMFORT_TREND_WINDOW, Math.floor(sorted.length / 2));
+  const recent = sorted.slice(sorted.length - windowSize);
+  const previous = sorted.slice(sorted.length - windowSize * 2, sorted.length - windowSize);
+
+  const recentComfortRatio = comfortRatio(recent);
+  const previousComfortRatio = comfortRatio(previous);
+  const delta = recentComfortRatio - previousComfortRatio;
+
+  return {
+    windowSize,
+    partial: windowSize < GATE_REASON_COMFORT_TREND_WINDOW,
+    recentComfortRatio,
+    previousComfortRatio,
+    delta,
+    direction: gateReasonComfortDirection(delta),
+    recentIterations: recent.map((r) => r.iteration),
+    previousIterations: previous.map((r) => r.iteration),
+  };
+}
+
 export interface GateReasonChain {
   iteration: number;
   issueNumber: number;

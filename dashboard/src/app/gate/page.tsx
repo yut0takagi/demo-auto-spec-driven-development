@@ -5,6 +5,7 @@ import { GateReasonBurdenChart } from '@/components/GateReasonBurdenChart';
 import { GateReasonCostPanel } from '@/components/GateReasonCostPanel';
 import { GateReasonSeveritySpectrumPanel } from '@/components/GateReasonSeveritySpectrumPanel';
 import { GateReasonTrendPanel } from '@/components/GateReasonTrendPanel';
+import { GateReasonComfortTrendPanel } from '@/components/GateReasonComfortTrendPanel';
 import { GateReasonChainPanel } from '@/components/GateReasonChainPanel';
 import { GateReasonCooccurrenceClusterPanel } from '@/components/GateReasonCooccurrenceClusterPanel';
 import { GateReasonConsecutiveFailureChaosPanel } from '@/components/GateReasonConsecutiveFailureChaosPanel';
@@ -39,6 +40,7 @@ export default function GatePage() {
         <GateReasonCostPanel runs={runs} />
         <GateReasonSeveritySpectrumPanel runs={runs} />
         <GateReasonTrendPanel runs={runs} />
+        <GateReasonComfortTrendPanel runs={runs} />
         <GateReasonChainPanel runs={runs} />
         <GateReasonCooccurrenceClusterPanel runs={runs} />
         <GateReasonConsecutiveFailureChaosPanel runs={runs} />
