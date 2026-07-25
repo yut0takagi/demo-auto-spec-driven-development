@@ -172,6 +172,11 @@ import {
   retryCostEfficiencyTrend,
   retryCostEfficiencyTrendSignal,
   RETRY_COST_EFFICIENCY_WINDOW,
+  builderModelGateReasonCorrelationTrend,
+  builderModelGateReasonCorrelationTrendSignal,
+  BUILDER_MODEL_GATE_REASON_TREND_WINDOW,
+  BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT,
+  BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -10385,6 +10390,120 @@ describe('retryCostEfficiencyTrendSignal', () => {
     const signal = retryCostEfficiencyTrendSignal(runs);
     expect(signal).not.toBeNull();
     expect(signal!.latestCostPerCycleChangePct).toBeNull();
+    expect(signal!.direction).toBe('flat');
+  });
+});
+
+const GATE_TREND_VERIFY_REASON = 'verify(lint/typecheck/unit/build) が失敗している';
+const GATE_TREND_E2E_REASON = 'e2e(Playwright) が失敗している';
+const GATE_TREND_SONNET = 'claude-sonnet-5';
+const GATE_TREND_HAIKU = 'claude-haiku-4-5';
+
+/** iteration=start..start+count-1 の反復を同一builder/reasonで生成する。 */
+function makeGateTrendRuns(start: number, count: number, builder: string, reason: string): RunRecord[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeRun({
+      iteration: start + i,
+      verdict: 'abandoned',
+      gateReasons: [reason],
+      models: { builder, adversary: GATE_TREND_HAIKU, ideation: GATE_TREND_HAIKU },
+    }),
+  );
+}
+
+describe('builderModelGateReasonCorrelationTrend', () => {
+  it('runsが空、またはgateReasons付き反復が窓幅未満(境界値)なら空配列', () => {
+    expect(builderModelGateReasonCorrelationTrend([])).toEqual([]);
+    const short = makeGateTrendRuns(1, BUILDER_MODEL_GATE_REASON_TREND_WINDOW - 1, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON);
+    expect(builderModelGateReasonCorrelationTrend(short)).toEqual([]);
+  });
+
+  it('出現件数が最小閾値未満のセルはliftが最大でも最大lift候補から除外される', () => {
+    // haiku/e2eFailed(count=1,lift=5)は窓内最大だがMIN_COUNT(2)未満で除外され、sonnet/verifyFailed(count=4,lift=1.25)が選ばれる
+    const runs = [
+      ...makeGateTrendRuns(1, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+      ...makeGateTrendRuns(2, 4, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    ];
+    const points = builderModelGateReasonCorrelationTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(5);
+    expect(points[0].model).toBe(GATE_TREND_SONNET);
+    expect(points[0].category).toBe('verifyFailed');
+    expect(points[0].maxLift).toBeCloseTo(1.25, 10);
+    expect(points[0].count).toBe(4);
+    expect(points[0].count).toBeGreaterThanOrEqual(BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT);
+  });
+
+  it('modelとreasonの支配権が窓のスライドとともに入れ替わる', () => {
+    const runs = [
+      ...makeGateTrendRuns(1, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+      ...makeGateTrendRuns(6, 5, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+    ];
+    const points = builderModelGateReasonCorrelationTrend(runs);
+    const expected = [
+      { iteration: 5, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 1, count: 5 },
+      { iteration: 6, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 1.25, count: 4 },
+      { iteration: 7, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 2.5, count: 2 },
+      { iteration: 8, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 2.5, count: 2 },
+      { iteration: 9, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 1.25, count: 4 },
+      { iteration: 10, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 1, count: 5 },
+    ];
+    expect(points).toHaveLength(expected.length);
+    points.forEach((p, idx) => {
+      expect(p.iteration).toBe(expected[idx].iteration);
+      expect(p.model).toBe(expected[idx].model);
+      expect(p.category).toBe(expected[idx].category);
+      expect(p.maxLift).toBeCloseTo(expected[idx].maxLift, 10);
+      expect(p.count).toBe(expected[idx].count);
+    });
+  });
+});
+
+describe('builderModelGateReasonCorrelationTrendSignal', () => {
+  it('runsが空、またはtrendの点が1件のみ(過去点が無い)ならnull', () => {
+    expect(builderModelGateReasonCorrelationTrendSignal([])).toBeNull();
+    const oneWindow = makeGateTrendRuns(1, BUILDER_MODEL_GATE_REASON_TREND_WINDOW, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON);
+    expect(builderModelGateReasonCorrelationTrendSignal(oneWindow)).toBeNull();
+  });
+
+  it('直近maxLiftが過去平均よりちょうどBUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD分強含み(境界値)なら intensifying', () => {
+    // 窓0(反復1-5,sonnetのみ,lift1)→窓1(反復2-6,sonnet4+haiku1,lift1.25) delta=+0.25=閾値ちょうど（未満だけがflat）
+    const runs = [
+      ...makeGateTrendRuns(1, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+      ...makeGateTrendRuns(6, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+    ];
+    const signal = builderModelGateReasonCorrelationTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.sampleSize).toBe(1);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.latestMaxLift).toBeCloseTo(1.25, 10);
+    expect(signal!.latestMaxLift - signal!.historicalAvgMaxLift).toBeCloseTo(BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD, 10);
+    expect(signal!.direction).toBe('intensifying');
+  });
+
+  it('直近maxLiftが過去平均よりちょうどBUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD分弱含み(境界値)なら easing', () => {
+    // 窓0(反復1-5,sonnet4+haiku1,lift1.25)→窓1(反復2-6,sonnetのみ,lift1.0) delta=-0.25=閾値ちょうど(マイナス)なので easing
+    const runs = [
+      ...makeGateTrendRuns(1, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+      ...makeGateTrendRuns(2, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    ];
+    const signal = builderModelGateReasonCorrelationTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1.25, 10);
+    expect(signal!.latestMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.latestMaxLift - signal!.historicalAvgMaxLift).toBeCloseTo(-BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD, 10);
+    expect(signal!.direction).toBe('easing');
+  });
+
+  it('全窓を通じて単一モデルのみでmaxLiftが常に1のままなら flat', () => {
+    const signal = builderModelGateReasonCorrelationTrendSignal(
+      makeGateTrendRuns(1, 6, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    );
+    expect(signal).not.toBeNull();
+    expect(signal!.latestMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1, 10);
     expect(signal!.direction).toBe('flat');
   });
 });
