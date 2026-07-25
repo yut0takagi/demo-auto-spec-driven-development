@@ -1,0 +1,42 @@
+{
+  "id": "20260725T034834Z-246",
+  "iteration": 179,
+  "issue": {
+    "number": 246,
+    "title": "再試行コスト効率トレンド: プルリクエスト品質低下時の revise サイクル費用推移",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/246-revise",
+  "startedAt": "2026-07-25T03:48:34Z",
+  "finishedAt": "2026-07-25T04:02:43Z",
+  "durationSec": 849,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 259,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を正確に実装。revise単価と品質シグナルのスライド窓トレンド、品質低下時の単価上昇/改善時の下落判定ロジック、null処理、ウィンドウ境界値チェックすべてが要件通り。テストは境界値(5/6件)・正確な計算・null処理・3方向判定を網羅し実装を検証。既存コード変更なし、新規追加のみで既存挙動に影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 394,
+  "cost": {
+    "builderUsd": 3.816247,
+    "adversaryUsd": 0.094533,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.6330991,
+    "totalUsd": 4.543879
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

@@ -1551,6 +1551,75 @@ export function gateReasonTrendSignal(runs: RunRecord[]): GateReasonTrendSignal 
   };
 }
 
+/** gateReasons無発生（快適）トレンド判定に使う直近/直前ウィンドウの反復数（既定値）。gateReasonTrendSignal等と揃えている。 */
+export const GATE_REASON_COMFORT_TREND_WINDOW = 3;
+/**
+ * 直近ウィンドウのcomfort率（gateReasonsが空だった反復の割合）が直前ウィンドウより
+ * この値（比率、0.1=10pt）以上変化して初めて「改善」「悪化」と判定する。
+ */
+export const GATE_REASON_COMFORT_TREND_FLAT_THRESHOLD = 0.1;
+
+/** improving: 直近の方がcomfort率が高い（快適な反復が増えた）。worsening: 直近の方が低い（悪化）。 */
+export type GateReasonComfortTrendDirection = 'improving' | 'worsening' | 'flat';
+
+export interface GateReasonComfortTrendSignal {
+  /** 実際に比較に使ったウィンドウ幅（データが少ない場合は GATE_REASON_COMFORT_TREND_WINDOW 未満になりうる） */
+  windowSize: number;
+  /** windowSize が GATE_REASON_COMFORT_TREND_WINDOW に満たない（信頼度が低い）かどうか */
+  partial: boolean;
+  /** 直近ウィンドウでgateReasonsが空だった run の割合（0〜1） */
+  recentComfortRatio: number;
+  /** 直前ウィンドウでgateReasonsが空だった run の割合（0〜1） */
+  previousComfortRatio: number;
+  /** recentComfortRatio - previousComfortRatio。正なら改善（快適な反復が増えている） */
+  delta: number;
+  direction: GateReasonComfortTrendDirection;
+  /** 直近ウィンドウに含まれる反復番号（昇順） */
+  recentIterations: number[];
+  /** 直前ウィンドウに含まれる反復番号（昇順） */
+  previousIterations: number[];
+}
+
+function gateReasonComfortDirection(delta: number): GateReasonComfortTrendDirection {
+  if (Math.abs(delta) < GATE_REASON_COMFORT_TREND_FLAT_THRESHOLD) return 'flat';
+  return delta > 0 ? 'improving' : 'worsening';
+}
+
+function comfortRatio(runs: RunRecord[]): number {
+  return mean(runs.map((r) => (r.gateReasons.length === 0 ? 1 : 0)));
+}
+
+/**
+ * gateReasons無発生（＝ゲート不通過理由が一件も起きなかった＝快適）だった反復の比率を
+ * 直近window/直前windowのローリング窓で比較するトレンド観測。gateReasonTrendSignalが
+ * gateReasonsを持つ run のみを対象にカテゴリ別の出現件数の悪化/改善を見るのに対し、
+ * こちらは全run（merged/paused/dry-run含む）を母集団に「何も起きなかった」比率を追う。
+ * 比較対象となる「直前」ウィンドウが取れない（対象点が1件以下）場合は null。
+ */
+export function gateReasonComfortTrendSignal(runs: RunRecord[]): GateReasonComfortTrendSignal | null {
+  const sorted = byIterationAsc(runs);
+  if (sorted.length < 2) return null;
+
+  const windowSize = Math.min(GATE_REASON_COMFORT_TREND_WINDOW, Math.floor(sorted.length / 2));
+  const recent = sorted.slice(sorted.length - windowSize);
+  const previous = sorted.slice(sorted.length - windowSize * 2, sorted.length - windowSize);
+
+  const recentComfortRatio = comfortRatio(recent);
+  const previousComfortRatio = comfortRatio(previous);
+  const delta = recentComfortRatio - previousComfortRatio;
+
+  return {
+    windowSize,
+    partial: windowSize < GATE_REASON_COMFORT_TREND_WINDOW,
+    recentComfortRatio,
+    previousComfortRatio,
+    delta,
+    direction: gateReasonComfortDirection(delta),
+    recentIterations: recent.map((r) => r.iteration),
+    previousIterations: previous.map((r) => r.iteration),
+  };
+}
+
 export interface GateReasonChain {
   iteration: number;
   issueNumber: number;
@@ -2186,6 +2255,67 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
     .sort((a, b) => b.totalUsd - a.totalUsd);
 
   return { totalUsd, byRole, byModel };
+}
+
+export interface CostRoleStageCell {
+  role: CostRole;
+  /** RunRecord.verdict を「反復がループのどのステージまで到達したか」の代理指標として使う */
+  stage: Verdict;
+  totalUsd: number;
+  /** 0..100。totalUsd が 0 なら NaN を避けて 0 にする。 */
+  pct: number;
+}
+
+export interface CostRoleStageBreakdown {
+  totalUsd: number;
+  /** 実データに出現した stage のみを含む（0件の verdict の列は作らない）。 */
+  cells: CostRoleStageCell[];
+  /** costBreakdown.byRole と同じ（役割ごとの合計、全 stage 横断）。 */
+  roleTotals: RoleCostBreakdown[];
+  stageTotals: Array<{ stage: Verdict; totalUsd: number; pct: number; runCount: number }>;
+}
+
+/**
+ * 役割(CostRole) × ステージ(Verdict) の2軸でコストを交差集計する。costBreakdown と
+ * 同様コストは verdict に関係なく実消費されているため全 verdict を含める。
+ */
+export function costBreakdownByRoleAndStage(runs: RunRecord[]): CostRoleStageBreakdown {
+  const { totalUsd, byRole: roleTotals } = costBreakdown(runs);
+  const pctOf = (value: number) => (totalUsd === 0 ? 0 : (value / totalUsd) * 100);
+
+  const stageCost = new Map<Verdict, Record<CostRole, number>>();
+  const stageTotalUsd = new Map<Verdict, number>();
+  const stageRunCounts = new Map<Verdict, number>();
+  const stageOrder: Verdict[] = [];
+
+  for (const r of runs) {
+    if (!stageCost.has(r.verdict)) {
+      stageCost.set(r.verdict, { builder: 0, adversary: 0, ideation: 0, planner: 0 });
+      stageTotalUsd.set(r.verdict, 0);
+      stageOrder.push(r.verdict);
+    }
+    const cell = stageCost.get(r.verdict)!;
+    cell.builder += r.cost.builderUsd;
+    cell.adversary += r.cost.adversaryUsd;
+    cell.ideation += r.cost.ideationUsd;
+    cell.planner += r.cost.plannerUsd ?? 0;
+    stageTotalUsd.set(r.verdict, stageTotalUsd.get(r.verdict)! + r.cost.totalUsd);
+    stageRunCounts.set(r.verdict, (stageRunCounts.get(r.verdict) ?? 0) + 1);
+  }
+
+  const cells: CostRoleStageCell[] = stageOrder.flatMap((stage) =>
+    COST_ROLES.map((role) => {
+      const value = stageCost.get(stage)![role];
+      return { role, stage, totalUsd: value, pct: pctOf(value) };
+    }),
+  );
+
+  const stageTotals = stageOrder.map((stage) => {
+    const sum = stageTotalUsd.get(stage)!;
+    return { stage, totalUsd: sum, pct: pctOf(sum), runCount: stageRunCounts.get(stage) ?? 0 };
+  });
+
+  return { totalUsd, cells, roleTotals, stageTotals };
 }
 
 /**
@@ -4111,6 +4241,67 @@ export function adversaryApprovalCommentStats(runs: RunRecord[]): AdversaryAppro
     rejectedMedianLength: median(rejectedLengths),
     delta: rejectedAvgLength - approvedAvgLength,
   };
+}
+
+export interface ReviseCountAdversaryComparisonBucket {
+  bucket: ReviseVerdictBucketLabel;
+  /** このbucketに属した反復数（reachedVerifyのみ） */
+  count: number;
+  /** adversary.approved === true だった件数 */
+  approvedCount: number;
+  /** 0..1. approvedCount / count */
+  approvalRate: number;
+  meanSummaryLength: number;
+  medianSummaryLength: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * revise回数(bucket: 0/1/2/3+) と adversary の承認率・レビュー文字量の関係。
+ * reviseVerdictMatrix/reviseCycleCostRecovery は revise回数bucket別の分布を見るが
+ * 従属変数がverdict件数・コストであり、adversaryの承認率・レビュー文字量ではない。
+ * 一方 adversaryApprovalCommentStats/adversarySummaryLengthTrend は承認/却下別の
+ * 文字数比較はあるが、軸がrevise回数bucketではない。この関数は両者の交差点として、
+ * 「revise回数が増えるほどadversaryの承認率は下がるか／レビュー文字量は増えるか」
+ * という粘着質化仮説を検証するために存在する。
+ * 母集団は adversarySummaryLengthTrend/adversaryApprovalCommentStats と同じ
+ * reachedVerify（failed run の summary は「レビューに到達しなかった」等の sentinel
+ * であり実測のレビュー内容ではないため除外する）。
+ * bucketはデータに実際に出現したものだけを、reviseVerdictMatrix と同じ順序で返す。
+ */
+export function reviseCountAdversaryComparison(runs: RunRecord[]): ReviseCountAdversaryComparisonBucket[] {
+  const byBucket = new Map<
+    ReviseVerdictBucketLabel,
+    { approvedCount: number; lengths: number[]; iterations: number[] }
+  >();
+
+  for (const run of byIterationAsc(runs).filter(reachedVerify)) {
+    const bucket = reviseVerdictBucket(run.reviseCycles);
+    let entry = byBucket.get(bucket);
+    if (!entry) {
+      entry = { approvedCount: 0, lengths: [], iterations: [] };
+      byBucket.set(bucket, entry);
+    }
+    if (run.adversary.approved) entry.approvedCount++;
+    entry.lengths.push(adversarySummaryLength(run));
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byBucket.entries()]
+    .map(([bucket, entry]) => {
+      const count = entry.lengths.length;
+      return {
+        bucket,
+        count,
+        approvedCount: entry.approvedCount,
+        approvalRate: count === 0 ? 0 : entry.approvedCount / count,
+        meanSummaryLength: mean(entry.lengths),
+        medianSummaryLength: median(entry.lengths),
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => REVISE_VERDICT_BUCKET_ORDER.indexOf(a.bucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.bucket));
 }
 
 /** ダイジェストに表示する直近Adversaryコメントの最大件数。 */
@@ -6289,6 +6480,86 @@ export function dropoutStreaks(runs: RunRecord[]): DropoutStreak[] {
   return streaks;
 }
 
+/** 横滑り判定の対象とする最小連続チェーン長（shiftedFailure遷移の連続回数）。反復数では+1。 */
+export const LATERAL_SLIDE_MIN_CHAIN = 2;
+
+export interface VerdictLateralSlide {
+  startIteration: number;
+  endIteration: number;
+  /** 区間に含まれる反復数（LATERAL_SLIDE_MIN_CHAIN + 1 以上） */
+  length: number;
+  /** 区間に含まれるverdict（iteration昇順） */
+  verdicts: Verdict[];
+  /** 区間に含まれる反復番号（iteration昇順） */
+  iterations: number[];
+  /** 区間内に出現したverdictのユニーク数（横滑りの振れ幅の目安） */
+  distinctVerdictCount: number;
+  outcome: DropoutOutcome;
+  /** 区間の最後のverdictが abandoned だったか */
+  endedInAbandonment: boolean;
+  /** 区間に含まれる反復の cost.totalUsd 合計 */
+  totalCostUsd: number;
+}
+
+/**
+ * 「横滑り」＝verdictTransitions() の kind が shiftedFailure（不通過の型が変化）と
+ * 分類される遷移が LATERAL_SLIDE_MIN_CHAIN 回以上連続する区間を検知する。dropoutStreaks
+ * が「非マージが連続しているか」だけを見るのに対し、こちらは「同じ場所（非マージ）に
+ * 留まりながら不通過の型だけが変わり続けている」＝前にも後ろにも進んでいない状態を
+ * 区別して抽出する。shiftedFailure は定義上 from/to が共に非マージなので、区間を構成する
+ * 反復は常に非マージであり、outcome の判定は dropoutStreaks と同じ考え方でよい:
+ * 区間直後の遷移が recovered（mergedに到達）なら recovered、そうでなければ
+ * （repeatedFailureで途切れた、またはデータ終端に達した）区間最後のverdictが
+ * abandoned なら droppedOut、それ以外は ongoing とする。
+ */
+export function verdictLateralSlides(runs: RunRecord[]): VerdictLateralSlide[] {
+  const sorted = byIterationAsc(runs);
+  const transitions = verdictTransitions(runs);
+  const slides: VerdictLateralSlide[] = [];
+
+  let chainStartIdx: number | null = null;
+  let chainLen = 0;
+
+  const finalize = (endIdx: number, followedByMerged: boolean) => {
+    if (chainLen < LATERAL_SLIDE_MIN_CHAIN) {
+      chainStartIdx = null;
+      chainLen = 0;
+      return;
+    }
+    const chainRuns = sorted.slice(chainStartIdx!, endIdx + 1);
+    const last = chainRuns[chainRuns.length - 1];
+    const endedInAbandonment = last.verdict === 'abandoned';
+    slides.push({
+      startIteration: chainRuns[0].iteration,
+      endIteration: last.iteration,
+      length: chainRuns.length,
+      verdicts: chainRuns.map((r) => r.verdict),
+      iterations: chainRuns.map((r) => r.iteration),
+      distinctVerdictCount: new Set(chainRuns.map((r) => r.verdict)).size,
+      outcome: followedByMerged ? 'recovered' : endedInAbandonment ? 'droppedOut' : 'ongoing',
+      endedInAbandonment,
+      totalCostUsd: chainRuns.reduce((sum, r) => sum + r.cost.totalUsd, 0),
+    });
+    chainStartIdx = null;
+    chainLen = 0;
+  };
+
+  for (let i = 0; i < transitions.length; i++) {
+    const t = transitions[i];
+    if (t.kind === 'shiftedFailure') {
+      if (chainStartIdx === null) chainStartIdx = i;
+      chainLen++;
+    } else if (chainStartIdx !== null) {
+      finalize(i, t.kind === 'recovered');
+    }
+  }
+  if (chainStartIdx !== null) {
+    finalize(sorted.length - 1, false);
+  }
+
+  return slides;
+}
+
 /** モデルの成功率が「pressure(revise回数)が増えても崩れない」とみなす、bucket間の変化幅(pt)の下限。 */
 export const MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT = 5;
 
@@ -7050,6 +7321,116 @@ export function costQualityElasticityTrendSignal(runs: RunRecord[]): CostQuality
   };
 }
 
+/** revise単価トレンドの比較に使う直近/直前ウィンドウの反復数。costQualityElasticityTrendと同じスライド窓方式だが窓幅は3。 */
+export const RETRY_COST_EFFICIENCY_WINDOW = 3;
+/** costPerCycleChangePct(%)の変化がこの値未満なら「横ばい」とする。ELASTICITY_TREND_FLAT_THRESHOLD_PCTと同じ緩めの閾値。 */
+export const RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT = 10;
+
+/** recentQualityPct/previousQualityPctは0..100（verify.coveragePct平均）。costPerReviseCycleUsd系は該当反復が窓内に無ければnull。 */
+export interface RetryCostEfficiencyPoint {
+  iteration: number;
+  recentQualityPct: number;
+  previousQualityPct: number;
+  recentCostPerReviseCycleUsd: number | null;
+  previousCostPerReviseCycleUsd: number | null;
+  /** 直前→直近の変化率(%)。previousがnull/0ならnull */
+  costPerCycleChangePct: number | null;
+  /** recentQualityPct / recentCostPerReviseCycleUsd。コストがnull/0ならnull */
+  efficiency: number | null;
+  qualityDeclining: boolean;
+}
+
+/** groupのうちreviseCycles>0の反復のcost.totalUsd合計 ÷ reviseCycles合計（revise 1回あたり単価）。該当反復が無ければnull。 */
+function costPerReviseCycleUsd(group: RunRecord[]): number | null {
+  const withRevise = group.filter((r) => r.reviseCycles > 0);
+  if (withRevise.length === 0) return null;
+  const totalCostUsd = withRevise.reduce((sum, r) => sum + r.cost.totalUsd, 0);
+  const totalCycles = withRevise.reduce((sum, r) => sum + r.reviseCycles, 0);
+  return totalCycles === 0 ? null : totalCostUsd / totalCycles;
+}
+
+/**
+ * revise 1回あたりの実コスト（reviseCycles>0の反復に限定したcost.totalUsd合計 ÷ reviseCycles合計）と
+ * 品質(verify.coveragePct平均)のスライド窓トレンド。costQualityElasticityTrendが承認率×総コストの
+ * 弾性を見るのに対し、こちらは品質シグナルにcoveragePctを使い、コスト側はrevise 1回あたり単価に
+ * 絞り込んだうえで「品質が下がっている局面で単価がどう推移しているか」を時系列比較する。
+ * RETRY_COST_EFFICIENCY_WINDOW幅の「直前→直近」ウィンドウを1反復ずつスライドさせて点列を返す。
+ * 完了反復数がRETRY_COST_EFFICIENCY_WINDOWの2倍未満なら空配列。
+ */
+export function retryCostEfficiencyTrend(runs: RunRecord[]): RetryCostEfficiencyPoint[] {
+  const completed = byIterationAsc(runs).filter(reachedVerify);
+  const w = RETRY_COST_EFFICIENCY_WINDOW;
+  if (completed.length < w * 2) return [];
+  const points: RetryCostEfficiencyPoint[] = [];
+  for (let i = w * 2 - 1; i < completed.length; i++) {
+    const recent = completed.slice(i - w + 1, i + 1);
+    const previous = completed.slice(i - w * 2 + 1, i - w + 1);
+    const recentQualityPct = mean(recent.map((r) => r.verify.coveragePct));
+    const previousQualityPct = mean(previous.map((r) => r.verify.coveragePct));
+    const recentCostPerReviseCycleUsd = costPerReviseCycleUsd(recent);
+    const previousCostPerReviseCycleUsd = costPerReviseCycleUsd(previous);
+    const costPerCycleChangePct =
+      previousCostPerReviseCycleUsd === null ||
+      previousCostPerReviseCycleUsd === 0 ||
+      recentCostPerReviseCycleUsd === null
+        ? null
+        : ((recentCostPerReviseCycleUsd - previousCostPerReviseCycleUsd) / previousCostPerReviseCycleUsd) * 100;
+    const efficiency =
+      recentCostPerReviseCycleUsd === null || recentCostPerReviseCycleUsd === 0
+        ? null
+        : recentQualityPct / recentCostPerReviseCycleUsd;
+    points.push({
+      iteration: completed[i].iteration,
+      recentQualityPct,
+      previousQualityPct,
+      recentCostPerReviseCycleUsd,
+      previousCostPerReviseCycleUsd,
+      costPerCycleChangePct,
+      efficiency,
+      qualityDeclining: recentQualityPct < previousQualityPct,
+    });
+  }
+  return points;
+}
+
+/** worsening: 品質低下局面でrevise単価が上昇。improving: 品質改善局面で単価が低下。flat: それ以外・判定不能。 */
+export type RetryCostEfficiencyDirection = 'worsening' | 'improving' | 'flat';
+export interface RetryCostEfficiencyTrendSignal {
+  latestIteration: number;
+  latestCostPerCycleChangePct: number | null;
+  qualityDeclining: boolean;
+  direction: RetryCostEfficiencyDirection;
+}
+
+function retryCostEfficiencyDirection(point: RetryCostEfficiencyPoint): RetryCostEfficiencyDirection {
+  if (point.costPerCycleChangePct === null) return 'flat';
+  if (point.qualityDeclining && point.costPerCycleChangePct > RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT) {
+    return 'worsening';
+  }
+  const qualityImproving = point.recentQualityPct > point.previousQualityPct;
+  if (qualityImproving && point.costPerCycleChangePct < -RETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT) {
+    return 'improving';
+  }
+  return 'flat';
+}
+
+/**
+ * retryCostEfficiencyTrend の最新点が「品質低下+単価上昇」「品質改善+単価低下」のどちらかに
+ * 該当するかを判定する。costPerCycleChangePctの変化率(絶対値)がRETRY_COST_EFFICIENCY_FLAT_THRESHOLD_PCT
+ * 未満、またはいずれの条件にも合致しない場合はflat。trendが空配列ならnull。
+ */
+export function retryCostEfficiencyTrendSignal(runs: RunRecord[]): RetryCostEfficiencyTrendSignal | null {
+  const points = retryCostEfficiencyTrend(runs);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  return {
+    latestIteration: latest.iteration,
+    latestCostPerCycleChangePct: latest.costPerCycleChangePct,
+    qualityDeclining: latest.qualityDeclining,
+    direction: retryCostEfficiencyDirection(latest),
+  };
+}
+
 export type VerdictJumpKind = 'spikeFailure' | 'spikeSuccess';
 
 /** ジャンプ判定に使う前後の窓幅（反復件数）。 */
@@ -7133,4 +7514,207 @@ export function verdictJumpSummary(runs: RunRecord[]): VerdictJumpKindSummary[] 
       return { kind, count, pct: anomalies.length === 0 ? 0 : (count / anomalies.length) * 100 };
     })
     .sort((a, b) => b.count - a.count);
+}
+
+/** builderModelGateReasonCorrelationTrend のスライド窓幅（gateReasonsを持つ反復数）。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_WINDOW = 5;
+/** 窓内の出現件数がこれ未満の(model, category)セルは低頻度ノイズとして最大lift候補から除外する。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT = 2;
+/** 直近点のmaxLiftと過去点平均の絶対差がこの値未満なら「横ばい」。GATE_REASON_TREND_FLAT_THRESHOLDと同じ絶対差方式。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD = 0.25;
+
+export interface BuilderModelGateReasonCorrelationTrendPoint {
+  iteration: number;
+  /** この窓内で最大liftだった(model, category)。閾値件数以上のセルが1つも無ければ全てnull */
+  model: string | null;
+  category: GateReasonCategory | null;
+  maxLift: number | null;
+  count: number | null;
+}
+
+/**
+ * builderModelGateReasonCorrelation（全履歴を1回で集計する静的lift行列）を、直近
+ * BUILDER_MODEL_GATE_REASON_TREND_WINDOW件のスライド窓ごとに呼び出し直して推移にする。
+ * 母集団はgateReasonBurdenTrendと同じ（gateReasonsを持つ反復のみ）。各窓でMIN_COUNT件以上
+ * 出現したセルに限って最大liftの(model, category)を1点とする。窓幅未満なら空配列。
+ */
+export function builderModelGateReasonCorrelationTrend(runs: RunRecord[]): BuilderModelGateReasonCorrelationTrendPoint[] {
+  const filtered = byIterationAsc(runs).filter((r) => r.gateReasons.length > 0);
+  const w = BUILDER_MODEL_GATE_REASON_TREND_WINDOW;
+  if (filtered.length < w) return [];
+
+  const points: BuilderModelGateReasonCorrelationTrendPoint[] = [];
+  for (let i = w - 1; i < filtered.length; i++) {
+    const windowRuns = filtered.slice(i - w + 1, i + 1);
+    const best = builderModelGateReasonCorrelation(windowRuns)
+      .flatMap((row) => row.cells.map((cell) => ({ ...cell, model: row.model })))
+      .filter((cell) => cell.count >= BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT)
+      .sort(
+        (a, b) =>
+          b.lift - a.lift ||
+          b.count - a.count ||
+          GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category) ||
+          a.model.localeCompare(b.model),
+      )[0];
+    points.push({
+      iteration: windowRuns[windowRuns.length - 1].iteration,
+      model: best?.model ?? null,
+      category: best?.category ?? null,
+      maxLift: best?.lift ?? null,
+      count: best?.count ?? null,
+    });
+  }
+  return points;
+}
+
+/** intensifying: 直近の最大liftが過去平均より強含み（偏りが強まっている）。easing: 弱含み。flat: 横ばい。 */
+export type BuilderModelGateReasonCorrelationTrendDirection = 'intensifying' | 'easing' | 'flat';
+
+export interface BuilderModelGateReasonCorrelationTrendSignal {
+  latestIteration: number;
+  latestMaxLift: number;
+  latestModel: string;
+  latestCategory: GateReasonCategory;
+  /** 直近点を除く、maxLiftが定義できた過去の点の平均。sampleSizeはその点数 */
+  historicalAvgMaxLift: number;
+  sampleSize: number;
+  direction: BuilderModelGateReasonCorrelationTrendDirection;
+}
+
+function builderModelGateReasonCorrelationTrendDirection(delta: number): BuilderModelGateReasonCorrelationTrendDirection {
+  if (Math.abs(delta) < BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD) return 'flat';
+  return delta > 0 ? 'intensifying' : 'easing';
+}
+
+/** builderModelGateReasonCorrelationTrend の最新点が過去平均よりmaxLiftの絶対差で強含み/弱含み/横ばいかを判定する。最新点または過去点にmaxLiftが定義できたものが無ければnull。 */
+export function builderModelGateReasonCorrelationTrendSignal(
+  runs: RunRecord[],
+): BuilderModelGateReasonCorrelationTrendSignal | null {
+  const points = builderModelGateReasonCorrelationTrend(runs);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  if (latest.maxLift === null || latest.model === null || latest.category === null) return null;
+  const historical = points.slice(0, -1).filter((p) => p.maxLift !== null);
+  if (historical.length === 0) return null;
+  const historicalAvgMaxLift = mean(historical.map((p) => p.maxLift as number));
+  return {
+    latestIteration: latest.iteration,
+    latestMaxLift: latest.maxLift,
+    latestModel: latest.model,
+    latestCategory: latest.category,
+    historicalAvgMaxLift,
+    sampleSize: historical.length,
+    direction: builderModelGateReasonCorrelationTrendDirection(latest.maxLift - historicalAvgMaxLift),
+  };
+}
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const OPERATING_HOUR_START = 9;
+const OPERATING_HOUR_END = 18; // exclusive
+
+/**
+ * startedAt(UTC ISO8601)をJST(UTC+9)に変換した上での時(0-23)。ライブラリを使わず
+ * getTime()にオフセットを加算した上でgetUTCHours()を読むことで、CI/Vercelビルド環境の
+ * ローカルTZに依存しない決定的な変換にする。
+ */
+function toJstHour(iso: string): number {
+  return new Date(new Date(iso).getTime() + JST_OFFSET_MS).getUTCHours();
+}
+
+/** startedAt(UTC ISO8601)をJSTに変換した上での曜日(0=日曜〜6=土曜)。toJstHourと同じ変換方式。 */
+function toJstWeekday(iso: string): number {
+  return new Date(new Date(iso).getTime() + JST_OFFSET_MS).getUTCDay();
+}
+
+function isValidStartedAt(iso: string): boolean {
+  return !Number.isNaN(new Date(iso).getTime());
+}
+
+/** 平日(月=1〜金=5)の9:00-18:00(JST)のみ営業時間内。それ以外(平日夜間・早朝・土日全時間帯)は夜間。 */
+export type OperatingHourCategory = 'business' | 'night';
+
+function operatingHourCategoryOf(run: RunRecord): OperatingHourCategory {
+  const weekday = toJstWeekday(run.startedAt);
+  const hour = toJstHour(run.startedAt);
+  const isWeekday = weekday >= 1 && weekday <= 5;
+  const isBusinessHour = hour >= OPERATING_HOUR_START && hour < OPERATING_HOUR_END;
+  return isWeekday && isBusinessHour ? 'business' : 'night';
+}
+
+export interface OperatingHourBucket {
+  /** JSTの時(0-23) */
+  hour: number;
+  /** この時台に開始したうちoperatingHourCategoryOf基準でbusinessと判定された件数 */
+  businessCount: number;
+  /** この時台に開始したうちoperatingHourCategoryOf基準でnightと判定された件数 */
+  nightCount: number;
+}
+
+/**
+ * JST 0-23時の時間帯ごとの反復件数ヒストグラム。各バケツ(hour)をoperatingHourCategorySummary
+ * と同じoperatingHourCategoryOf（平日9-18時のみbusiness、土日を含むそれ以外はnight）で
+ * business/nightに内訳分解する。同じ時台でも曜日次第でどちらにも属しうるため、件数は
+ * 単一カテゴリのタグではなくbusinessCount/nightCountの内訳として持つ。
+ * startedAtが不正（Dateとしてparse不能）な反復は集計から除外する。
+ * runs=[]、またはstartedAtが有効な反復が1件も無い場合は空配列を返す。
+ */
+export function operatingHourSpectrum(runs: RunRecord[]): OperatingHourBucket[] {
+  const buckets = Array.from({ length: 24 }, (_, hour) => ({ hour, businessCount: 0, nightCount: 0 }));
+  let validCount = 0;
+  for (const run of runs) {
+    if (!isValidStartedAt(run.startedAt)) continue;
+    const bucket = buckets[toJstHour(run.startedAt)];
+    if (operatingHourCategoryOf(run) === 'business') {
+      bucket.businessCount++;
+    } else {
+      bucket.nightCount++;
+    }
+    validCount++;
+  }
+  return validCount === 0 ? [] : buckets;
+}
+
+export interface OperatingHourCategorySummary {
+  category: OperatingHourCategory;
+  count: number;
+  /** merged件数 / count */
+  mergedRate: number;
+  avgCostUsd: number;
+  avgDurationSec: number;
+}
+
+/**
+ * business(平日9:00-18:00 JST)/night(それ以外)の2カテゴリごとに件数・マージ率・
+ * 平均コスト・平均所要時間を集計する。夜間実行が品質/コストに与える影響を一目で
+ * 比較できるサマリ行を作るためのもの。startedAtが不正な反復は除外する。
+ * runs=[]、またはstartedAtが不正な反復しか無い場合は空配列を返す。
+ */
+export function operatingHourCategorySummary(runs: RunRecord[]): OperatingHourCategorySummary[] {
+  const groups = new Map<OperatingHourCategory, RunRecord[]>();
+  for (const run of runs) {
+    if (!isValidStartedAt(run.startedAt)) continue;
+    const category = operatingHourCategoryOf(run);
+    const list = groups.get(category);
+    if (list) {
+      list.push(run);
+    } else {
+      groups.set(category, [run]);
+    }
+  }
+
+  const order: OperatingHourCategory[] = ['business', 'night'];
+  return order
+    .filter((category) => groups.has(category))
+    .map((category) => {
+      const list = groups.get(category)!;
+      const count = list.length;
+      const mergedCount = list.filter((run) => run.verdict === 'merged').length;
+      return {
+        category,
+        count,
+        mergedRate: mergedCount / count,
+        avgCostUsd: mean(list.map((run) => run.cost.totalUsd)),
+        avgDurationSec: mean(list.map((run) => run.durationSec)),
+      };
+    });
 }

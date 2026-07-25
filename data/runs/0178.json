@@ -1,0 +1,44 @@
+{
+  "id": "20260725T014648Z-242",
+  "iteration": 178,
+  "issue": {
+    "number": 242,
+    "title": "Verdictジャンプ検知パネル（非遷移型異常検知）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/242-verdict",
+  "startedAt": "2026-07-25T01:46:48Z",
+  "finishedAt": "2026-07-25T01:51:16Z",
+  "durationSec": 268,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "要件を正確に満たす実装。非遷移型異常検知の仕様（前後3件窓の極値が統一された中での単発逸脱検出）を的確に実装し、テストもパターン網羅的。既存コード変更なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.069864,
+    "adversaryUsd": 0.069415,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.4221146,
+    "totalUsd": 0.561394
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

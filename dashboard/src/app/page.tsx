@@ -16,6 +16,7 @@ import { IterationTimeline } from '@/components/IterationTimeline';
 import { BacklogPanel } from '@/components/BacklogPanel';
 import { VerdictSummaryBubble } from '@/components/VerdictSummaryBubble';
 import { ModelCostBreakdown } from '@/components/ModelCostBreakdown';
+import { CostRoleStageBreakdownPanel } from '@/components/CostRoleStageBreakdownPanel';
 import { BuilderComparisonCard } from '@/components/BuilderComparisonCard';
 import { EarlyWarningCard } from '@/components/EarlyWarningCard';
 import { CostEfficiencyPanel } from '@/components/CostEfficiencyPanel';
@@ -29,6 +30,7 @@ import { TimeToFirstPrTrendPanel } from '@/components/TimeToFirstPrTrendPanel';
 import { BuilderUtilizationDeclinePanel } from '@/components/BuilderUtilizationDeclinePanel';
 import { AdversaryCommentTrendPanel } from '@/components/AdversaryCommentTrendPanel';
 import { IssueResolutionTimeTrendPanel } from '@/components/IssueResolutionTimeTrendPanel';
+import { OperatingHourSpectrumPanel } from '@/components/OperatingHourSpectrumPanel';
 import { IssueLabelSuccessRatePanel } from '@/components/IssueLabelSuccessRatePanel';
 import { IssueLabelQualityRecoveryMatrixPanel } from '@/components/IssueLabelQualityRecoveryMatrixPanel';
 
@@ -65,6 +67,7 @@ export default function Home() {
         <TimeToFirstPrTrendPanel runs={runs} />
         <BuilderUtilizationDeclinePanel runs={runs} />
         <IssueResolutionTimeTrendPanel runs={runs} />
+        <OperatingHourSpectrumPanel runs={runs} />
         <IssueLabelSuccessRatePanel runs={runs} />
         <IssueLabelQualityRecoveryMatrixPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
@@ -84,6 +87,7 @@ export default function Home() {
           <ModelCostBreakdown runs={runs} />
           <CostEfficiencyPanel runs={runs} />
         </div>
+        <CostRoleStageBreakdownPanel runs={runs} />
         <PlannerActivityPanel runs={runs} />
         <div className="grid gap-6 lg:grid-cols-2">
           <CostQualityElasticityTrendPanel runs={runs} />

@@ -1,0 +1,42 @@
+{
+  "id": "20260725T050304Z-248",
+  "iteration": 183,
+  "issue": {
+    "number": 248,
+    "title": "反復の稼働時間帯スペクトラム: 日本時間の営業時間内 vs 夜間実行の分布",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/248-vs",
+  "startedAt": "2026-07-25T05:03:04Z",
+  "finishedAt": "2026-07-25T05:27:19Z",
+  "durationSec": 1455,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 266,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件の営業時間帯スペクトラム（JST営業時間内 vs 夜間分布）を正確に実装。ローカルTZに依存しないJST変換、平日9-18時の営業時間判定、UTC跨ぎや土日を含む境界値テストすべてが要件を満たし、既存機能への影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 140,
+  "cost": {
+    "builderUsd": 5.209969,
+    "adversaryUsd": 0.151425,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.38240110000000005,
+    "totalUsd": 5.743795
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

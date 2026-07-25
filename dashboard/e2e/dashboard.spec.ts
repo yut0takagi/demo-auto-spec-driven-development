@@ -4,6 +4,7 @@ import {
   summarize,
   e2eFailureRateTrend,
   costBreakdown,
+  costBreakdownByRoleAndStage,
   changedLinesTrend,
   builderComparison,
   earlyWarningSignal,
@@ -75,6 +76,7 @@ import {
   approvedButBuilderFailedSummary,
   approvedButBuilderFailedIterations,
   reviseCycleCostRecovery,
+  reviseCountAdversaryComparison,
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
@@ -366,6 +368,41 @@ test('モデルコストの内訳が役割別合計とモデル別合計を表�
   const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('コスト内訳（役割×ステージ）パネルが実データのセル・行合計・列合計を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = costBreakdownByRoleAndStage(runs);
+
+  expect(
+    breakdown.totalUsd,
+    'data/runs の合計コストが0のため「コスト内訳（役割×ステージ）」パネルの中身を検証できない。fixture を見直すこと。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('cost-role-stage-breakdown-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`$${breakdown.totalUsd.toFixed(2)}`);
+
+  // 実データに出現した role×stage の全セルが、集計結果と一致する金額・pctで表示される
+  for (const cell of breakdown.cells) {
+    const cellEl = page.getByTestId(`cost-role-stage-cell-${cell.role}-${cell.stage}`);
+    await expect(cellEl).toBeVisible();
+    await expect(cellEl).toContainText(`$${cell.totalUsd.toFixed(2)}`);
+    await expect(cellEl).toContainText(`${cell.pct.toFixed(1)}%`);
+  }
+
+  // 行合計(役割ごと)・列合計(ステージごと)も一致する
+  for (const roleTotal of breakdown.roleTotals) {
+    const totalEl = page.getByTestId(`cost-role-stage-role-total-${roleTotal.role}`);
+    await expect(totalEl).toContainText(`$${roleTotal.totalUsd.toFixed(2)}`);
+  }
+  for (const stageTotal of breakdown.stageTotals) {
+    const totalEl = page.getByTestId(`cost-role-stage-stage-total-${stageTotal.stage}`);
+    await expect(totalEl).toContainText(`$${stageTotal.totalUsd.toFixed(2)}`);
+  }
 });
 
 test('ブレーカ発火までのランウェイパネルが実データから導出した残反復数・対象iterationを表示する', async ({ page }) => {
@@ -694,6 +731,50 @@ test('Reviseサイクル別 APIコスト分布と回収効率パネルが実デ�
     const expectedCostBarPct = (b.meanCostUsd / maxMeanCostUsd) * 100;
     const actualWidthStyle = await costBar.evaluate((el) => (el as HTMLElement).style.width);
     expect(parseFloat(actualWidthStyle)).toBeCloseTo(expectedCostBarPct, 1);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('Revise回数別 Adversary承認率・レビュー文字数比較パネルが実データから導出したbucket統計を表示する', async ({ page }) => {
+  await page.goto('/revise');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const buckets = reviseCountAdversaryComparison(runs);
+  expect(
+    buckets.length,
+    'data/runs から revise回数bucket が1件も導出できず、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('revise-count-adversary-approval-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${buckets.length}区分`);
+
+  // bucket は常に 0→1→2→3+ の順で描画される（出現したものだけ）
+  const rows = await page.locator('[data-testid^="revise-count-adversary-row-"]').all();
+  const renderedBuckets = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('revise-count-adversary-row-', '')),
+  );
+  expect(renderedBuckets).toEqual(buckets.map((b) => b.bucket));
+
+  // 各 bucket 行が reviseCountAdversaryComparison()（別の計算経路）と一致する承認率・
+  // レビュー平均/中央値文字数を表示する
+  for (const b of buckets) {
+    const rateEl = page.getByTestId(`revise-count-adversary-approval-rate-${b.bucket}`);
+    await expect(rateEl).toHaveText(`承認${(b.approvalRate * 100).toFixed(0)}%（${b.approvedCount}/${b.count}）`);
+
+    const lengthStatsEl = page.getByTestId(`revise-count-adversary-length-stats-${b.bucket}`);
+    await expect(lengthStatsEl).toHaveText(
+      `平均${b.meanSummaryLength.toFixed(0)}文字 / 中央値${b.medianSummaryLength.toFixed(0)}文字（${b.count}件）`,
+    );
+
+    const approvalBar = page.getByTestId(`revise-count-adversary-approval-bar-${b.bucket}`);
+    const actualApprovalWidth = await approvalBar.evaluate((el) => (el as HTMLElement).style.width);
+    expect(parseFloat(actualApprovalWidth)).toBeCloseTo(b.approvalRate * 100, 1);
   }
 
   const body = await bodyTextExcludingFreeform(page);

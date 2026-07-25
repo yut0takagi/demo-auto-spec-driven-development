@@ -1,0 +1,42 @@
+{
+  "id": "20260725T052721Z-252",
+  "iteration": 184,
+  "issue": {
+    "number": 252,
+    "title": "ループの総コスト内訳を役割×ステージ別に分解する観測パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/252-task",
+  "startedAt": "2026-07-25T05:27:21Z",
+  "finishedAt": "2026-07-25T05:48:39Z",
+  "durationSec": 1278,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 267,
+  "adversary": {
+    "approved": true,
+    "summary": "役割×ステージの2軸コスト分解パネルが正確に実装され、集計ロジック・UI・テスト共に要件を満たしている。既存パネルへの副作用なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 395,
+  "cost": {
+    "builderUsd": 5.943122,
+    "adversaryUsd": 0.055858,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.7003411000000002,
+    "totalUsd": 6.699321
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

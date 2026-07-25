@@ -10,6 +10,7 @@ import {
   mergeRateTrend,
   e2eFailureRateTrend,
   costBreakdown,
+  costBreakdownByRoleAndStage,
   changedLinesTrend,
   builderComparison,
   earlyWarningSignal,
@@ -24,6 +25,8 @@ import {
   gateReasonTrendSignal,
   GATE_REASON_TREND_WINDOW,
   GATE_REASON_TREND_FLAT_THRESHOLD,
+  gateReasonComfortTrendSignal,
+  GATE_REASON_COMFORT_TREND_WINDOW,
   gateFailureTypeBreakdown,
   gateReasonSeveritySpectrum,
   costEfficiency,
@@ -76,6 +79,7 @@ import {
   ADVERSARY_COMMENT_TREND_WINDOW,
   ADVERSARY_COMMENT_TREND_FLAT_THRESHOLD_PCT,
   adversaryApprovalCommentStats,
+  reviseCountAdversaryComparison,
   recentAdversaryComments,
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
@@ -132,6 +136,8 @@ import {
   VERDICT_JUMP_WINDOW,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
+  verdictLateralSlides,
+  LATERAL_SLIDE_MIN_CHAIN,
   reviseSizeSuccessPatterns,
   CHANGE_SIZE_SMALL_MAX,
   CHANGE_SIZE_MEDIUM_MAX,
@@ -169,6 +175,16 @@ import {
   ideationGenerationDecaySignal,
   GENERATION_DECAY_WINDOW,
   GENERATION_DECAY_STREAK_THRESHOLD,
+  retryCostEfficiencyTrend,
+  retryCostEfficiencyTrendSignal,
+  RETRY_COST_EFFICIENCY_WINDOW,
+  builderModelGateReasonCorrelationTrend,
+  builderModelGateReasonCorrelationTrendSignal,
+  BUILDER_MODEL_GATE_REASON_TREND_WINDOW,
+  BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT,
+  BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD,
+  operatingHourSpectrum,
+  operatingHourCategorySummary,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -1147,6 +1163,90 @@ describe('costBreakdown', () => {
     const modelSum = b.byModel.reduce((s, m) => s + m.totalUsd, 0);
     expect(modelSum).toBeCloseTo(summary.totalCostUsd);
     expect(b.totalUsd).toBeCloseTo(summary.totalCostUsd);
+  });
+});
+
+describe('costBreakdownByRoleAndStage', () => {
+  it('空配列では totalUsd=0、cells/stageTotals は空配列、roleTotals は4ロール分すべて0を返す', () => {
+    const b = costBreakdownByRoleAndStage([]);
+    expect(b.totalUsd).toBe(0);
+    expect(b.cells).toEqual([]);
+    expect(b.stageTotals).toEqual([]);
+    expect(b.roleTotals.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
+    for (const r of b.roleTotals) {
+      expect(r.totalUsd).toBe(0);
+      expect(r.pct).toBe(0);
+    }
+  });
+
+  it('単一verdict(plannerUsd未記録の旧レコード)では stage 列は1つのみ、planner セルは0で存在する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        cost: { builderUsd: 0.6, adversaryUsd: 0.3, ideationUsd: 0.1, totalUsd: 1.0 },
+      }),
+    ];
+    const b = costBreakdownByRoleAndStage(runs);
+    expect(b.totalUsd).toBeCloseTo(1.0);
+    expect(b.stageTotals).toHaveLength(1);
+    expect(b.stageTotals[0]).toMatchObject({ stage: 'merged', totalUsd: 1.0, runCount: 1 });
+    expect(b.stageTotals[0].pct).toBeCloseTo(100);
+
+    expect(b.cells).toHaveLength(4);
+    const builderCell = b.cells.find((c) => c.role === 'builder' && c.stage === 'merged');
+    expect(builderCell?.totalUsd).toBeCloseTo(0.6);
+    expect(builderCell?.pct).toBeCloseTo(60);
+    const plannerCell = b.cells.find((c) => c.role === 'planner' && c.stage === 'merged');
+    expect(plannerCell?.totalUsd).toBe(0);
+    expect(plannerCell?.pct).toBe(0);
+  });
+
+  it('複数verdict×複数roleが混在する場合、セルごとに正しく合算・pct計算し、出現しないstageの列は作らない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, totalUsd: 0.8 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        cost: { builderUsd: 0.1, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.2 },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        cost: { builderUsd: 0.3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.3 },
+      }),
+    ];
+    const b = costBreakdownByRoleAndStage(runs);
+    expect(b.totalUsd).toBeCloseTo(1.3);
+
+    // merged: builder 0.5+0.3=0.8
+    const mergedBuilder = b.cells.find((c) => c.role === 'builder' && c.stage === 'merged');
+    expect(mergedBuilder?.totalUsd).toBeCloseTo(0.8);
+    expect(mergedBuilder?.pct).toBeCloseTo((0.8 / 1.3) * 100);
+
+    const failedBuilder = b.cells.find((c) => c.role === 'builder' && c.stage === 'failed');
+    expect(failedBuilder?.totalUsd).toBeCloseTo(0.1);
+    expect(failedBuilder?.pct).toBeCloseTo((0.1 / 1.3) * 100);
+
+    // 出現した stage(merged/failed)のみが列として存在し、abandoned等は含まない
+    expect(b.stageTotals.map((s) => s.stage).sort()).toEqual(['failed', 'merged']);
+    const mergedStage = b.stageTotals.find((s) => s.stage === 'merged');
+    expect(mergedStage?.totalUsd).toBeCloseTo(1.1);
+    expect(mergedStage?.runCount).toBe(2);
+    const failedStage = b.stageTotals.find((s) => s.stage === 'failed');
+    expect(failedStage?.totalUsd).toBeCloseTo(0.2);
+    expect(failedStage?.runCount).toBe(1);
+
+    // roleTotals は verdict を横断した役割合計（costBreakdown.byRole 相当）
+    const builderTotal = b.roleTotals.find((r) => r.role === 'builder');
+    expect(builderTotal?.totalUsd).toBeCloseTo(0.9);
+
+    // 全セルの pct 合計は概ね100%になる（取りこぼしがない）
+    expect(b.cells.reduce((sum, c) => sum + c.pct, 0)).toBeCloseTo(100);
   });
 });
 
@@ -2181,6 +2281,93 @@ describe('gateReasonTrendSignal', () => {
     expect(signal.partial).toBe(true);
     expect(signal.previousIterations).toEqual([2]);
     expect(signal.recentIterations).toEqual([3]);
+  });
+});
+
+describe('gateReasonComfortTrendSignal', () => {
+  function run(iteration: number, gateReasons: string[]) {
+    return makeRun({ iteration, verdict: gateReasons.length === 0 ? 'merged' : 'abandoned', gateReasons });
+  }
+
+  it('runsが0〜1件なら null を返す', () => {
+    expect(gateReasonComfortTrendSignal([])).toBeNull();
+    expect(gateReasonComfortTrendSignal([run(1, [])])).toBeNull();
+  });
+
+  it('直近ウィンドウが全て快適（gateReasons空）で直前が全て不快適なら improving と判定し、比率を正しく返す', () => {
+    const runs = [
+      run(1, ['e2e(Playwright) が失敗している']),
+      run(2, ['e2e(Playwright) が失敗している']),
+      run(3, ['e2e(Playwright) が失敗している']),
+      run(4, []),
+      run(5, []),
+      run(6, []),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(GATE_REASON_COMFORT_TREND_WINDOW);
+    expect(signal.partial).toBe(false);
+    expect(signal.previousIterations).toEqual([1, 2, 3]);
+    expect(signal.recentIterations).toEqual([4, 5, 6]);
+    expect(signal.previousComfortRatio).toBe(0);
+    expect(signal.recentComfortRatio).toBe(1);
+    expect(signal.delta).toBeCloseTo(1);
+    expect(signal.direction).toBe('improving');
+  });
+
+  it('直前が快適(全てgateReasons空)で直近が不快適(全て非空)なら worsening と判定する', () => {
+    const runs = [
+      run(1, []),
+      run(2, []),
+      run(3, []),
+      run(4, ['adversary が approve していない']),
+      run(5, ['adversary が approve していない']),
+      run(6, ['adversary が approve していない']),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.previousComfortRatio).toBe(1);
+    expect(signal.recentComfortRatio).toBe(0);
+    expect(signal.delta).toBeCloseTo(-1);
+    expect(signal.direction).toBe('worsening');
+  });
+
+  it('直近と直前の差が閾値未満なら flat と判定する', () => {
+    // windowSize=3: 直前comfort率 2/3、直近comfort率 2/3 → 差0なので横ばい
+    const runs = [
+      run(1, []),
+      run(2, []),
+      run(3, ['e2e(Playwright) が失敗している']),
+      run(4, []),
+      run(5, []),
+      run(6, ['e2e(Playwright) が失敗している']),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.previousComfortRatio).toBeCloseTo(2 / 3);
+    expect(signal.recentComfortRatio).toBeCloseTo(2 / 3);
+    expect(signal.delta).toBeCloseTo(0);
+    expect(signal.direction).toBe('flat');
+  });
+
+  it('データ点が window*2 未満のときは実際の点数に縮小したwindowで比較し、partial=trueになる', () => {
+    const runs = [run(1, ['adversary が approve していない']), run(2, []), run(3, [])];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(1);
+    expect(signal.partial).toBe(true);
+    expect(signal.previousIterations).toEqual([2]);
+    expect(signal.recentIterations).toEqual([3]);
+    expect(signal.previousComfortRatio).toBe(1);
+    expect(signal.recentComfortRatio).toBe(1);
   });
 });
 
@@ -6329,6 +6516,57 @@ describe('adversaryApprovalCommentStats', () => {
   });
 });
 
+describe('reviseCountAdversaryComparison', () => {
+  it('run が無ければ空配列を返す', () => {
+    expect(reviseCountAdversaryComparison([])).toEqual([]);
+  });
+
+  it('全runがfailedのとき空配列を返す（reachedVerifyで除外されるため）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', reviseCycles: 1, adversary: { approved: false, summary: 'レビューに到達しなかった。' } }),
+      makeRun({ iteration: 2, verdict: 'failed', reviseCycles: 2, adversary: { approved: false, summary: 'レビューに到達しなかった。' } }),
+    ];
+    expect(reviseCountAdversaryComparison(runs)).toEqual([]);
+  });
+
+  it('単一bucketに承認/却下混在runが集まったときapprovalRate/meanSummaryLength/medianSummaryLengthを正しく算出する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'x'.repeat(10) } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'x'.repeat(20) } }),
+      makeRun({ iteration: 3, verdict: 'abandoned', reviseCycles: 1, adversary: { approved: false, summary: 'x'.repeat(60) } }),
+    ];
+    const [bucket1] = reviseCountAdversaryComparison(runs);
+    expect(bucket1.bucket).toBe('1');
+    expect(bucket1.count).toBe(3);
+    expect(bucket1.approvedCount).toBe(2);
+    expect(bucket1.approvalRate).toBeCloseTo(2 / 3, 10);
+    expect(bucket1.meanSummaryLength).toBeCloseTo(30, 10);
+    expect(bucket1.medianSummaryLength).toBeCloseTo(20, 10);
+    expect(bucket1.iterations).toEqual([1, 2, 3]);
+  });
+
+  it('データに出現しない区分（3+など）は結果に含めない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'ok' } }),
+    ];
+    const result = reviseCountAdversaryComparison(runs);
+    expect(result.map((b) => b.bucket)).toEqual(['0', '1']);
+    expect(result.some((b) => b.bucket === '3+')).toBe(false);
+  });
+
+  it('出現した区分は入力順に関係なく 0→1→2→3+ の順で返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'merged', reviseCycles: 5, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 2, verdict: 'merged', reviseCycles: 0, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 3, verdict: 'merged', reviseCycles: 2, adversary: { approved: true, summary: 'ok' } }),
+      makeRun({ iteration: 4, verdict: 'merged', reviseCycles: 1, adversary: { approved: true, summary: 'ok' } }),
+    ];
+    const result = reviseCountAdversaryComparison(runs);
+    expect(result.map((b) => b.bucket)).toEqual(['0', '1', '2', '3+']);
+  });
+});
+
 describe('recentAdversaryComments', () => {
   it('新しい順（iteration降順）に並べ、ADVERSARY_COMMENT_DIGEST_LIMIT件を超えない', () => {
     expect(ADVERSARY_COMMENT_DIGEST_LIMIT).toBe(5);
@@ -8985,6 +9223,114 @@ describe('dropoutStreaks', () => {
   });
 });
 
+describe('verdictLateralSlides', () => {
+  it('run が無い、または1件のみ（比較対象となる隣接ペアが無い）なら空配列を返す', () => {
+    expect(verdictLateralSlides([])).toEqual([]);
+    expect(verdictLateralSlides([makeRun({ iteration: 1, verdict: 'failed' })])).toEqual([]);
+  });
+
+  it(`shiftedFailureがLATERAL_SLIDE_MIN_CHAIN(${LATERAL_SLIDE_MIN_CHAIN})未満(0〜1回)しか連続しないと検知しない`, () => {
+    expect(LATERAL_SLIDE_MIN_CHAIN).toBe(2);
+    // 0回: 同型の足踏み(repeatedFailure)のみ
+    expect(
+      verdictLateralSlides([
+        makeRun({ iteration: 1, verdict: 'failed' }),
+        makeRun({ iteration: 2, verdict: 'failed' }),
+      ]),
+    ).toEqual([]);
+    // 1回: merged→failed(regressed)→needs-human(shiftedFailure x1)→merged(recovered)
+    expect(
+      verdictLateralSlides([
+        makeRun({ iteration: 1, verdict: 'merged' }),
+        makeRun({ iteration: 2, verdict: 'failed' }),
+        makeRun({ iteration: 3, verdict: 'needs-human' }),
+        makeRun({ iteration: 4, verdict: 'merged' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('ちょうど閾値(shiftedFailureが2連続=3反復)で1件検知し、データ終端はongoingと分類する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides).toHaveLength(1);
+    expect(slides[0]).toMatchObject({
+      startIteration: 1,
+      endIteration: 3,
+      length: 3,
+      verdicts: ['failed', 'needs-human', 'paused'],
+      iterations: [1, 2, 3],
+      distinctVerdictCount: 3,
+      outcome: 'ongoing',
+      endedInAbandonment: false,
+    });
+  });
+
+  it('区間直後にmergedが来ると recovered、データ終端でabandonedなら droppedOut と分類する', () => {
+    const recovered = verdictLateralSlides([
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ]);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ startIteration: 1, endIteration: 3, outcome: 'recovered' });
+
+    const droppedOut = verdictLateralSlides([
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ]);
+    expect(droppedOut).toHaveLength(1);
+    expect(droppedOut[0]).toMatchObject({ outcome: 'droppedOut', endedInAbandonment: true });
+  });
+
+  it('同じverdictへの足踏み(repeatedFailure)がチェーンを分断し、いずれも閾値未満なら検知しない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'needs-human' }),
+      makeRun({ iteration: 4, verdict: 'paused' }),
+    ];
+    expect(verdictLateralSlides(runs)).toEqual([]);
+  });
+
+  it('recovered/regressed遷移を挟んだ複数の独立した横滑り区間を、それぞれ独立に検知する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }), // recovered（1区間目を確定）
+      makeRun({ iteration: 5, verdict: 'merged' }), // sustainedSuccess
+      makeRun({ iteration: 6, verdict: 'failed' }), // regressed（分断のみ、チェーン開始はしない）
+      makeRun({ iteration: 7, verdict: 'needs-human' }),
+      makeRun({ iteration: 8, verdict: 'paused' }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides.map((s) => [s.startIteration, s.endIteration, s.outcome])).toEqual([
+      [1, 3, 'recovered'],
+      [6, 8, 'ongoing'],
+    ]);
+  });
+
+  it('distinctVerdictCountは非隣接の再出現を除いたユニーク数、totalCostUsdは区間内costの合計になる（末尾のmergedは含めない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', cost: { builderUsd: 0.5, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 0.6 } }),
+      makeRun({ iteration: 2, verdict: 'needs-human', cost: { builderUsd: 1.2, adversaryUsd: 0.3, ideationUsd: 0, totalUsd: 1.5 } }),
+      makeRun({ iteration: 3, verdict: 'failed', cost: { builderUsd: 0.9, adversaryUsd: 0, ideationUsd: 0.1, totalUsd: 1.0 } }),
+      makeRun({ iteration: 4, verdict: 'merged', cost: { builderUsd: 5, adversaryUsd: 5, ideationUsd: 5, totalUsd: 15 } }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides).toHaveLength(1);
+    expect(slides[0].verdicts).toEqual(['failed', 'needs-human', 'failed']);
+    expect(slides[0].distinctVerdictCount).toBe(2);
+    expect(slides[0].totalCostUsd).toBeCloseTo(3.1, 5);
+  });
+});
+
 describe('reviseSizeSuccessPatterns', () => {
   it('run が無ければ空配列を返す', () => {
     expect(reviseSizeSuccessPatterns([])).toEqual([]);
@@ -10286,5 +10632,359 @@ describe('costQualityElasticityTrendSignal', () => {
     const runs = makeElasticityRuns(costs, approved);
     expect(costQualityElasticityTrend(runs).at(-1)!.elasticity).toBeNull();
     expect(costQualityElasticityTrendSignal(runs)).toBeNull();
+  });
+});
+
+/** iteration 1..coverages.length の完了(reachedVerify)runを、coveragePct・reviseCycles・cost(USD)から生成する。 */
+function makeRetryCostRuns(coverages: number[], reviseCycles: number[], costs: number[]): RunRecord[] {
+  return coverages.map((coveragePct, i) =>
+    makeRun({
+      iteration: i + 1,
+      verify: { unitPassed: true, e2ePassed: true, coveragePct },
+      reviseCycles: reviseCycles[i],
+      cost: { builderUsd: costs[i], adversaryUsd: 0, ideationUsd: 0, totalUsd: costs[i] },
+    }),
+  );
+}
+
+describe('retryCostEfficiencyTrend', () => {
+  it('runsが空なら空配列、ウィンドウ2倍未満(境界値)も空配列', () => {
+    expect(retryCostEfficiencyTrend([])).toEqual([]);
+    const short = Array(RETRY_COST_EFFICIENCY_WINDOW * 2 - 1).fill(80);
+    expect(
+      retryCostEfficiencyTrend(makeRetryCostRuns(short, short.map(() => 1), short.map(() => 1))),
+    ).toEqual([]);
+  });
+
+  it('ちょうどRETRY_COST_EFFICIENCY_WINDOWの2倍件数だと点が1件だけ、期待通りの単価・効率になる（境界値）', () => {
+    const coverages = [90, 90, 90, 90, 90, 90];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const points = retryCostEfficiencyTrend(makeRetryCostRuns(coverages, cycles, costs));
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(6);
+    expect(points[0].previousCostPerReviseCycleUsd).toBeCloseTo(1, 10);
+    expect(points[0].recentCostPerReviseCycleUsd).toBeCloseTo(2, 10);
+    expect(points[0].costPerCycleChangePct).toBeCloseTo(100, 10);
+    expect(points[0].recentQualityPct).toBeCloseTo(90, 10);
+    expect(points[0].previousQualityPct).toBeCloseTo(90, 10);
+    expect(points[0].qualityDeclining).toBe(false);
+    expect(points[0].efficiency).toBeCloseTo(45, 10);
+  });
+
+  it('窓内にreviseCycles>0の反復が1件も無い場合、costPerReviseCycleUsd/efficiencyはnull（0除算にならない）', () => {
+    const coverages = [80, 80, 80, 60, 60, 60];
+    const cycles = [0, 0, 0, 0, 0, 0];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const points = retryCostEfficiencyTrend(makeRetryCostRuns(coverages, cycles, costs));
+    expect(points).toHaveLength(1);
+    expect(points[0].previousCostPerReviseCycleUsd).toBeNull();
+    expect(points[0].recentCostPerReviseCycleUsd).toBeNull();
+    expect(points[0].costPerCycleChangePct).toBeNull();
+    expect(points[0].efficiency).toBeNull();
+    expect(points[0].qualityDeclining).toBe(true);
+  });
+});
+
+describe('retryCostEfficiencyTrendSignal', () => {
+  it('runsが空、またはウィンドウ2倍未満(境界値)ならnull', () => {
+    expect(retryCostEfficiencyTrendSignal([])).toBeNull();
+    const short = Array(RETRY_COST_EFFICIENCY_WINDOW * 2 - 1).fill(80);
+    expect(
+      retryCostEfficiencyTrendSignal(makeRetryCostRuns(short, short.map(() => 1), short.map(() => 1))),
+    ).toBeNull();
+  });
+
+  it('品質悪化(直近<直前)かつrevise単価が閾値を超えて上昇していると worsening', () => {
+    const coverages = [90, 90, 90, 50, 50, 50];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [1, 1, 1, 4, 4, 4]; // per-cycle 1 → 4 (+300%)
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.latestCostPerCycleChangePct).toBeCloseTo(300, 10);
+    expect(signal!.qualityDeclining).toBe(true);
+    expect(signal!.direction).toBe('worsening');
+  });
+
+  it('品質改善(直近>直前)かつrevise単価が閾値を超えて下落していると improving', () => {
+    const coverages = [50, 50, 50, 90, 90, 90];
+    const cycles = [1, 1, 1, 1, 1, 1];
+    const costs = [4, 4, 4, 1, 1, 1]; // per-cycle 4 → 1 (-75%)
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestCostPerCycleChangePct).toBeCloseTo(-75, 10);
+    expect(signal!.qualityDeclining).toBe(false);
+    expect(signal!.direction).toBe('improving');
+  });
+
+  it('前ウィンドウにrevise発生反復が無くcostPerCycleChangePctがnullなら flat', () => {
+    const coverages = [80, 80, 80, 60, 60, 60];
+    const cycles = [0, 0, 0, 0, 0, 0];
+    const costs = [1, 1, 1, 2, 2, 2];
+    const runs = makeRetryCostRuns(coverages, cycles, costs);
+    const signal = retryCostEfficiencyTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestCostPerCycleChangePct).toBeNull();
+    expect(signal!.direction).toBe('flat');
+  });
+});
+
+const GATE_TREND_VERIFY_REASON = 'verify(lint/typecheck/unit/build) が失敗している';
+const GATE_TREND_E2E_REASON = 'e2e(Playwright) が失敗している';
+const GATE_TREND_SONNET = 'claude-sonnet-5';
+const GATE_TREND_HAIKU = 'claude-haiku-4-5';
+
+/** iteration=start..start+count-1 の反復を同一builder/reasonで生成する。 */
+function makeGateTrendRuns(start: number, count: number, builder: string, reason: string): RunRecord[] {
+  return Array.from({ length: count }, (_, i) =>
+    makeRun({
+      iteration: start + i,
+      verdict: 'abandoned',
+      gateReasons: [reason],
+      models: { builder, adversary: GATE_TREND_HAIKU, ideation: GATE_TREND_HAIKU },
+    }),
+  );
+}
+
+describe('builderModelGateReasonCorrelationTrend', () => {
+  it('runsが空、またはgateReasons付き反復が窓幅未満(境界値)なら空配列', () => {
+    expect(builderModelGateReasonCorrelationTrend([])).toEqual([]);
+    const short = makeGateTrendRuns(1, BUILDER_MODEL_GATE_REASON_TREND_WINDOW - 1, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON);
+    expect(builderModelGateReasonCorrelationTrend(short)).toEqual([]);
+  });
+
+  it('出現件数が最小閾値未満のセルはliftが最大でも最大lift候補から除外される', () => {
+    // haiku/e2eFailed(count=1,lift=5)は窓内最大だがMIN_COUNT(2)未満で除外され、sonnet/verifyFailed(count=4,lift=1.25)が選ばれる
+    const runs = [
+      ...makeGateTrendRuns(1, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+      ...makeGateTrendRuns(2, 4, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    ];
+    const points = builderModelGateReasonCorrelationTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(5);
+    expect(points[0].model).toBe(GATE_TREND_SONNET);
+    expect(points[0].category).toBe('verifyFailed');
+    expect(points[0].maxLift).toBeCloseTo(1.25, 10);
+    expect(points[0].count).toBe(4);
+    expect(points[0].count).toBeGreaterThanOrEqual(BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT);
+  });
+
+  it('modelとreasonの支配権が窓のスライドとともに入れ替わる', () => {
+    const runs = [
+      ...makeGateTrendRuns(1, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+      ...makeGateTrendRuns(6, 5, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+    ];
+    const points = builderModelGateReasonCorrelationTrend(runs);
+    const expected = [
+      { iteration: 5, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 1, count: 5 },
+      { iteration: 6, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 1.25, count: 4 },
+      { iteration: 7, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 2.5, count: 2 },
+      { iteration: 8, model: GATE_TREND_SONNET, category: 'verifyFailed', maxLift: 2.5, count: 2 },
+      { iteration: 9, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 1.25, count: 4 },
+      { iteration: 10, model: GATE_TREND_HAIKU, category: 'e2eFailed', maxLift: 1, count: 5 },
+    ];
+    expect(points).toHaveLength(expected.length);
+    points.forEach((p, idx) => {
+      expect(p.iteration).toBe(expected[idx].iteration);
+      expect(p.model).toBe(expected[idx].model);
+      expect(p.category).toBe(expected[idx].category);
+      expect(p.maxLift).toBeCloseTo(expected[idx].maxLift, 10);
+      expect(p.count).toBe(expected[idx].count);
+    });
+  });
+});
+
+describe('builderModelGateReasonCorrelationTrendSignal', () => {
+  it('runsが空、またはtrendの点が1件のみ(過去点が無い)ならnull', () => {
+    expect(builderModelGateReasonCorrelationTrendSignal([])).toBeNull();
+    const oneWindow = makeGateTrendRuns(1, BUILDER_MODEL_GATE_REASON_TREND_WINDOW, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON);
+    expect(builderModelGateReasonCorrelationTrendSignal(oneWindow)).toBeNull();
+  });
+
+  it('直近maxLiftが過去平均よりちょうどBUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD分強含み(境界値)なら intensifying', () => {
+    // 窓0(反復1-5,sonnetのみ,lift1)→窓1(反復2-6,sonnet4+haiku1,lift1.25) delta=+0.25=閾値ちょうど（未満だけがflat）
+    const runs = [
+      ...makeGateTrendRuns(1, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+      ...makeGateTrendRuns(6, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+    ];
+    const signal = builderModelGateReasonCorrelationTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.sampleSize).toBe(1);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.latestMaxLift).toBeCloseTo(1.25, 10);
+    expect(signal!.latestMaxLift - signal!.historicalAvgMaxLift).toBeCloseTo(BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD, 10);
+    expect(signal!.direction).toBe('intensifying');
+  });
+
+  it('直近maxLiftが過去平均よりちょうどBUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD分弱含み(境界値)なら easing', () => {
+    // 窓0(反復1-5,sonnet4+haiku1,lift1.25)→窓1(反復2-6,sonnetのみ,lift1.0) delta=-0.25=閾値ちょうど(マイナス)なので easing
+    const runs = [
+      ...makeGateTrendRuns(1, 1, GATE_TREND_HAIKU, GATE_TREND_E2E_REASON),
+      ...makeGateTrendRuns(2, 5, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    ];
+    const signal = builderModelGateReasonCorrelationTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    expect(signal!.latestIteration).toBe(6);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1.25, 10);
+    expect(signal!.latestMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.latestMaxLift - signal!.historicalAvgMaxLift).toBeCloseTo(-BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD, 10);
+    expect(signal!.direction).toBe('easing');
+  });
+
+  it('全窓を通じて単一モデルのみでmaxLiftが常に1のままなら flat', () => {
+    const signal = builderModelGateReasonCorrelationTrendSignal(
+      makeGateTrendRuns(1, 6, GATE_TREND_SONNET, GATE_TREND_VERIFY_REASON),
+    );
+    expect(signal).not.toBeNull();
+    expect(signal!.latestMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.historicalAvgMaxLift).toBeCloseTo(1, 10);
+    expect(signal!.direction).toBe('flat');
+  });
+});
+
+describe('operatingHourSpectrum', () => {
+  it('runsが空なら空配列を返す', () => {
+    expect(operatingHourSpectrum([])).toEqual([]);
+  });
+
+  it('UTC跨ぎでJST日付が変わるケース: UTC 20:00(金曜)はJST翌05:00(土曜)になり、hour=5のnightバケツに計上される', () => {
+    // 2026-07-24T20:00:00Z (Fri) + 9h = 2026-07-25T05:00 (Sat, JST)
+    const runs = [makeRun({ startedAt: '2026-07-24T20:00:00Z' })];
+    const spectrum = operatingHourSpectrum(runs);
+    expect(spectrum).toHaveLength(24);
+    const bucket = spectrum.find((b) => b.hour === 5)!;
+    expect(bucket.nightCount).toBe(1);
+    expect(bucket.businessCount).toBe(0);
+    // 他の23バケツは0件のまま
+    expect(spectrum.filter((b) => b.businessCount + b.nightCount > 0)).toHaveLength(1);
+  });
+
+  it('平日9:00(JST)は営業時間内境界としてbusinessCountに計上される', () => {
+    // 2026-07-24T00:00:00Z (Fri) + 9h = 2026-07-24T09:00 JST
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T00:00:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 9)!;
+    expect(bucket.businessCount).toBe(1);
+    expect(bucket.nightCount).toBe(0);
+  });
+
+  it('18:00(JST)は夜間境界としてnightCountに計上される(平日でも18時台はnight)', () => {
+    // 2026-07-24T09:00:00Z + 9h = 2026-07-24T18:00 JST
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T09:00:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 18)!;
+    expect(bucket.nightCount).toBe(1);
+    expect(bucket.businessCount).toBe(0);
+  });
+
+  it('同じ時台(10時)でも平日の反復はbusinessCount、土曜の反復はnightCountに分かれて計上される', () => {
+    // 2026-07-24T01:00:00Z (Fri) + 9h = 2026-07-24T10:00 JST（平日・営業時間内）
+    // 2026-07-25T01:00:00Z (Sat) + 9h = 2026-07-25T10:00 JST（土曜・時刻だけ見れば営業時間内だが夜間扱い）
+    const runs = [
+      makeRun({ iteration: 1, startedAt: '2026-07-24T01:00:00Z' }),
+      makeRun({ iteration: 2, startedAt: '2026-07-25T01:00:00Z' }),
+    ];
+    const bucket = operatingHourSpectrum(runs).find((b) => b.hour === 10)!;
+    expect(bucket.businessCount).toBe(1);
+    expect(bucket.nightCount).toBe(1);
+  });
+
+  it('startedAtが不正(Dateとしてparse不能)な反復しか無ければ空配列を返す', () => {
+    const runs = [makeRun({ startedAt: 'not-a-date' })];
+    expect(operatingHourSpectrum(runs)).toEqual([]);
+  });
+
+  it('有効なstartedAtの反復が1件でもあれば、不正な反復を除外した上で24バケツ全てを返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, startedAt: '2026-07-24T00:00:00Z' }), // JST 09:00
+      makeRun({ iteration: 2, startedAt: 'not-a-date' }),
+    ];
+    const spectrum = operatingHourSpectrum(runs);
+    expect(spectrum).toHaveLength(24);
+    expect(spectrum.reduce((sum, b) => sum + b.businessCount + b.nightCount, 0)).toBe(1);
+  });
+});
+
+describe('operatingHourCategorySummary', () => {
+  it('runsが空なら空配列を返す', () => {
+    expect(operatingHourCategorySummary([])).toEqual([]);
+  });
+
+  it('startedAtが不正な反復しか無ければ空配列を返す', () => {
+    expect(operatingHourCategorySummary([makeRun({ startedAt: 'invalid' })])).toEqual([]);
+  });
+
+  it('平日夜間(UTC 20:00→JST翌05:00、2026-07-24は金曜)はnightカテゴリにのみ計上される', () => {
+    const runs = [makeRun({ startedAt: '2026-07-24T20:00:00Z', verdict: 'merged' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('night');
+    expect(summary[0].count).toBe(1);
+  });
+
+  it('平日営業時間内(UTC 01:00→JST10:00、2026-07-24は金曜)はbusinessカテゴリにのみ計上される', () => {
+    const runs = [makeRun({ startedAt: '2026-07-24T01:00:00Z', verdict: 'merged' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('business');
+    expect(summary[0].count).toBe(1);
+  });
+
+  it('土曜日終日は時刻が営業時間内(9-18時)でも夜間扱いになる', () => {
+    // 2026-07-25T01:00:00Z (Sat) + 9h = 2026-07-25T10:00 JST（土曜10時、時刻だけ見れば営業時間内）
+    const runs = [makeRun({ startedAt: '2026-07-25T01:00:00Z' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('night');
+  });
+
+  it('business/nightそれぞれのマージ率・平均コスト・平均所要時間を集計する', () => {
+    const runs = [
+      // business: 平日10:00 JST(2026-07-24 Fri), 2件中1件merged
+      makeRun({
+        iteration: 1,
+        startedAt: '2026-07-24T01:00:00Z',
+        verdict: 'merged',
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+        durationSec: 100,
+      }),
+      makeRun({
+        iteration: 2,
+        startedAt: '2026-07-24T02:00:00Z', // JST 11:00, business
+        verdict: 'failed',
+        cost: { builderUsd: 3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 3 },
+        durationSec: 300,
+      }),
+      // night: 平日夜間(JST翌05:00), 2件中2件merged
+      makeRun({
+        iteration: 3,
+        startedAt: '2026-07-24T20:00:00Z',
+        verdict: 'merged',
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+        durationSec: 200,
+      }),
+      makeRun({
+        iteration: 4,
+        startedAt: '2026-07-24T21:00:00Z', // JST翌06:00, night
+        verdict: 'merged',
+        cost: { builderUsd: 4, adversaryUsd: 0, ideationUsd: 0, totalUsd: 4 },
+        durationSec: 400,
+      }),
+    ];
+    const summary = operatingHourCategorySummary(runs);
+    const business = summary.find((s) => s.category === 'business')!;
+    const night = summary.find((s) => s.category === 'night')!;
+
+    expect(business.count).toBe(2);
+    expect(business.mergedRate).toBeCloseTo(0.5);
+    expect(business.avgCostUsd).toBeCloseTo(2); // (1+3)/2
+    expect(business.avgDurationSec).toBeCloseTo(200); // (100+300)/2
+
+    expect(night.count).toBe(2);
+    expect(night.mergedRate).toBeCloseTo(1);
+    expect(night.avgCostUsd).toBeCloseTo(3); // (2+4)/2
+    expect(night.avgDurationSec).toBeCloseTo(300); // (200+400)/2
   });
 });

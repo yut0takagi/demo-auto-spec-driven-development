@@ -1,0 +1,42 @@
+{
+  "id": "20260725T055433Z-253",
+  "iteration": 186,
+  "issue": {
+    "number": 253,
+    "title": "Revise 回数別の Adversary 承認率・レビュー文字数比較パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/253-revise-adversary",
+  "startedAt": "2026-07-25T05:54:33Z",
+  "finishedAt": "2026-07-25T06:06:56Z",
+  "durationSec": 743,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 268,
+  "adversary": {
+    "approved": true,
+    "summary": "Revise回数別のAdversary承認率・レビュー文字数比較パネルを正確に実装。failed runを除外し、承認率・平均/中央値を正確に計算。テストが計算ロジック・フィルタ・順序を実質的に検証している。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 347,
+  "cost": {
+    "builderUsd": 2.597181,
+    "adversaryUsd": 0.111301,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.6504542000000001,
+    "totalUsd": 3.358936
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

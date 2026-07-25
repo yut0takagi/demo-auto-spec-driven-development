@@ -5,6 +5,8 @@ import { ReviseStopPatternByModelPanel } from '@/components/ReviseStopPatternByM
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { ReviseCycleCostRecoveryPanel } from '@/components/ReviseCycleCostRecoveryPanel';
+import { ReviseCountAdversaryApprovalPanel } from '@/components/ReviseCountAdversaryApprovalPanel';
+import { RetryCostEfficiencyTrendPanel } from '@/components/RetryCostEfficiencyTrendPanel';
 import { ReviseSizeSuccessPatternPanel } from '@/components/ReviseSizeSuccessPatternPanel';
 import { RevisionSizeCurvePanel } from '@/components/RevisionSizeCurvePanel';
 import { VerdictDurationComparisonPanel } from '@/components/VerdictDurationComparisonPanel';
@@ -12,6 +14,7 @@ import { MergePathLengthByVerdictPanel } from '@/components/MergePathLengthByVer
 import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { VerdictTransitionRootCausePanel } from '@/components/VerdictTransitionRootCausePanel';
 import { VerdictJumpAnomalyPanel } from '@/components/VerdictJumpAnomalyPanel';
+import { VerdictLateralSlidePanel } from '@/components/VerdictLateralSlidePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
 import { E2eBuilderWorkloadSeparationPanel } from '@/components/E2eBuilderWorkloadSeparationPanel';
@@ -36,6 +39,8 @@ export default function RevisePage() {
         <ReviseCyclesByVerdictPanel runs={runs} />
         <ReviseVerdictMatrixPanel runs={runs} />
         <ReviseCycleCostRecoveryPanel runs={runs} />
+        <ReviseCountAdversaryApprovalPanel runs={runs} />
+        <RetryCostEfficiencyTrendPanel runs={runs} />
         <ReviseSizeSuccessPatternPanel runs={runs} />
         <RevisionSizeCurvePanel runs={runs} />
         <VerdictDurationComparisonPanel runs={runs} />
@@ -43,6 +48,7 @@ export default function RevisePage() {
         <VerdictTransitionPanel runs={runs} />
         <VerdictTransitionRootCausePanel runs={runs} />
         <VerdictJumpAnomalyPanel runs={runs} />
+        <VerdictLateralSlidePanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
         <E2eBuilderWorkloadSeparationPanel runs={runs} />
