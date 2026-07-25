@@ -10515,47 +10515,44 @@ describe('operatingHourSpectrum', () => {
     expect(operatingHourSpectrum([])).toEqual([]);
   });
 
-  it('UTC跨ぎでJST日付が変わるケース: UTC 20:00(金曜)はJST翌05:00(土曜)になり、hour=5のバケツに計上される', () => {
+  it('UTC跨ぎでJST日付が変わるケース: UTC 20:00(金曜)はJST翌05:00(土曜)になり、hour=5のnightバケツに計上される', () => {
     // 2026-07-24T20:00:00Z (Fri) + 9h = 2026-07-25T05:00 (Sat, JST)
     const runs = [makeRun({ startedAt: '2026-07-24T20:00:00Z' })];
     const spectrum = operatingHourSpectrum(runs);
     expect(spectrum).toHaveLength(24);
     const bucket = spectrum.find((b) => b.hour === 5)!;
-    expect(bucket.count).toBe(1);
-    expect(bucket.category).toBe('night');
+    expect(bucket.nightCount).toBe(1);
+    expect(bucket.businessCount).toBe(0);
     // 他の23バケツは0件のまま
-    expect(spectrum.filter((b) => b.count > 0)).toHaveLength(1);
+    expect(spectrum.filter((b) => b.businessCount + b.nightCount > 0)).toHaveLength(1);
   });
 
-  it('平日9:00(JST)は営業時間内境界としてbusinessタグが付く', () => {
+  it('平日9:00(JST)は営業時間内境界としてbusinessCountに計上される', () => {
     // 2026-07-24T00:00:00Z (Fri) + 9h = 2026-07-24T09:00 JST
     const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T00:00:00Z' })]);
     const bucket = spectrum.find((b) => b.hour === 9)!;
-    expect(bucket.count).toBe(1);
-    expect(bucket.category).toBe('business');
+    expect(bucket.businessCount).toBe(1);
+    expect(bucket.nightCount).toBe(0);
   });
 
-  it('平日17:59(JST)は営業時間内境界としてbusinessタグが付く(hour=17)', () => {
-    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T08:59:00Z' })]);
-    const bucket = spectrum.find((b) => b.hour === 17)!;
-    expect(bucket.count).toBe(1);
-    expect(bucket.category).toBe('business');
-  });
-
-  it('18:00(JST)は夜間境界としてnightタグが付く', () => {
+  it('18:00(JST)は夜間境界としてnightCountに計上される(平日でも18時台はnight)', () => {
     // 2026-07-24T09:00:00Z + 9h = 2026-07-24T18:00 JST
     const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T09:00:00Z' })]);
     const bucket = spectrum.find((b) => b.hour === 18)!;
-    expect(bucket.count).toBe(1);
-    expect(bucket.category).toBe('night');
+    expect(bucket.nightCount).toBe(1);
+    expect(bucket.businessCount).toBe(0);
   });
 
-  it('8:59(JST)は夜間境界としてnightタグが付く(hour=8)', () => {
-    // 2026-07-23T23:59:00Z + 9h = 2026-07-24T08:59 JST
-    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-23T23:59:00Z' })]);
-    const bucket = spectrum.find((b) => b.hour === 8)!;
-    expect(bucket.count).toBe(1);
-    expect(bucket.category).toBe('night');
+  it('同じ時台(10時)でも平日の反復はbusinessCount、土曜の反復はnightCountに分かれて計上される', () => {
+    // 2026-07-24T01:00:00Z (Fri) + 9h = 2026-07-24T10:00 JST（平日・営業時間内）
+    // 2026-07-25T01:00:00Z (Sat) + 9h = 2026-07-25T10:00 JST（土曜・時刻だけ見れば営業時間内だが夜間扱い）
+    const runs = [
+      makeRun({ iteration: 1, startedAt: '2026-07-24T01:00:00Z' }),
+      makeRun({ iteration: 2, startedAt: '2026-07-25T01:00:00Z' }),
+    ];
+    const bucket = operatingHourSpectrum(runs).find((b) => b.hour === 10)!;
+    expect(bucket.businessCount).toBe(1);
+    expect(bucket.nightCount).toBe(1);
   });
 
   it('startedAtが不正(Dateとしてparse不能)な反復しか無ければ空配列を返す', () => {
@@ -10570,7 +10567,7 @@ describe('operatingHourSpectrum', () => {
     ];
     const spectrum = operatingHourSpectrum(runs);
     expect(spectrum).toHaveLength(24);
-    expect(spectrum.reduce((sum, b) => sum + b.count, 0)).toBe(1);
+    expect(spectrum.reduce((sum, b) => sum + b.businessCount + b.nightCount, 0)).toBe(1);
   });
 });
 

@@ -7370,41 +7370,37 @@ function operatingHourCategoryOf(run: RunRecord): OperatingHourCategory {
   return isWeekday && isBusinessHour ? 'business' : 'night';
 }
 
-/** hourのみ（曜日は問わない）に基づく分類。9-18時台はbusiness、それ以外はnight。 */
-function hourOnlyCategory(hour: number): OperatingHourCategory {
-  return hour >= OPERATING_HOUR_START && hour < OPERATING_HOUR_END ? 'business' : 'night';
-}
-
 export interface OperatingHourBucket {
   /** JSTの時(0-23) */
   hour: number;
-  /** hourのみに基づく分類（曜日は問わない）。9-18時台はbusiness、それ以外はnight。 */
-  category: OperatingHourCategory;
-  count: number;
+  /** この時台に開始したうちoperatingHourCategoryOf基準でbusinessと判定された件数 */
+  businessCount: number;
+  /** この時台に開始したうちoperatingHourCategoryOf基準でnightと判定された件数 */
+  nightCount: number;
 }
 
 /**
- * JST 0-23時の時間帯ごとの反復件数ヒストグラム。GateReasonSeveritySpectrumPanelと
- * 同様のバー表示用に、各バケツ(hour)にbusiness/nightのカテゴリタグを付与する
- * （曜日を問わずhourだけで判定するため、operatingHourCategorySummaryのbusiness/night分類とは
- * 独立: 同じ時刻でも曜日次第でカテゴリ別サマリ側の扱いは変わりうる）。
+ * JST 0-23時の時間帯ごとの反復件数ヒストグラム。各バケツ(hour)をoperatingHourCategorySummary
+ * と同じoperatingHourCategoryOf（平日9-18時のみbusiness、土日を含むそれ以外はnight）で
+ * business/nightに内訳分解する。同じ時台でも曜日次第でどちらにも属しうるため、件数は
+ * 単一カテゴリのタグではなくbusinessCount/nightCountの内訳として持つ。
  * startedAtが不正（Dateとしてparse不能）な反復は集計から除外する。
  * runs=[]、またはstartedAtが有効な反復が1件も無い場合は空配列を返す。
  */
 export function operatingHourSpectrum(runs: RunRecord[]): OperatingHourBucket[] {
-  const counts = new Array(24).fill(0) as number[];
+  const buckets = Array.from({ length: 24 }, (_, hour) => ({ hour, businessCount: 0, nightCount: 0 }));
   let validCount = 0;
   for (const run of runs) {
     if (!isValidStartedAt(run.startedAt)) continue;
-    counts[toJstHour(run.startedAt)]++;
+    const bucket = buckets[toJstHour(run.startedAt)];
+    if (operatingHourCategoryOf(run) === 'business') {
+      bucket.businessCount++;
+    } else {
+      bucket.nightCount++;
+    }
     validCount++;
   }
-  if (validCount === 0) return [];
-  return counts.map((count, hour) => ({
-    hour,
-    category: hourOnlyCategory(hour),
-    count,
-  }));
+  return validCount === 0 ? [] : buckets;
 }
 
 export interface OperatingHourCategorySummary {
