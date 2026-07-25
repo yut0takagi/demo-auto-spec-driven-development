@@ -1,5 +1,5 @@
-from orchestrator.review import ADVERSARY_PROMPT_TEMPLATE, parse_adversary_review
-from orchestrator.review import PLAN_REVIEW_PROMPT_TEMPLATE, review_plan
+from orchestrator import prompts
+from orchestrator.review import parse_adversary_review, review_plan
 
 
 def test_parses_fenced_json_verdict():
@@ -37,8 +37,8 @@ def test_non_boolean_approved_is_treated_as_rejection():
 
 
 def test_plan_review_prompt_is_fair_and_has_placeholders():
-    t = PLAN_REVIEW_PROMPT_TEMPLATE
-    assert "{task}" in t and "{plan}" in t
+    t = prompts.load("plan_review")
+    assert "{{task}}" in t and "{{plan}}" in t
     assert "公正" in t          # 公正レビュー基調（reject バイアスにしない）
     assert "approved" in t       # JSON 契約
 
@@ -59,9 +59,10 @@ def test_review_plan_parses_verdict():
 def test_prompt_template_is_fair_and_has_json_contract():
     # 「却下理由探し」ではなく公正な判定を指示する（要件を満たし壊していなければ承認）。
     # 却下は具体的な blocking 欠陥がある場合のみ。JSON 契約とプレースホルダは維持する。
-    assert "公正" in ADVERSARY_PROMPT_TEMPLATE
-    assert "承認" in ADVERSARY_PROMPT_TEMPLATE
-    assert "blocking" in ADVERSARY_PROMPT_TEMPLATE
-    assert "approved" in ADVERSARY_PROMPT_TEMPLATE
-    assert "{task}" in ADVERSARY_PROMPT_TEMPLATE
-    assert "{diff}" in ADVERSARY_PROMPT_TEMPLATE
+    t = prompts.load("adversary")
+    assert "公正" in t
+    assert "承認" in t
+    assert "blocking" in t
+    assert "approved" in t
+    assert "{{task}}" in t
+    assert "{{diff}}" in t

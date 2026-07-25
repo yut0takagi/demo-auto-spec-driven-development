@@ -1,0 +1,42 @@
+{
+  "id": "20260724T192404Z-0",
+  "iteration": 156,
+  "issue": {
+    "number": 0,
+    "title": "(不明: 例外発生時点で issue を特定できなかった)",
+    "labels": []
+  },
+  "branch": "unknown",
+  "startedAt": "2026-07-24T19:24:04Z",
+  "finishedAt": "2026-07-24T19:24:04Z",
+  "durationSec": 0,
+  "reviseCycles": 0,
+  "verdict": "failed",
+  "gateReasons": [
+    "反復が例外で異常終了した: GitHubError(\"git push -u origin loop/242-verdict failed: To https://github.com/yut0takagi/demo-auto-spec-driven-development\\n ! [rejected]        loop/242-verdict -> loop/242-verdict (non-fast-forward)\\nerror: failed to push some refs to 'https://github.com/yut0takagi/demo-auto-spec-driven-development'\\nhint: Updates were rejected because the tip of your current branch is behind\\nhint: its remote counterpart. If you want to integrate the remote changes,\\nhint: use 'git pull' before pushing again.\\nhint: See the 'Note about fast-forwards' in 'git push --help' for details.\")"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": false,
+    "summary": "例外により審査に到達しなかった"
+  },
+  "verify": {
+    "unitPassed": false,
+    "e2ePassed": false,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.0,
+    "adversaryUsd": 0.0,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.0,
+    "totalUsd": 0.0
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

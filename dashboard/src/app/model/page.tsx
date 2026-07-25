@@ -6,11 +6,13 @@ import { ModelApprovalMergeComparisonPanel } from '@/components/ModelApprovalMer
 import { AdversaryOutcomeDivergencePanel } from '@/components/AdversaryOutcomeDivergencePanel';
 import { AdversaryModelVerdictMissMatrixPanel } from '@/components/AdversaryModelVerdictMissMatrixPanel';
 import { BuilderModelSwitchAbPanel } from '@/components/BuilderModelSwitchAbPanel';
+import { ModelSwitchPerformanceGapPanel } from '@/components/ModelSwitchPerformanceGapPanel';
 import { ModelApprovalRateTrendPanel } from '@/components/ModelApprovalRateTrendPanel';
 import { ModelSkillStratificationPanel } from '@/components/ModelSkillStratificationPanel';
 import { ModelPairCompatibilityDivergencePanel } from '@/components/ModelPairCompatibilityDivergencePanel';
 import { ModelIssueLabelSuccessMatrixPanel } from '@/components/ModelIssueLabelSuccessMatrixPanel';
 import { BuilderModelGateReasonCorrelationPanel } from '@/components/BuilderModelGateReasonCorrelationPanel';
+import { ModelCostRoleBiasPanel } from '@/components/ModelCostRoleBiasPanel';
 
 export default function ModelPage() {
   const { runs } = loadRuns();
@@ -32,11 +34,13 @@ export default function ModelPage() {
         <AdversaryOutcomeDivergencePanel runs={runs} />
         <AdversaryModelVerdictMissMatrixPanel runs={runs} />
         <BuilderModelSwitchAbPanel runs={runs} />
+        <ModelSwitchPerformanceGapPanel runs={runs} />
         <ModelApprovalRateTrendPanel runs={runs} />
         <ModelSkillStratificationPanel runs={runs} />
         <ModelPairCompatibilityDivergencePanel runs={runs} />
         <ModelIssueLabelSuccessMatrixPanel runs={runs} />
         <BuilderModelGateReasonCorrelationPanel runs={runs} />
+        <ModelCostRoleBiasPanel runs={runs} />
       </div>
     </main>
   );

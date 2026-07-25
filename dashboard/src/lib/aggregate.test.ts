@@ -29,6 +29,7 @@ import {
   costEfficiency,
   costPerApprovedPrTrend,
   COST_PER_APPROVED_PR_TREND_LIMIT,
+  plannerActivity,
   reviseCyclesByModel,
   reviseStopPatternByModel,
   reviseCyclesByVerdict,
@@ -44,7 +45,9 @@ import {
   modelIssueLabelSuccessMatrix,
   modelConfidenceWeightedScores,
   modelEfficiencyByRole,
+  modelCostRoleBias,
   builderModelSwitchComparisons,
+  builderModelSwitchPerformanceGaps,
   approvalRateTrendByModel,
   ideationFailureSummary,
   ideationFailureRateTrend,
@@ -56,6 +59,10 @@ import {
   cycleTimeTrendSignal,
   CYCLE_TIME_TREND_WINDOW,
   CYCLE_TIME_TREND_FLAT_THRESHOLD_PCT,
+  tokenEfficiencyTrend,
+  tokenEfficiencyTrendSignal,
+  TOKEN_EFFICIENCY_TREND_WINDOW,
+  TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT,
   timeToFirstPrTrend,
   timeToFirstPrTrendSignal,
   TIME_TO_FIRST_PR_TREND_WINDOW,
@@ -73,6 +80,7 @@ import {
   ADVERSARY_COMMENT_DIGEST_LIMIT,
   ideationCostQualityCorrelation,
   ideationProposalConsumption,
+  ideationConfidenceTrend,
   abandonedSummary,
   abandonedReasonBreakdown,
   abandonedReasonOverrepresentation,
@@ -80,6 +88,9 @@ import {
   abandonedRateTrend,
   abandonedIterationDetails,
   gateReasonChains,
+  gateReasonCooccurrencePairs,
+  gateReasonCooccurrenceClusters,
+  GATE_REASON_COOCCURRENCE_MIN_COUNT,
   gateReasonConsecutiveFailureChaos,
   gateReasonUnificationPatterns,
   gateReasonRecoverySteps,
@@ -102,6 +113,8 @@ import {
   ideationToStartLeadTimeTrendSignal,
   IDEATION_TO_START_LEAD_TIME_TREND_WINDOW,
   IDEATION_TO_START_LEAD_TIME_TREND_FLAT_THRESHOLD_PCT,
+  ideationAdoptionLeadTimeMatrix,
+  ideationAdoptionRateBucket,
   ideationStartSuccessSummary,
   ideationDropRateSignal,
   IDEATION_DROP_STALENESS_ITERATIONS,
@@ -114,6 +127,9 @@ import {
   verdictTransitions,
   verdictTransitionSummary,
   verdictTransitionRootCausePatterns,
+  verdictJumpAnomalies,
+  verdictJumpSummary,
+  VERDICT_JUMP_WINDOW,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
   reviseSizeSuccessPatterns,
@@ -147,6 +163,12 @@ import {
   GENERATION_RATE_WINDOW,
   GENERATION_RATE_SUSTAINABLE,
   GENERATION_RATE_ALERT_STREAK,
+  costQualityElasticityTrend,
+  costQualityElasticityTrendSignal,
+  ELASTICITY_WINDOW,
+  ideationGenerationDecaySignal,
+  GENERATION_DECAY_WINDOW,
+  GENERATION_DECAY_STREAK_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -2236,6 +2258,172 @@ describe('gateReasonChains', () => {
   });
 });
 
+describe('gateReasonCooccurrencePairs', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(gateReasonCooccurrencePairs([])).toEqual([]);
+  });
+
+  it('全runのgateReasonsが単一カテゴリのみなら、共起ペアは発生せず空配列を返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(gateReasonCooccurrencePairs(runs)).toEqual([]);
+  });
+
+  it('同一run内の2カテゴリを1回の共起として数え、該当反復を記録する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+    ];
+    const pairs = gateReasonCooccurrencePairs(runs);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].categories).toEqual(['e2eFailed', 'adversaryNotApproved']);
+    expect(pairs[0].count).toBe(1);
+    expect(pairs[0].iterations).toEqual([1]);
+  });
+
+  it('複数runにまたがる同じペアはcountが積み上がり、iterationsが昇順ユニークになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', 'e2e(Playwright) が失敗している'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'verify(lint/typecheck/unit/build) が失敗している'],
+      }),
+    ];
+    const pairs = gateReasonCooccurrencePairs(runs);
+    expect(pairs).toHaveLength(1);
+    expect(pairs[0].categories).toEqual(['verifyFailed', 'e2eFailed']);
+    expect(pairs[0].count).toBe(2);
+    expect(pairs[0].iterations).toEqual([1, 2]);
+  });
+});
+
+describe('gateReasonCooccurrenceClusters', () => {
+  it('runが無ければ空配列を返す', () => {
+    expect(gateReasonCooccurrenceClusters([])).toEqual([]);
+  });
+
+  it('全runのgateReasonsが単一カテゴリのみならクラスタは発生しない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+      makeRun({ iteration: 2, verdict: 'abandoned', gateReasons: ['e2e(Playwright) が失敗している'] }),
+    ];
+    expect(gateReasonCooccurrenceClusters(runs)).toEqual([]);
+  });
+
+  it('2カテゴリがGATE_REASON_COOCCURRENCE_MIN_COUNT以上共起すると1クラスタになる', () => {
+    expect(GATE_REASON_COOCCURRENCE_MIN_COUNT).toBe(2);
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['adversary が approve していない', 'e2e(Playwright) が失敗している'],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].categories).toEqual(['e2eFailed', 'adversaryNotApproved']);
+    expect(clusters[0].totalCooccurrences).toBe(2);
+    expect(clusters[0].pairs).toHaveLength(1);
+    expect(clusters[0].pairs[0].count).toBe(2);
+    expect(clusters[0].iterations).toEqual([1, 2]);
+  });
+
+  it('共起が1回のみ（閾値未満）のペアはクラスタ化されない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['e2e(Playwright) が失敗している', 'adversary が approve していない'],
+      }),
+    ];
+    expect(gateReasonCooccurrenceClusters(runs)).toEqual([]);
+    // 閾値を明示的に下げれば検出される
+    expect(gateReasonCooccurrenceClusters(runs, 1)).toHaveLength(1);
+  });
+
+  it('3カテゴリが互いに閾値以上共起する場合、3つの2要素クラスタに分裂せず推移的に1クラスタへ統合される', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: [
+          'verify(lint/typecheck/unit/build) が失敗している',
+          'e2e(Playwright) が失敗している',
+          'adversary が approve していない',
+        ],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: [
+          'verify(lint/typecheck/unit/build) が失敗している',
+          'e2e(Playwright) が失敗している',
+          'adversary が approve していない',
+        ],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(1);
+    expect(clusters[0].categories).toEqual(['verifyFailed', 'e2eFailed', 'adversaryNotApproved']);
+    expect(clusters[0].pairs).toHaveLength(3);
+    expect(clusters[0].totalCooccurrences).toBe(6);
+    expect(clusters[0].iterations).toEqual([1, 2]);
+  });
+
+  it('totalCooccurrences降順、同数はGATE_REASON_CATEGORY_ORDER順で安定ソートする', () => {
+    const runs = [
+      // verifyFailed × changedLinesExceeded を3反復共起
+      makeRun({
+        iteration: 1,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'abandoned',
+        gateReasons: ['verify(lint/typecheck/unit/build) が失敗している', '変更行数 500 が上限 400 を超えている'],
+      }),
+      // noChanges × crashed を2反復共起
+      makeRun({
+        iteration: 4,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった', '反復が例外で異常終了した: boom'],
+      }),
+      makeRun({
+        iteration: 5,
+        verdict: 'abandoned',
+        gateReasons: ['builder が変更を生成しなかった', '反復が例外で異常終了した: boom'],
+      }),
+    ];
+    const clusters = gateReasonCooccurrenceClusters(runs);
+    expect(clusters).toHaveLength(2);
+    expect(clusters[0].categories).toEqual(['verifyFailed', 'changedLinesExceeded']);
+    expect(clusters[0].totalCooccurrences).toBe(3);
+    expect(clusters[1].categories).toEqual(['noChanges', 'crashed']);
+    expect(clusters[1].totalCooccurrences).toBe(2);
+  });
+});
+
 describe('gateReasonConsecutiveFailureChaos', () => {
   it('runが無い/全runがmerged、またはgateReasonsを持つ反復が1件だけ（前後がmerged）なら空配列を返す（連続には2件以上必要）', () => {
     expect(gateReasonConsecutiveFailureChaos([])).toEqual([]);
@@ -2709,6 +2897,94 @@ describe('costEfficiency', () => {
     expect(e.totalCostUsd).toBeCloseTo(0.5, 6);
     expect(e.approvedPrCount).toBe(1);
     expect(e.usdPerApprovedPr).toBeCloseTo(0.5, 6);
+  });
+});
+
+describe('plannerActivity', () => {
+  it('全反復で plannerUsd が未記録（旧レコード）なら trackedCount 0・各率は null で NaN を出さない', () => {
+    const runs = [
+      makeRun({ iteration: 1, cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, totalUsd: 0.12 } }),
+      makeRun({ iteration: 2, cost: { builderUsd: 0.2, adversaryUsd: 0.02, ideationUsd: 0.02, totalUsd: 0.24 } }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(0);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeNull();
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    expect(a.pctOfTrackedCost).toBeNull();
+    expect(a.trend).toEqual([]);
+  });
+
+  it('plannerUsd は記録されているが全て0（機能未使用期間）なら稼働率は0%、平均コストはnull', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0, totalUsd: 0.12 },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.2, adversaryUsd: 0.02, ideationUsd: 0.02, plannerUsd: 0, totalUsd: 0.24 },
+      }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(2);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeCloseTo(0, 6);
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    // totalTrackedCost(0.36) > 0 かつ plannerコスト合計0なので0%（nullではない）
+    expect(a.pctOfTrackedCost).toBeCloseTo(0, 6);
+    expect(a.trend).toEqual([
+      { iteration: 1, active: false, usd: 0 },
+      { iteration: 2, active: false, usd: 0 },
+    ]);
+  });
+
+  it('アクティブ/非アクティブが混在する場合、稼働率とアクティブ平均コスト・コスト構成比を正しく計算する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0, totalUsd: 0.12 },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0.3, totalUsd: 0.42 },
+      }),
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.01, plannerUsd: 0.1, totalUsd: 0.22 },
+      }),
+      // plannerUsd 未記録の反復は tracked から除外される
+      makeRun({ iteration: 4, cost: { builderUsd: 0.5, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.5 } }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(3);
+    expect(a.activeCount).toBe(2);
+    expect(a.activationRatePct).toBeCloseTo((2 / 3) * 100, 6);
+    // アクティブ平均 = (0.3 + 0.1) / 2 = 0.2
+    expect(a.avgUsdPerActiveRun).toBeCloseTo(0.2, 6);
+    // 計測対象総コスト = 0.12+0.42+0.22 = 0.76、plannerコスト合計 = 0.4 → 約52.6%
+    expect(a.pctOfTrackedCost).toBeCloseTo((0.4 / 0.76) * 100, 6);
+    expect(a.trend).toEqual([
+      { iteration: 1, active: false, usd: 0 },
+      { iteration: 2, active: true, usd: 0.3 },
+      { iteration: 3, active: true, usd: 0.1 },
+    ]);
+  });
+
+  it('計測対象反復の総コストが0の境界値でも0除算でNaNにならず null を返す', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, plannerUsd: 0, totalUsd: 0 },
+      }),
+    ];
+    const a = plannerActivity(runs);
+    expect(a.trackedCount).toBe(1);
+    expect(a.activeCount).toBe(0);
+    expect(a.activationRatePct).toBeCloseTo(0, 6);
+    expect(a.avgUsdPerActiveRun).toBeNull();
+    expect(a.pctOfTrackedCost).toBeNull();
+    expect(Number.isNaN(a.pctOfTrackedCost)).toBe(false);
   });
 });
 
@@ -4158,6 +4434,106 @@ describe('modelEfficiencyByRole', () => {
   });
 });
 
+describe('modelCostRoleBias', () => {
+  it('runs が0件なら空配列を返す', () => {
+    expect(modelCostRoleBias([])).toEqual([]);
+  });
+
+  it('同一モデルがbuilder/adversary双方で使われ平均コスト差が大きい場合、level=highかつbiasedRoleは高コスト側になる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 3, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 3.05 },
+        models: { builder: 'shared-model', adversary: 'other-model', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 3, adversaryUsd: 0.05, ideationUsd: 0, totalUsd: 3.05 },
+        models: { builder: 'other-model', adversary: 'shared-model', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const shared = result.find((e) => e.model === 'shared-model')!;
+    expect(shared.builderCount).toBe(1);
+    expect(shared.builderAvgUsd).toBeCloseTo(3, 10);
+    expect(shared.adversaryCount).toBe(1);
+    expect(shared.adversaryAvgUsd).toBeCloseTo(0.05, 10);
+    expect(shared.ratio).toBeCloseTo(60, 10);
+    expect(shared.level).toBe('high');
+    expect(shared.biasedRole).toBe('builder');
+  });
+
+  it('平均コスト差が小さい場合はlevel=noneになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 1, adversaryUsd: 0.95, ideationUsd: 0, totalUsd: 1.95 },
+        models: { builder: 'shared-model', adversary: 'other-model', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 1, adversaryUsd: 0.95, ideationUsd: 0, totalUsd: 1.95 },
+        models: { builder: 'other-model', adversary: 'shared-model', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const shared = result.find((e) => e.model === 'shared-model')!;
+    expect(shared.ratio).toBeCloseTo(1 / 0.95, 10);
+    expect(shared.level).toBe('none');
+  });
+
+  it('片方の役割でしか登場しないモデルはratio=nullかつlevel=noneになる', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 5, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 5.1 },
+        models: { builder: 'builder-only', adversary: 'adversary-only', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const builderOnly = result.find((e) => e.model === 'builder-only')!;
+    expect(builderOnly.builderCount).toBe(1);
+    expect(builderOnly.adversaryCount).toBe(0);
+    expect(builderOnly.ratio).toBeNull();
+    expect(builderOnly.biasedRole).toBeNull();
+    expect(builderOnly.level).toBe('none');
+
+    const adversaryOnly = result.find((e) => e.model === 'adversary-only')!;
+    expect(adversaryOnly.adversaryCount).toBe(1);
+    expect(adversaryOnly.builderCount).toBe(0);
+    expect(adversaryOnly.ratio).toBeNull();
+    expect(adversaryOnly.level).toBe('none');
+  });
+
+  it('deltaUsdの絶対値降順でソートする', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        cost: { builderUsd: 10, adversaryUsd: 0, ideationUsd: 0, totalUsd: 10 },
+        models: { builder: 'big-delta', adversary: 'other-a', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 2,
+        cost: { builderUsd: 1, adversaryUsd: 0.9, ideationUsd: 0, totalUsd: 1.9 },
+        models: { builder: 'small-delta', adversary: 'other-b', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 3,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 },
+        models: { builder: 'other-a', adversary: 'big-delta', ideation: 'x' },
+      }),
+      makeRun({
+        iteration: 4,
+        cost: { builderUsd: 0, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0 },
+        models: { builder: 'other-b', adversary: 'small-delta', ideation: 'x' },
+      }),
+    ];
+    const result = modelCostRoleBias(runs);
+    const models = result.map((e) => e.model);
+    expect(models.indexOf('big-delta')).toBeLessThan(models.indexOf('small-delta'));
+  });
+});
+
 describe('builderModelSwitchComparisons', () => {
   it('run が0件なら空配列を返す', () => {
     expect(builderModelSwitchComparisons([])).toEqual([]);
@@ -4324,6 +4700,67 @@ describe('builderModelSwitchComparisons', () => {
     // マージ率の分母は全件(failed含む) 2件中 merged 1件 → 0.5
     expect(result[0].before.count).toBe(2);
     expect(result[0].before.mergeRate).toBe(0.5);
+  });
+});
+
+function makeSwitchRun(iteration: number, model: string, durationSec: number, costUsd = 0.1): RunRecord {
+  return makeRun({
+    iteration,
+    durationSec,
+    cost: { builderUsd: costUsd, adversaryUsd: 0, ideationUsd: 0, totalUsd: costUsd },
+    models: { builder: model, adversary: 'x', ideation: 'x' },
+  });
+}
+
+describe('builderModelSwitchPerformanceGaps', () => {
+  it('run が0件なら空配列を返す', () => {
+    expect(builderModelSwitchPerformanceGaps([])).toEqual([]);
+  });
+
+  it('builder モデルが1種類のまま（切り替えが一度も無い）なら空配列を返す', () => {
+    const runs = [1, 2, 3].map((i) => makeSwitchRun(i, 'model-a', 100));
+    expect(builderModelSwitchPerformanceGaps(runs)).toEqual([]);
+  });
+
+  it('1回の切り替えで、before/afterの平均所要時間・平均コスト・差分・verdictを算出する', () => {
+    // model-a: durationSec 100,200→avg150 / cost 0.1,0.3→avg0.2。model-b: durationSec 50(改善) / cost 0.5(悪化)
+    const runs = [
+      makeSwitchRun(1, 'model-a', 100, 0.1),
+      makeSwitchRun(2, 'model-a', 200, 0.3),
+      makeSwitchRun(3, 'model-b', 50, 0.5),
+    ];
+
+    const [g] = builderModelSwitchPerformanceGaps(runs);
+    expect(g.switchIndex).toBe(1);
+    expect(g.before).toEqual({ model: 'model-a', fromIteration: 1, toIteration: 2, count: 2, avgDurationSec: 150, avgCostUsd: 0.2 });
+    expect(g.after).toEqual({ model: 'model-b', fromIteration: 3, toIteration: 3, count: 1, avgDurationSec: 50, avgCostUsd: 0.5 });
+    expect(g.durationDeltaSec).toBeCloseTo(-100, 10);
+    expect(g.costDeltaUsd).toBeCloseTo(0.3, 10);
+    expect(g.durationVerdict).toBe('improved');
+    expect(g.costVerdict).toBe('regressed');
+  });
+
+  it('A→B→A のような再登板は独立した切り替えイベントとして扱い、前回の同モデル区間と合算しない', () => {
+    const runs = [makeSwitchRun(1, 'model-a', 100), makeSwitchRun(2, 'model-b', 200), makeSwitchRun(3, 'model-a', 300)];
+
+    const result = builderModelSwitchPerformanceGaps(runs);
+    expect(result).toHaveLength(2);
+    expect(result[0].before).toEqual({ model: 'model-a', fromIteration: 1, toIteration: 1, count: 1, avgDurationSec: 100, avgCostUsd: 0.1 });
+    // 2件目の before は model-b(iteration2) のみ。1件目の model-a(iteration1) とは合算されない
+    expect(result[1].switchIndex).toBe(2);
+    expect(result[1].before).toEqual({ model: 'model-b', fromIteration: 2, toIteration: 2, count: 1, avgDurationSec: 200, avgCostUsd: 0.1 });
+    expect(result[1].after.model).toBe('model-a');
+    expect(result[1].after.fromIteration).toBe(3);
+  });
+
+  it('delta が0（前後で平均が完全に一致）のとき durationVerdict/costVerdict は unchanged になる', () => {
+    const runs = [makeSwitchRun(1, 'model-a', 100, 0.1), makeSwitchRun(2, 'model-b', 100, 0.1)];
+
+    const [g] = builderModelSwitchPerformanceGaps(runs);
+    expect(g.durationDeltaSec).toBe(0);
+    expect(g.costDeltaUsd).toBe(0);
+    expect(g.durationVerdict).toBe('unchanged');
+    expect(g.costVerdict).toBe('unchanged');
   });
 });
 
@@ -5112,6 +5549,87 @@ describe('cycleTimeTrendSignal', () => {
     const signal = cycleTimeTrendSignal(runs);
     expect(signal!.direction).toBe('flat');
     expect(signal!.deltaPct).toBeNull();
+  });
+});
+
+/** iteration 1..totalUsds.length の反復を、totalUsd/changedLines/verdictの配列から生成する。 */
+function makeEfficiencyRuns(
+  totalUsds: number[],
+  changedLines: number[] = totalUsds.map(() => 100),
+  verdicts: RunRecord['verdict'][] = [],
+): RunRecord[] {
+  return totalUsds.map((totalUsd, i) =>
+    makeRun({
+      iteration: i + 1,
+      changedLines: changedLines[i],
+      verdict: verdicts[i] ?? 'merged',
+      cost: { builderUsd: totalUsd, adversaryUsd: 0, ideationUsd: 0, totalUsd },
+    }),
+  );
+}
+
+describe('tokenEfficiencyTrend', () => {
+  it('runsが空なら空配列（境界値）', () => {
+    expect(tokenEfficiencyTrend([])).toEqual([]);
+  });
+
+  it('cost.totalUsdをchangedLinesで正規化し、failed run（changedLines sentinel 0）は除外する', () => {
+    const runs = makeEfficiencyRuns([2, 1, 0.5], [20, 10, 0], ['merged', 'merged', 'failed']);
+    expect(tokenEfficiencyTrend(runs)).toEqual([
+      { iteration: 1, value: 0.1 },
+      { iteration: 2, value: 0.1 },
+    ]);
+  });
+
+  it('changedLinesが0以下の非failed run（境界値）は0除算を避けるため除外する', () => {
+    expect(tokenEfficiencyTrend(makeEfficiencyRuns([1], [0]))).toEqual([]);
+  });
+
+  it('totalUsdが0の反復でも0除算にならずvalue:0を返す', () => {
+    expect(tokenEfficiencyTrend(makeEfficiencyRuns([0], [10]))).toEqual([{ iteration: 1, value: 0 }]);
+  });
+});
+
+describe('tokenEfficiencyTrendSignal', () => {
+  it('runsが0件、または対象点が1件だけならnull（境界値。比較対象が存在しない）', () => {
+    expect(tokenEfficiencyTrendSignal([])).toBeNull();
+    expect(tokenEfficiencyTrendSignal(makeEfficiencyRuns([1]))).toBeNull();
+  });
+
+  it('コスト/変更行数が単調悪化する合成runsではdirectionがdegrading', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 1, 1, 4, 4, 4]));
+    expect(signal!.windowSize).toBe(TOKEN_EFFICIENCY_TREND_WINDOW);
+    expect(signal!.partial).toBe(false);
+    expect(signal!.previousAvgUsdPerLine).toBeCloseTo(0.01, 10);
+    expect(signal!.recentAvgUsdPerLine).toBeCloseTo(0.04, 10);
+    expect(signal!.direction).toBe('degrading');
+    expect(signal!.recentIterations).toEqual([4, 5, 6]);
+    expect(signal!.previousIterations).toEqual([1, 2, 3]);
+  });
+
+  it('コスト/変更行数が単調改善する合成runsではdirectionがimproving', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([4, 4, 4, 1, 1, 1]));
+    expect(signal!.direction).toBe('improving');
+    expect(signal!.deltaPct).toBeCloseTo(-75, 10);
+  });
+
+  it(`変化率が閾値(${TOKEN_EFFICIENCY_TREND_FLAT_THRESHOLD_PCT}%)未満ならflat`, () => {
+    // +4%は閾値(5%)未満なのでflatになるはず
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 1, 1, 1.04, 1.04, 1.04]));
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('対象点数が少ない(2件・境界値)場合はwindowSize=1でpartial:trueへ縮小する', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([1, 2]));
+    expect(signal!.windowSize).toBe(1);
+    expect(signal!.partial).toBe(true);
+  });
+
+  it('直前ウィンドウの平均が0(境界値)でも0除算せずdegradingと判定する', () => {
+    const signal = tokenEfficiencyTrendSignal(makeEfficiencyRuns([0, 5]));
+    expect(signal!.previousAvgUsdPerLine).toBe(0);
+    expect(signal!.deltaPct).toBeNull();
+    expect(signal!.direction).toBe('degrading');
   });
 });
 
@@ -6142,6 +6660,121 @@ describe('ideationProposalConsumption', () => {
   });
 });
 
+describe('ideationConfidenceTrend', () => {
+  it('着手済みissueが0件なら空配列（境界値）', () => {
+    expect(ideationConfidenceTrend([])).toEqual([]);
+    const noStart = [makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] })];
+    expect(ideationConfidenceTrend(noStart)).toEqual([]);
+  });
+
+  it('未着手issueと自己参照issueは分母から除外される', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 10, title: 'self', labels: [] }, nextIssues: [10, 11, 12] }),
+      makeRun({ iteration: 2, issue: { number: 11, title: 'child', labels: [] }, verdict: 'merged' }),
+      // issue 12 は未着手のまま
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(1);
+    expect(trend[0].issueNumber).toBe(11);
+    expect(trend[0].totalCount).toBe(1);
+  });
+
+  it('priorWeightを明示指定した際のconfidence/weightedScoreが手計算値と一致する', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3], verdict: 'failed' }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs, 2);
+    // globalMeanSuccessRate は着手issue自身の最終成功率ではなく全run(3件)のマージ率 = 1/3 (mergedはrunsのうちiteration2のみ)
+    expect(trend).toHaveLength(2);
+    expect(trend[0]).toEqual({
+      iteration: 2, issueNumber: 2, successCount: 1, totalCount: 1,
+      rawSuccessRate: 1, confidence: 1 / 3, weightedScore: (1 * 1 + 2 * (1 / 3)) / 3,
+    });
+    // 2点目: successCount=1(failedは加算しない), totalCount=2
+    expect(trend[1]).toEqual({
+      iteration: 3, issueNumber: 3, successCount: 1, totalCount: 2,
+      rawSuccessRate: 0.5, confidence: 0.5, weightedScore: (2 * 0.5 + 2 * (1 / 3)) / 4,
+    });
+  });
+
+  it('weightedScoreは最終点でもrawSuccessRateに一致しない（母集団を着手issue自身の最終値にすると priorWeight に関わらず縮約が消える回帰の防止）', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2, 3, 4], verdict: 'failed' }),
+      makeRun({ iteration: 2, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 3, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 4, issue: { number: 4, title: 'c3', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    const latest = trend[trend.length - 1];
+    // 着手issueだけで見た成功率は 2/3 だが、全run(4件のうちmergedは2件 = 0.5)側に縮約されるため一致しない
+    expect(latest.rawSuccessRate).toBeCloseTo(2 / 3, 10);
+    expect(latest.weightedScore).not.toBeCloseTo(latest.rawSuccessRate, 10);
+  });
+
+  it('着手順(提案順ではなくstartIteration昇順)で累積を計算する', () => {
+    const runs = [
+      // issue 3 を先に提案するが、着手(issue.numberとして現れる)のは issue 2 より後
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [3] }),
+      makeRun({ iteration: 2, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] }),
+      makeRun({ iteration: 3, issue: { number: 2, title: 'c1', labels: [] }, verdict: 'merged' }),
+      makeRun({ iteration: 4, issue: { number: 3, title: 'c2', labels: [] }, verdict: 'failed' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend.map((p) => p.issueNumber)).toEqual([2, 3]);
+    expect(trend.map((p) => p.iteration)).toEqual([3, 4]);
+    expect(trend[0].totalCount).toBe(1);
+    expect(trend[1].totalCount).toBe(2);
+  });
+
+  it.each<Verdict>(['failed', 'paused', 'dry-run', 'needs-human', 'abandoned'])(
+    'merged以外のverdict(%s)はsuccessCountに加算されない（着手判定はされる）',
+    (verdict) => {
+      const runs = [
+        makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [2] }),
+        makeRun({ iteration: 2, issue: { number: 2, title: 'child', labels: [] }, verdict }),
+      ];
+      const trend = ideationConfidenceTrend(runs);
+      expect(trend).toHaveLength(1);
+      expect(trend[0].successCount).toBe(0);
+      expect(trend[0].rawSuccessRate).toBe(0);
+    },
+  );
+
+  it('同一issue番号が複数回dispatchされても、最初の着手だけを1件として数える', () => {
+    const runs = [
+      makeRun({ iteration: 1, issue: { number: 1, title: 'a', labels: [] }, nextIssues: [10] }),
+      makeRun({ iteration: 2, issue: { number: 10, title: 'x', labels: [] }, verdict: 'failed' }),
+      // 誤って再dispatchされた2回目。重複カウントされてはいけない
+      makeRun({ iteration: 3, issue: { number: 10, title: 'x', labels: [] }, verdict: 'merged' }),
+    ];
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(1);
+    expect(trend[0].iteration).toBe(2);
+    expect(trend[0].successCount).toBe(0);
+    expect(trend[0].totalCount).toBe(1);
+  });
+
+  it('サンプル数が増えるほどconfidenceは1に漸近する', () => {
+    const runs: RunRecord[] = [];
+    const n = 20;
+    for (let i = 0; i < n; i++) {
+      runs.push(makeRun({ iteration: i * 2 + 1, issue: { number: 1000 + i, title: 'p', labels: [] }, nextIssues: [2000 + i] }));
+      runs.push(
+        makeRun({ iteration: i * 2 + 2, issue: { number: 2000 + i, title: 'c', labels: [] }, verdict: i % 2 === 0 ? 'merged' : 'failed' }),
+      );
+    }
+    const trend = ideationConfidenceTrend(runs);
+    expect(trend).toHaveLength(n);
+    // priorWeight=5(デフォルト)のとき totalCount=20 の confidence = 20/25 = 0.8
+    expect(trend[trend.length - 1].confidence).toBeCloseTo(20 / 25, 10);
+    for (let i = 1; i < trend.length; i++) {
+      expect(trend[i].confidence).toBeGreaterThan(trend[i - 1].confidence);
+    }
+  });
+});
+
 describe('ideationToStartLeadTimes', () => {
   it('nextIssuesに現れた反復のfinishedAtを提案時刻、issue.numberとして現れた反復のstartedAtを着手時刻としてリードタイム(秒)を返す', () => {
     const runs = [
@@ -6334,6 +6967,117 @@ describe('ideationToStartLeadTimeTrendSignal', () => {
     expect(signal!.partial).toBe(true);
     expect(signal!.recentAvgSec).toBeCloseTo(300, 10);
     expect(signal!.previousAvgSec).toBeCloseTo(100, 10);
+  });
+});
+
+describe('ideationAdoptionLeadTimeMatrix', () => {
+  const IDEATION_COST = { builderUsd: 0.1, adversaryUsd: 0.01, ideationUsd: 0.1, totalUsd: 0.21 };
+
+  function proposerAndMergedChildren(
+    iteration: number,
+    proposerIssueNumber: number,
+    childIssueNumbers: number[],
+    mergedIssueNumbers: number[],
+    leadTimesSec: number[],
+  ): RunRecord[] {
+    return [
+      makeRun({
+        iteration,
+        issue: { number: proposerIssueNumber, title: 'p', labels: [] },
+        nextIssues: childIssueNumbers,
+        finishedAt: '2026-07-20T00:00:00Z',
+        cost: IDEATION_COST,
+      }),
+      ...mergedIssueNumbers.map((n, i) =>
+        makeRun({
+          iteration: iteration + 100 + i,
+          issue: { number: n, title: 'c', labels: [] },
+          verdict: 'merged',
+          finishedAt: new Date(new Date('2026-07-20T00:00:00Z').getTime() + leadTimesSec[i] * 1000).toISOString(),
+        }),
+      ),
+    ];
+  }
+
+  it('runsが空、またはideationUsdが0/nextIssuesが空の反復しか無い場合はcells空・除外数0（境界値）', () => {
+    expect(ideationAdoptionLeadTimeMatrix([])).toEqual({ cells: [], excludedZeroAdoptionCount: 0 });
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [2], cost: { ...IDEATION_COST, ideationUsd: 0 } }),
+      makeRun({ iteration: 2, nextIssues: [], cost: IDEATION_COST }),
+    ];
+    expect(ideationAdoptionLeadTimeMatrix(runs)).toEqual({ cells: [], excludedZeroAdoptionCount: 0 });
+  });
+
+  it('全batchでmerged到達が0件のときはcellsを空にし、excludedZeroAdoptionCountのみ加算する（未着手・着手したが不採用の両方を含む）', () => {
+    const runs = [
+      ...proposerAndMergedChildren(1, 1, [100, 101], [], []), // 未着手のみ
+      makeRun({ iteration: 2, issue: { number: 2, title: 'b', labels: [] }, nextIssues: [200], cost: IDEATION_COST }),
+      makeRun({ iteration: 3, issue: { number: 200, title: 'not-merged', labels: [] }, verdict: 'abandoned' }),
+    ];
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.cells).toEqual([]);
+    expect(result.excludedZeroAdoptionCount).toBe(2);
+  });
+
+  it('提案元自身のissue番号がnextIssuesに含まれていても自分自身をmerged到達した子issueとしてカウントしない（自己参照。data/runs/0014.jsonのパターン）', () => {
+    // 自己参照(issue 10)が紛れ込むと2/2=1.0(high)になってしまうが、正しくは子issue 11のみが分子で1/2=0.5(medium)
+    const runs = proposerAndMergedChildren(5, 10, [10, 11], [11], [300]);
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.excludedZeroAdoptionCount).toBe(0);
+    expect(result.cells).toEqual([
+      {
+        adoptionBucket: 'medium',
+        leadTimeBucket: 'fast',
+        count: 1,
+        avgAdoptionRate: 0.5,
+        avgLeadTimeToMergeSec: 300,
+        iterations: [5],
+      },
+    ]);
+  });
+
+  it('採用率bucket境界(0.34/0.66ちょうど)はlow/highに、その内側はmediumに分類する（境界値）', () => {
+    expect(ideationAdoptionRateBucket(0.34)).toBe('low');
+    expect(ideationAdoptionRateBucket(0.66)).toBe('high');
+    expect(ideationAdoptionRateBucket(0.35)).toBe('medium');
+    expect(ideationAdoptionRateBucket(0.65)).toBe('medium');
+  });
+
+  it('採用率low/medium/high × リードタイムfast/medium/slowの9通り全セルに最低1バッチが乗る合成データで件数・平均値を検算する（high-fastは複数子issueの平均検算も兼ねる）', () => {
+    // 採用率low=1/3,medium=1/2,high=1。リードタイム代表値[10..90]はp33=36.4/p66=62.8で{10-30}/{40-60}/{70-90}に分かれる。
+    const runs = [
+      ...proposerAndMergedChildren(1, 9101, [2001, 2002, 2003], [2001], [10]),
+      ...proposerAndMergedChildren(2, 9102, [2011, 2012, 2013], [2011], [40]),
+      ...proposerAndMergedChildren(3, 9103, [2021, 2022, 2023], [2021], [70]),
+      ...proposerAndMergedChildren(4, 9104, [2031, 2032], [2031], [20]),
+      ...proposerAndMergedChildren(5, 9105, [2041, 2042], [2041], [50]),
+      ...proposerAndMergedChildren(6, 9106, [2051, 2052], [2051], [80]),
+      ...proposerAndMergedChildren(7, 9107, [2061, 2062], [2061, 2062], [20, 40]), // high-fast: 平均(20,40)=30
+      ...proposerAndMergedChildren(8, 9108, [2071], [2071], [60]),
+      ...proposerAndMergedChildren(9, 9109, [2081], [2081], [90]),
+    ];
+
+    const result = ideationAdoptionLeadTimeMatrix(runs);
+    expect(result.excludedZeroAdoptionCount).toBe(0);
+    expect(result.cells.map((c) => `${c.adoptionBucket}|${c.leadTimeBucket}`)).toEqual([
+      'low|fast', 'low|medium', 'low|slow',
+      'medium|fast', 'medium|medium', 'medium|slow',
+      'high|fast', 'high|medium', 'high|slow',
+    ]);
+
+    // 単純ケース(low-fast)と複数子issue平均ケース(high-fast)を検算する
+    const byKey = new Map(result.cells.map((c) => [`${c.adoptionBucket}|${c.leadTimeBucket}`, c]));
+    const expected: Array<[string, number, number, number]> = [
+      ['low|fast', 1 / 3, 10, 1],
+      ['high|fast', 1, 30, 7],
+    ];
+    for (const [key, adoptionRate, leadTimeSec, iteration] of expected) {
+      const cell = byKey.get(key);
+      expect(cell!.count).toBe(1);
+      expect(cell!.avgAdoptionRate).toBeCloseTo(adoptionRate, 10);
+      expect(cell!.avgLeadTimeToMergeSec).toBeCloseTo(leadTimeSec, 10);
+      expect(cell!.iterations).toEqual([iteration]);
+    }
   });
 });
 
@@ -8073,6 +8817,76 @@ describe('verdictTransitionRootCausePatterns', () => {
   });
 });
 
+describe('verdictJumpAnomalies / verdictJumpSummary', () => {
+  const verifyFailedReason = 'verify(lint/typecheck/unit/build) が失敗している';
+  // 'm'=merged, 'f'=failed(gateReasons付き) の1文字パターンから反復1始まりのrunsを作る
+  const seq = (pattern: string): RunRecord[] =>
+    pattern.split('').map((c, i) =>
+      makeRun({
+        iteration: i + 1,
+        verdict: c === 'm' ? 'merged' : 'failed',
+        gateReasons: c === 'm' ? [] : [verifyFailedReason],
+      }),
+    );
+
+  it('前後VERDICT_JUMP_WINDOW件が全てmergedで中央1件だけ非mergedならspikeFailureとして検出する', () => {
+    expect(VERDICT_JUMP_WINDOW).toBe(3);
+    expect(verdictJumpAnomalies(seq('mmmfmmm'))).toEqual([
+      {
+        iteration: 4,
+        verdict: 'failed',
+        kind: 'spikeFailure',
+        beforeMergedRate: 1,
+        afterMergedRate: 1,
+        gateReasons: ['verifyFailed'],
+      },
+    ]);
+  });
+
+  it('前後VERDICT_JUMP_WINDOW件が全て非mergedで中央1件だけmergedならspikeSuccessとして検出する', () => {
+    expect(verdictJumpAnomalies(seq('fffmfff'))).toEqual([
+      {
+        iteration: 4,
+        verdict: 'merged',
+        kind: 'spikeSuccess',
+        beforeMergedRate: 0,
+        afterMergedRate: 0,
+        gateReasons: [],
+      },
+    ]);
+  });
+
+  it('前後どちらかの窓が不揃い、または前後の極値自体が異なる場合は検出しない', () => {
+    expect(verdictJumpAnomalies(seq('mmfmmmm'))).toEqual([]); // 前窓が不揃い(m,m,f)
+    expect(verdictJumpAnomalies(seq('fffmmmm'))).toEqual([]); // 前後の極値が異なる(緩やかな変化)
+  });
+
+  it('前後窓を満たすのに件数が足りない（境界未満）場合は空配列を返す', () => {
+    // 前後3件ずつ+中央1件=7件が最小件数。1件足りない6件では判定対象が存在しない
+    expect(verdictJumpAnomalies(seq('mmmfmm'))).toEqual([]);
+    expect(verdictJumpAnomalies([])).toEqual([]);
+  });
+
+  it('spikeFailureでもgateReasonsが空なら根本原因を特定できずgateReasonsは空配列のまま', () => {
+    const runs = seq('mmmmmmm');
+    runs[3] = makeRun({ iteration: 4, verdict: 'paused', gateReasons: [] });
+    const anomalies = verdictJumpAnomalies(runs);
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0].kind).toBe('spikeFailure');
+    expect(anomalies[0].gateReasons).toEqual([]);
+  });
+
+  it('verdictJumpSummaryは出現した種別だけをcount降順で返し、0件の種別は含めない', () => {
+    // spikeFailureがiteration4と13の2箇所（間はmergedで緩衝し窓が干渉しないようにする）
+    const runs = seq('mmmfmmmmmmmmfmmm');
+    expect(verdictJumpAnomalies(runs).map((a) => a.iteration)).toEqual([4, 13]);
+
+    const summary = verdictJumpSummary(runs);
+    expect(summary).toEqual([{ kind: 'spikeFailure', count: 2, pct: 100 }]);
+    expect(summary.some((s) => s.kind === 'spikeSuccess')).toBe(false);
+  });
+});
+
 describe('dropoutStreaks', () => {
   it('run が無ければ空配列を返す', () => {
     expect(dropoutStreaks([])).toEqual([]);
@@ -9152,6 +9966,87 @@ describe('backlogGenerationRateSignal', () => {
   });
 });
 
+/** iteration 1..counts.length の run を、各反復 nextIssues 長 counts[i] で生成する。 */
+function makeGenerationRuns(counts: number[]): RunRecord[] {
+  return counts.map((n, i) =>
+    makeRun({ iteration: i + 1, nextIssues: Array.from({ length: n }, (_, j) => (i + 1) * 1000 + j) }),
+  );
+}
+
+describe('ideationGenerationDecaySignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationGenerationDecaySignal([])).toBeNull();
+  });
+
+  it(`データ点数がGENERATION_DECAY_WINDOW(${GENERATION_DECAY_WINDOW})未満なら移動平均は全てnullで、ピーク/減衰は未検出`, () => {
+    const runs = makeGenerationRuns([3, 2]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s).not.toBeNull();
+    expect(s!.points.every((p) => p.movingAverage === null)).toBe(true);
+    expect(s!.peakIteration).toBeNull();
+    expect(s!.peakMovingAverage).toBeNull();
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(0);
+    expect(s!.declineFromPeakPct).toBeNull();
+  });
+
+  it('生成本数が単調増加のみなら、ピークはデータ終端になり減衰は未検出', () => {
+    const runs = makeGenerationRuns([1, 2, 3, 4, 5, 6]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(6);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(0);
+  });
+
+  it(`山型（上昇→ピーク→${GENERATION_DECAY_STREAK_THRESHOLD}回連続下降）で減衰開始点と発報点を検出する（境界値ちょうど）`, () => {
+    // 移動平均(window=3): iter3=5, iter4=5, iter5=4.667, iter6=4, iter7=3, iter8=2
+    const runs = makeGenerationRuns([5, 5, 5, 5, 4, 3, 2, 1]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.peakMovingAverage).toBeCloseTo(5);
+    expect(s!.decayStartIteration).toBe(5);
+    expect(s!.decayConfirmedIteration).toBe(6);
+    expect(s!.triggered).toBe(true);
+    expect(s!.currentStreak).toBe(4);
+    expect(s!.declineFromPeakPct).toBeCloseTo(60);
+  });
+
+  it('ピーク後の下降がGENERATION_DECAY_STREAK_THRESHOLD-1回でデータが終端する場合は未発報（閾値未満の境界値）', () => {
+    // 移動平均: iter3=5(peak), iter4=4.667（下降1回のみでデータ終端）
+    const runs = makeGenerationRuns([5, 5, 5, 4]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(1);
+  });
+
+  it('1回だけ下降して回復する場合はストリークがリセットされ、以降の下降が閾値未満なら未発報', () => {
+    // 移動平均: iter3=5(peak), iter4=4.667(下降1,streak1), iter5=4.667(横ばいでリセット), iter6=4.333(下降1,streak1で終端)
+    const runs = makeGenerationRuns([5, 5, 5, 4, 5, 4]);
+    const s = ideationGenerationDecaySignal(runs);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.decayStartIteration).toBeNull();
+    expect(s!.decayConfirmedIteration).toBeNull();
+    expect(s!.triggered).toBe(false);
+    expect(s!.currentStreak).toBe(1);
+  });
+
+  it('iteration降順など入力順に依存せず、iteration昇順に整列してから集計する', () => {
+    const sorted = makeGenerationRuns([5, 5, 5, 4]);
+    const shuffled = [sorted[3], sorted[1], sorted[0], sorted[2]];
+    const s = ideationGenerationDecaySignal(shuffled);
+    expect(s!.points.map((p) => p.iteration)).toEqual([1, 2, 3, 4]);
+    expect(s!.peakIteration).toBe(3);
+    expect(s!.currentStreak).toBe(1);
+  });
+});
+
 describe('ideationExecutionConsumptionGapSignal', () => {
   it.each([
     { label: 'runsが空（境界値）', runs: [] as RunRecord[] },
@@ -9248,5 +10143,148 @@ describe('ideationExecutionConsumptionGapSignal', () => {
     expect(signal!.ratio).toBeCloseTo(0.05, 10);
     expect(signal!.direction).toBe('consumption-ahead');
     expect(signal!.triggered).toBe(true);
+  });
+});
+
+/** iteration 1..costs.length の完了(reachedVerify)runを、cost(USD)とapproved配列から生成する。 */
+function makeElasticityRuns(costs: number[], approved: boolean[]): RunRecord[] {
+  return costs.map((cost, i) =>
+    makeRun({
+      iteration: i + 1,
+      cost: { builderUsd: cost, adversaryUsd: 0, ideationUsd: 0, totalUsd: cost },
+      adversary: { approved: approved[i], summary: '' },
+      verdict: approved[i] ? 'merged' : 'needs-human',
+    }),
+  );
+}
+
+describe('costQualityElasticityTrend', () => {
+  it('runsが空なら空配列、ウィンドウ2倍未満(境界値)も空配列', () => {
+    expect(costQualityElasticityTrend([])).toEqual([]);
+    const short = Array(ELASTICITY_WINDOW * 2 - 1).fill(1);
+    expect(costQualityElasticityTrend(makeElasticityRuns(short, short.map(() => true)))).toEqual([]);
+  });
+
+  it('ちょうどELASTICITY_WINDOWの2倍件数だと点が1件だけ、期待通りの弾性値になる（境界値）', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2];
+    const approved = [false, false, false, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(10);
+    expect(points[0].costChangePct).toBeCloseTo(100, 10); // avg 1→2
+    expect(points[0].qualityChangePct).toBeCloseTo(150, 10); // 承認率 40%→100%
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+  });
+
+  it('コスト・品質とも各ウィンドウで単調増加していれば正の弾性が算出される', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points).toHaveLength(2);
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+    expect(points[1].iteration).toBe(11);
+    expect(points[1].costChangePct).toBeCloseTo(100, 10);
+    expect(points[1].qualityChangePct).toBeCloseTo(200 / 3, 10);
+    expect(points[1].elasticity).toBeCloseTo(2 / 3, 10);
+  });
+
+  it('直前ウィンドウの平均コストが0だとゼロ除算になるため elasticity は null', () => {
+    const costs = [0, 0, 0, 0, 0, 1, 1, 1, 1, 1];
+    const approved = [false, false, true, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].costChangePct).toBeNull();
+    expect(points[0].qualityChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('直前ウィンドウの承認率が0(基準がゼロ)だと品質変化率が定義できないため elasticity は null', () => {
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2];
+    const approved = [false, false, false, false, false, true, true, true, false, false];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].qualityChangePct).toBeNull();
+    expect(points[0].costChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('コスト変化率がちょうど0だと弾性はゼロ除算を避けて null になる（境界値）', () => {
+    const costs = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+    const approved = [false, false, false, true, true, true, true, true, true, true];
+    const points = costQualityElasticityTrend(makeElasticityRuns(costs, approved));
+    expect(points[0].costChangePct).toBe(0);
+    expect(points[0].qualityChangePct).not.toBeNull();
+    expect(points[0].elasticity).toBeNull();
+  });
+
+  it('failed run(reachedVerify=false)は母集団から除外される', () => {
+    const completed = makeElasticityRuns(
+      [1, 1, 1, 1, 1, 2, 2, 2, 2, 2],
+      [false, false, false, true, true, true, true, true, true, true],
+    );
+    // iteration 6 に failed run(巨大コスト999)を挟み、完了runは1-5,7-11にずらす
+    const runs: RunRecord[] = [
+      ...completed.slice(0, 5).map((r, i) => ({ ...r, iteration: i + 1 })),
+      makeRun({
+        iteration: 6,
+        verdict: 'failed',
+        cost: { builderUsd: 999, adversaryUsd: 999, ideationUsd: 999, totalUsd: 999 },
+        adversary: { approved: false, summary: '' },
+      }),
+      ...completed.slice(5).map((r, i) => ({ ...r, iteration: i + 7 })),
+    ];
+    const points = costQualityElasticityTrend(runs);
+    expect(points).toHaveLength(1);
+    expect(points[0].iteration).toBe(11);
+    expect(points[0].recentAvgCostUsd).toBeCloseTo(2, 10); // 999が紛れ込んでいない
+    expect(points[0].elasticity).toBeCloseTo(1.5, 10);
+  });
+});
+
+describe('costQualityElasticityTrendSignal', () => {
+  it('runsが空、またはウィンドウ2倍未満(境界値)ならnull', () => {
+    expect(costQualityElasticityTrendSignal([])).toBeNull();
+    const short = Array(ELASTICITY_WINDOW * 2 - 1).fill(1);
+    expect(costQualityElasticityTrendSignal(makeElasticityRuns(short, short.map(() => true)))).toBeNull();
+  });
+
+  it('直近の弾性(絶対値)が過去平均より大きいと strengthening', () => {
+    // 1点目: elasticity=-40/-50=0.8, 2点目(最新): elasticity=-60/-50=1.2 → |1.2|>|0.8|
+    const costs = [4, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1];
+    const approved = [true, true, true, true, true, true, true, true, false, false, false];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(1.2, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(0.8, 10);
+    expect(signal!.sampleSize).toBe(1);
+    expect(signal!.direction).toBe('strengthening');
+  });
+
+  it('直近の弾性(絶対値)が過去平均より小さいと weakening', () => {
+    // 1点目: elasticity=1.5, 2点目(最新): elasticity=2/3 → |2/3|<|1.5|
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 4];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(2 / 3, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.direction).toBe('weakening');
+  });
+
+  it('直近の弾性(絶対値)が過去平均とほぼ同じ(閾値未満の変化)なら flat', () => {
+    // 1点目・2点目(最新)とも厳密に elasticity=1.5 になるよう cost/quality を設計
+    const costs = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2 / 3];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const signal = costQualityElasticityTrendSignal(makeElasticityRuns(costs, approved));
+    expect(signal).not.toBeNull();
+    expect(signal!.latestElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.historicalAvgElasticity).toBeCloseTo(1.5, 10);
+    expect(signal!.direction).toBe('flat');
+  });
+
+  it('最新点のelasticityがnull（コスト変化率0）だと判定不能でnull', () => {
+    const costs = [1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1];
+    const approved = [false, false, false, true, true, true, true, true, true, true, true];
+    const runs = makeElasticityRuns(costs, approved);
+    expect(costQualityElasticityTrend(runs).at(-1)!.elasticity).toBeNull();
+    expect(costQualityElasticityTrendSignal(runs)).toBeNull();
   });
 });

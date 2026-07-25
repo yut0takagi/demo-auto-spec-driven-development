@@ -1,0 +1,42 @@
+{
+  "id": "20260724T123402Z-214",
+  "iteration": 134,
+  "issue": {
+    "number": 214,
+    "title": "Ideation信頼度トレンドパネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/214-ideation",
+  "startedAt": "2026-07-24T12:34:02Z",
+  "finishedAt": "2026-07-24T13:01:50Z",
+  "durationSec": 1668,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 238,
+  "adversary": {
+    "approved": true,
+    "summary": "globalMeanSuccessRateの計算母集団を「着手issue」から「全run」に変更し、ベイズ縮約が最終点で退化する恒等式回帰を防ぐ設計修正。ドキュメント・実装・テスト（手計算値検証+新規テスト3件）が一貫し、既存機能破壊なし。テスト値は手計算と合致。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 68,
+  "cost": {
+    "builderUsd": 5.896541,
+    "adversaryUsd": 0.076902,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.18886390000000003,
+    "totalUsd": 6.162307
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

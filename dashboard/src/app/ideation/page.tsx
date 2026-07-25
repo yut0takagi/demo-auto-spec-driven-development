@@ -8,10 +8,13 @@ import { IdeationDropRatePanel } from '@/components/IdeationDropRatePanel';
 import { IdeationProposalQualityDropPanel } from '@/components/IdeationProposalQualityDropPanel';
 import { IdeationEarlyAbandonmentPanel } from '@/components/IdeationEarlyAbandonmentPanel';
 import { IdeationQualityDegradationPanel } from '@/components/IdeationQualityDegradationPanel';
+import { IdeationConfidenceTrendPanel } from '@/components/IdeationConfidenceTrendPanel';
 import { BacklogLowWaterEtaPanel } from '@/components/BacklogLowWaterEtaPanel';
 import { BacklogFlowPanel } from '@/components/BacklogFlowPanel';
 import { BacklogGenerationRatePanel } from '@/components/BacklogGenerationRatePanel';
+import { IdeationGenerationDecayPanel } from '@/components/IdeationGenerationDecayPanel';
 import { IdeationExecutionConsumptionGapPanel } from '@/components/IdeationExecutionConsumptionGapPanel';
+import { IdeationAdoptionLeadTimeMatrixPanel } from '@/components/IdeationAdoptionLeadTimeMatrixPanel';
 
 export default function IdeationPage() {
   const { runs } = loadRuns();
@@ -27,6 +30,7 @@ export default function IdeationPage() {
 
       <div className="space-y-6">
         <IdeationQualityDegradationPanel runs={runs} />
+        <IdeationConfidenceTrendPanel runs={runs} />
         <IdeationFailurePanel runs={runs} />
         <IdeationCostQualityPanel runs={runs} />
         <IdeationProposalConsumptionPanel runs={runs} />
@@ -38,7 +42,9 @@ export default function IdeationPage() {
         <BacklogLowWaterEtaPanel runs={runs} />
         <BacklogFlowPanel runs={runs} />
         <BacklogGenerationRatePanel runs={runs} />
+        <IdeationGenerationDecayPanel runs={runs} />
         <IdeationExecutionConsumptionGapPanel runs={runs} />
+        <IdeationAdoptionLeadTimeMatrixPanel runs={runs} />
       </div>
     </main>
   );

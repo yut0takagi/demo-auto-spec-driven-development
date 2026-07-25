@@ -1,0 +1,44 @@
+{
+  "id": "20260724T150425Z-232",
+  "iteration": 143,
+  "issue": {
+    "number": 232,
+    "title": "Ideation生成本数の「減衰開始点」を検出するパネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/232-ideation",
+  "startedAt": "2026-07-24T15:04:25Z",
+  "finishedAt": "2026-07-24T15:09:10Z",
+  "durationSec": 285,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件の『減衰開始点検出』を完全に実装し、ピーク検出・連続下降判定・ノイズ除去ロジックが正確。テストカバレッジは境界値・エッジケースを網羅し、パネル統合も既存の挙動を破壊しない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.434376,
+    "adversaryUsd": 0.063699,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.2805582,
+    "totalUsd": 0.778633
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

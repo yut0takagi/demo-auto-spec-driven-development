@@ -1,0 +1,46 @@
+{
+  "id": "20260724T132151Z-223",
+  "iteration": 137,
+  "issue": {
+    "number": 223,
+    "title": "Gate reason co-occurrence clustering: ゲート不通過理由の共起パターン自動分類",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/223-gate-reason-co-occurrence-clustering",
+  "startedAt": "2026-07-24T13:21:51Z",
+  "finishedAt": "2026-07-24T13:41:19Z",
+  "durationSec": 1168,
+  "reviseCycles": 1,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 243,
+  "adversary": {
+    "approved": true,
+    "summary": "共起パターンの検出とクラスタリングを正確に実装し、既存コードを変更せず、テストで振る舞いを実質的に検証している。要件を満たし、constraints を守り、既存機能を壊していない。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 517,
+  "cost": {
+    "builderUsd": 4.231095,
+    "adversaryUsd": 0.057028,
+    "ideationUsd": 0.10980880000000001,
+    "plannerUsd": 0.34276340000000005,
+    "totalUsd": 4.740695
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    240,
+    241,
+    242
+  ]
+}

@@ -1,0 +1,42 @@
+{
+  "id": "20260724T142126Z-231",
+  "iteration": 140,
+  "issue": {
+    "number": 231,
+    "title": "Planner稼働とコスト効率の可視化パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/231-planner",
+  "startedAt": "2026-07-24T14:21:26Z",
+  "finishedAt": "2026-07-24T14:36:49Z",
+  "durationSec": 923,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 245,
+  "adversary": {
+    "approved": true,
+    "summary": "plannerActivity 関数の実装・型定義が正確で、unit/component/e2e テストが境界値・計算値・UI一致を実質的に検証しており、タスク要件を完全に満たしている。既存の挙動・API を壊さず、ダッシュボード統合も正当。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 366,
+  "cost": {
+    "builderUsd": 3.150543,
+    "adversaryUsd": 0.086601,
+    "ideationUsd": 0.0,
+    "plannerUsd": 1.0734853,
+    "totalUsd": 4.310629
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

@@ -1,0 +1,44 @@
+{
+  "id": "20260724T141636Z-224",
+  "iteration": 139,
+  "issue": {
+    "number": 224,
+    "title": "Cost-to-quality elasticity trend: コスト増加に対する品質向上の弾性率（Cost-Quality ROI）",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/224-cost-to-quality-elasticity-trend-cost-qu",
+  "startedAt": "2026-07-24T14:16:36Z",
+  "finishedAt": "2026-07-24T14:21:25Z",
+  "durationSec": 289,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "Cost-Quality elasticity metric correctly implemented with proper window-based calculation, comprehensive edge-case handling, and substantive test coverage validating numerical behavior and null-safety."
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.378032,
+    "adversaryUsd": 0.092773,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.2832982,
+    "totalUsd": 0.754103
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

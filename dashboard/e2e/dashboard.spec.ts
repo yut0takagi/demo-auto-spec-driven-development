@@ -16,6 +16,7 @@ import {
   gateReasonSeveritySpectrum,
   costEfficiency,
   costPerApprovedPrTrend,
+  plannerActivity,
   breakerRunway,
   mergedStreak,
   modelEffectiveness,
@@ -30,6 +31,8 @@ import {
   e2eFailureBuilderWorkloadSeparation,
   cycleTimeTrend,
   cycleTimeTrendSignal,
+  tokenEfficiencyTrend,
+  tokenEfficiencyTrendSignal,
   timeToFirstPrTrend,
   timeToFirstPrTrendSignal,
   issueResolutionTimeTrend,
@@ -79,6 +82,7 @@ import {
   backlogGenerationRateSignal,
   ideationQualityDegradationSignal,
   ideationExecutionConsumptionGapSignal,
+  ideationConfidenceTrend,
 } from '../src/lib/aggregate';
 
 /** modelEffectiveness と同じ算出元だが、パネルはモデル名昇順で描画するため e2e 側でも同じ並びに揃える。 */
@@ -1351,6 +1355,38 @@ test('Cost効率（USD per 承認PR）パネルが実データから導出した
   expect(body).not.toContain('undefined');
 });
 
+test('Planner稼働とコスト効率パネルが実データから導出した稼働率・平均コスト・トレンドバーを表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const activity = plannerActivity(runs);
+  expect(
+    activity.trackedCount,
+    'data/runs に cost.plannerUsd が記録された反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('planner-activity-panel');
+  await expect(panel).toBeVisible();
+
+  // ヘッダの計測対象・稼働反復数は plannerActivity()（別の計算経路）と一致するはず
+  await expect(page.getByTestId('planner-activity-count')).toHaveText(
+    `計測対象 ${activity.trackedCount}反復中 ${activity.activeCount}反復が稼働`,
+  );
+  await expect(page.getByTestId('planner-activity-rate')).toHaveText(`${activity.activationRatePct!.toFixed(1)}%`);
+
+  // 推移バーは plannerActivity().trend（別の計算経路）の件数と一致し、
+  // 最後のバーの iteration が実データの最終計測対象点と揃っていること
+  const bars = page.locator('[data-testid^="planner-activity-bar-"]');
+  await expect(bars).toHaveCount(activity.trend.length);
+  const lastPoint = activity.trend[activity.trend.length - 1];
+  await expect(page.getByTestId(`planner-activity-bar-${lastPoint.iteration}`)).toBeVisible();
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
 test('Ideation失敗率パネルが実データから導出した実行件数・失敗件数・失敗率を表示する', async ({ page }) => {
   await page.goto('/ideation');
 
@@ -1601,6 +1637,42 @@ test('Ideation提案品質低下の多面的早期検知パネルが実データ
   } else {
     expect(signal!.level).toBe('normal');
   }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Ideation提案消費成功率の信頼度トレンドパネルが実データから導出した信頼度・サンプル数・重み付き成功率の最新値を表示する', async ({
+  page,
+}) => {
+  await page.goto('/ideation');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const trend = ideationConfidenceTrend(runs);
+  expect(
+    trend.length,
+    'data/runs に ideation の提案issueが実際に着手された反復が1件も無く、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('ideation-confidence-trend-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${trend.length}件`);
+
+  // 凡例の最新値は ideationConfidenceTrend()（別の計算経路）の最終点と一致するはず
+  const latest = trend[trend.length - 1];
+  await expect(page.getByTestId('ideation-confidence-trend-latest-confidence')).toHaveText(
+    `最新${(latest.confidence * 100).toFixed(1)}% (サンプル${latest.totalCount}件)`,
+  );
+  await expect(page.getByTestId('ideation-confidence-trend-latest-weighted')).toHaveText(
+    `最新${(latest.weightedScore * 100).toFixed(1)}%`,
+  );
+
+  // 2点以上なら折れ線(path)、1点だけなら単一点(circle)として描画される
+  const lineCount = await page.getByTestId('ideation-confidence-trend-line-confidence').count();
+  const pointCount = await page.getByTestId('ideation-confidence-trend-point-confidence').count();
+  expect(lineCount + pointCount).toBe(1);
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
@@ -2049,6 +2121,47 @@ test('CI/ゲート通過時間のトレンド観測パネルが実データか�
   );
   await expect(signalBlock).toContainText(`直近: ${signal!.recentIterations.join(', ')}`);
   await expect(signalBlock).toContainText(`直前: ${signal!.previousIterations.join(', ')}`);
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+});
+
+test('Token消費効率トレンドパネルが実データから導出したUSD/行の推移・方向・明細を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const points = tokenEfficiencyTrend(runs);
+  const signal = tokenEfficiencyTrendSignal(runs);
+  expect(
+    signal,
+    'data/runs の変更行数を伴う完了反復が2件未満で、トレンド判定（直近/直前ウィンドウ比較）の表示経路を検証できない。',
+  ).not.toBeNull();
+
+  const panel = page.getByTestId('token-efficiency-trend-panel');
+  await expect(panel).toBeVisible();
+
+  // 見出しのUSD/行は tokenEfficiencyTrend()（別の計算経路）の最終点と一致するはず
+  const latest = points[points.length - 1];
+  await expect(panel).toContainText(`$${latest.value.toFixed(4)}`);
+
+  const directionLabels: Record<string, string> = {
+    improving: '改善傾向',
+    degrading: '悪化傾向',
+    flat: '横ばい',
+  };
+  await expect(page.getByTestId('token-efficiency-trend-direction')).toContainText(
+    directionLabels[signal!.direction],
+  );
+
+  // 明細行: totalUsd/changedLinesがsentinel 0のfailed runは対象に含まれないはず
+  const failedIterations = runs.filter((r) => r.verdict === 'failed').map((r) => r.iteration);
+  for (const it of failedIterations) {
+    await expect(page.locator(`[data-testid="token-efficiency-trend-row-${it}"]`)).toHaveCount(0);
+  }
+  const latestRow = page.getByTestId(`token-efficiency-trend-row-${latest.iteration}`);
+  await expect(latestRow).toContainText(latest.value.toFixed(4));
 
   const body = await bodyTextExcludingFreeform(page);
   expect(body).not.toContain('NaN');
