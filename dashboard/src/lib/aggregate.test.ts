@@ -25,6 +25,8 @@ import {
   gateReasonTrendSignal,
   GATE_REASON_TREND_WINDOW,
   GATE_REASON_TREND_FLAT_THRESHOLD,
+  gateReasonComfortTrendSignal,
+  GATE_REASON_COMFORT_TREND_WINDOW,
   gateFailureTypeBreakdown,
   gateReasonSeveritySpectrum,
   costEfficiency,
@@ -2279,6 +2281,93 @@ describe('gateReasonTrendSignal', () => {
     expect(signal.partial).toBe(true);
     expect(signal.previousIterations).toEqual([2]);
     expect(signal.recentIterations).toEqual([3]);
+  });
+});
+
+describe('gateReasonComfortTrendSignal', () => {
+  function run(iteration: number, gateReasons: string[]) {
+    return makeRun({ iteration, verdict: gateReasons.length === 0 ? 'merged' : 'abandoned', gateReasons });
+  }
+
+  it('runsが0〜1件なら null を返す', () => {
+    expect(gateReasonComfortTrendSignal([])).toBeNull();
+    expect(gateReasonComfortTrendSignal([run(1, [])])).toBeNull();
+  });
+
+  it('直近ウィンドウが全て快適（gateReasons空）で直前が全て不快適なら improving と判定し、比率を正しく返す', () => {
+    const runs = [
+      run(1, ['e2e(Playwright) が失敗している']),
+      run(2, ['e2e(Playwright) が失敗している']),
+      run(3, ['e2e(Playwright) が失敗している']),
+      run(4, []),
+      run(5, []),
+      run(6, []),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(GATE_REASON_COMFORT_TREND_WINDOW);
+    expect(signal.partial).toBe(false);
+    expect(signal.previousIterations).toEqual([1, 2, 3]);
+    expect(signal.recentIterations).toEqual([4, 5, 6]);
+    expect(signal.previousComfortRatio).toBe(0);
+    expect(signal.recentComfortRatio).toBe(1);
+    expect(signal.delta).toBeCloseTo(1);
+    expect(signal.direction).toBe('improving');
+  });
+
+  it('直前が快適(全てgateReasons空)で直近が不快適(全て非空)なら worsening と判定する', () => {
+    const runs = [
+      run(1, []),
+      run(2, []),
+      run(3, []),
+      run(4, ['adversary が approve していない']),
+      run(5, ['adversary が approve していない']),
+      run(6, ['adversary が approve していない']),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.previousComfortRatio).toBe(1);
+    expect(signal.recentComfortRatio).toBe(0);
+    expect(signal.delta).toBeCloseTo(-1);
+    expect(signal.direction).toBe('worsening');
+  });
+
+  it('直近と直前の差が閾値未満なら flat と判定する', () => {
+    // windowSize=3: 直前comfort率 2/3、直近comfort率 2/3 → 差0なので横ばい
+    const runs = [
+      run(1, []),
+      run(2, []),
+      run(3, ['e2e(Playwright) が失敗している']),
+      run(4, []),
+      run(5, []),
+      run(6, ['e2e(Playwright) が失敗している']),
+    ];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.previousComfortRatio).toBeCloseTo(2 / 3);
+    expect(signal.recentComfortRatio).toBeCloseTo(2 / 3);
+    expect(signal.delta).toBeCloseTo(0);
+    expect(signal.direction).toBe('flat');
+  });
+
+  it('データ点が window*2 未満のときは実際の点数に縮小したwindowで比較し、partial=trueになる', () => {
+    const runs = [run(1, ['adversary が approve していない']), run(2, []), run(3, [])];
+    const signal = gateReasonComfortTrendSignal(runs);
+    expect(signal).not.toBeNull();
+    if (!signal) return;
+
+    expect(signal.windowSize).toBe(1);
+    expect(signal.partial).toBe(true);
+    expect(signal.previousIterations).toEqual([2]);
+    expect(signal.recentIterations).toEqual([3]);
+    expect(signal.previousComfortRatio).toBe(1);
+    expect(signal.recentComfortRatio).toBe(1);
   });
 });
 
