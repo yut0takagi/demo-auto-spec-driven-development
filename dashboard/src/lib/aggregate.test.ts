@@ -134,6 +134,8 @@ import {
   VERDICT_JUMP_WINDOW,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
+  verdictLateralSlides,
+  LATERAL_SLIDE_MIN_CHAIN,
   reviseSizeSuccessPatterns,
   CHANGE_SIZE_SMALL_MAX,
   CHANGE_SIZE_MEDIUM_MAX,
@@ -9129,6 +9131,114 @@ describe('dropoutStreaks', () => {
     expect(streaks).toHaveLength(1);
     expect(streaks[0].verdicts).toEqual(['paused', 'dry-run']);
     expect(streaks[0].outcome).toBe('recovered');
+  });
+});
+
+describe('verdictLateralSlides', () => {
+  it('run が無い、または1件のみ（比較対象となる隣接ペアが無い）なら空配列を返す', () => {
+    expect(verdictLateralSlides([])).toEqual([]);
+    expect(verdictLateralSlides([makeRun({ iteration: 1, verdict: 'failed' })])).toEqual([]);
+  });
+
+  it(`shiftedFailureがLATERAL_SLIDE_MIN_CHAIN(${LATERAL_SLIDE_MIN_CHAIN})未満(0〜1回)しか連続しないと検知しない`, () => {
+    expect(LATERAL_SLIDE_MIN_CHAIN).toBe(2);
+    // 0回: 同型の足踏み(repeatedFailure)のみ
+    expect(
+      verdictLateralSlides([
+        makeRun({ iteration: 1, verdict: 'failed' }),
+        makeRun({ iteration: 2, verdict: 'failed' }),
+      ]),
+    ).toEqual([]);
+    // 1回: merged→failed(regressed)→needs-human(shiftedFailure x1)→merged(recovered)
+    expect(
+      verdictLateralSlides([
+        makeRun({ iteration: 1, verdict: 'merged' }),
+        makeRun({ iteration: 2, verdict: 'failed' }),
+        makeRun({ iteration: 3, verdict: 'needs-human' }),
+        makeRun({ iteration: 4, verdict: 'merged' }),
+      ]),
+    ).toEqual([]);
+  });
+
+  it('ちょうど閾値(shiftedFailureが2連続=3反復)で1件検知し、データ終端はongoingと分類する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides).toHaveLength(1);
+    expect(slides[0]).toMatchObject({
+      startIteration: 1,
+      endIteration: 3,
+      length: 3,
+      verdicts: ['failed', 'needs-human', 'paused'],
+      iterations: [1, 2, 3],
+      distinctVerdictCount: 3,
+      outcome: 'ongoing',
+      endedInAbandonment: false,
+    });
+  });
+
+  it('区間直後にmergedが来ると recovered、データ終端でabandonedなら droppedOut と分類する', () => {
+    const recovered = verdictLateralSlides([
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }),
+    ]);
+    expect(recovered).toHaveLength(1);
+    expect(recovered[0]).toMatchObject({ startIteration: 1, endIteration: 3, outcome: 'recovered' });
+
+    const droppedOut = verdictLateralSlides([
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'abandoned' }),
+    ]);
+    expect(droppedOut).toHaveLength(1);
+    expect(droppedOut[0]).toMatchObject({ outcome: 'droppedOut', endedInAbandonment: true });
+  });
+
+  it('同じverdictへの足踏み(repeatedFailure)がチェーンを分断し、いずれも閾値未満なら検知しない', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'needs-human' }),
+      makeRun({ iteration: 4, verdict: 'paused' }),
+    ];
+    expect(verdictLateralSlides(runs)).toEqual([]);
+  });
+
+  it('recovered/regressed遷移を挟んだ複数の独立した横滑り区間を、それぞれ独立に検知する', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed' }),
+      makeRun({ iteration: 2, verdict: 'needs-human' }),
+      makeRun({ iteration: 3, verdict: 'paused' }),
+      makeRun({ iteration: 4, verdict: 'merged' }), // recovered（1区間目を確定）
+      makeRun({ iteration: 5, verdict: 'merged' }), // sustainedSuccess
+      makeRun({ iteration: 6, verdict: 'failed' }), // regressed（分断のみ、チェーン開始はしない）
+      makeRun({ iteration: 7, verdict: 'needs-human' }),
+      makeRun({ iteration: 8, verdict: 'paused' }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides.map((s) => [s.startIteration, s.endIteration, s.outcome])).toEqual([
+      [1, 3, 'recovered'],
+      [6, 8, 'ongoing'],
+    ]);
+  });
+
+  it('distinctVerdictCountは非隣接の再出現を除いたユニーク数、totalCostUsdは区間内costの合計になる（末尾のmergedは含めない）', () => {
+    const runs = [
+      makeRun({ iteration: 1, verdict: 'failed', cost: { builderUsd: 0.5, adversaryUsd: 0.1, ideationUsd: 0, totalUsd: 0.6 } }),
+      makeRun({ iteration: 2, verdict: 'needs-human', cost: { builderUsd: 1.2, adversaryUsd: 0.3, ideationUsd: 0, totalUsd: 1.5 } }),
+      makeRun({ iteration: 3, verdict: 'failed', cost: { builderUsd: 0.9, adversaryUsd: 0, ideationUsd: 0.1, totalUsd: 1.0 } }),
+      makeRun({ iteration: 4, verdict: 'merged', cost: { builderUsd: 5, adversaryUsd: 5, ideationUsd: 5, totalUsd: 15 } }),
+    ];
+    const slides = verdictLateralSlides(runs);
+    expect(slides).toHaveLength(1);
+    expect(slides[0].verdicts).toEqual(['failed', 'needs-human', 'failed']);
+    expect(slides[0].distinctVerdictCount).toBe(2);
+    expect(slides[0].totalCostUsd).toBeCloseTo(3.1, 5);
   });
 });
 
