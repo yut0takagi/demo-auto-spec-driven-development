@@ -2188,6 +2188,67 @@ export function costBreakdown(runs: RunRecord[]): CostBreakdown {
   return { totalUsd, byRole, byModel };
 }
 
+export interface CostRoleStageCell {
+  role: CostRole;
+  /** RunRecord.verdict を「反復がループのどのステージまで到達したか」の代理指標として使う */
+  stage: Verdict;
+  totalUsd: number;
+  /** 0..100。totalUsd が 0 なら NaN を避けて 0 にする。 */
+  pct: number;
+}
+
+export interface CostRoleStageBreakdown {
+  totalUsd: number;
+  /** 実データに出現した stage のみを含む（0件の verdict の列は作らない）。 */
+  cells: CostRoleStageCell[];
+  /** costBreakdown.byRole と同じ（役割ごとの合計、全 stage 横断）。 */
+  roleTotals: RoleCostBreakdown[];
+  stageTotals: Array<{ stage: Verdict; totalUsd: number; pct: number; runCount: number }>;
+}
+
+/**
+ * 役割(CostRole) × ステージ(Verdict) の2軸でコストを交差集計する。costBreakdown と
+ * 同様コストは verdict に関係なく実消費されているため全 verdict を含める。
+ */
+export function costBreakdownByRoleAndStage(runs: RunRecord[]): CostRoleStageBreakdown {
+  const { totalUsd, byRole: roleTotals } = costBreakdown(runs);
+  const pctOf = (value: number) => (totalUsd === 0 ? 0 : (value / totalUsd) * 100);
+
+  const stageCost = new Map<Verdict, Record<CostRole, number>>();
+  const stageTotalUsd = new Map<Verdict, number>();
+  const stageRunCounts = new Map<Verdict, number>();
+  const stageOrder: Verdict[] = [];
+
+  for (const r of runs) {
+    if (!stageCost.has(r.verdict)) {
+      stageCost.set(r.verdict, { builder: 0, adversary: 0, ideation: 0, planner: 0 });
+      stageTotalUsd.set(r.verdict, 0);
+      stageOrder.push(r.verdict);
+    }
+    const cell = stageCost.get(r.verdict)!;
+    cell.builder += r.cost.builderUsd;
+    cell.adversary += r.cost.adversaryUsd;
+    cell.ideation += r.cost.ideationUsd;
+    cell.planner += r.cost.plannerUsd ?? 0;
+    stageTotalUsd.set(r.verdict, stageTotalUsd.get(r.verdict)! + r.cost.totalUsd);
+    stageRunCounts.set(r.verdict, (stageRunCounts.get(r.verdict) ?? 0) + 1);
+  }
+
+  const cells: CostRoleStageCell[] = stageOrder.flatMap((stage) =>
+    COST_ROLES.map((role) => {
+      const value = stageCost.get(stage)![role];
+      return { role, stage, totalUsd: value, pct: pctOf(value) };
+    }),
+  );
+
+  const stageTotals = stageOrder.map((stage) => {
+    const sum = stageTotalUsd.get(stage)!;
+    return { stage, totalUsd: sum, pct: pctOf(sum), runCount: stageRunCounts.get(stage) ?? 0 };
+  });
+
+  return { totalUsd, cells, roleTotals, stageTotals };
+}
+
 /**
  * 「承認PR」= adversary が approve し、かつ実際に PR が開かれた（prNumber が null でない）反復。
  * `adversary.approved` だけでは不十分: builder が変更を生成しなかった反復（例: 0022.json）は

@@ -4,6 +4,7 @@ import {
   summarize,
   e2eFailureRateTrend,
   costBreakdown,
+  costBreakdownByRoleAndStage,
   changedLinesTrend,
   builderComparison,
   earlyWarningSignal,
@@ -366,6 +367,41 @@ test('モデルコストの内訳が役割別合計とモデル別合計を表�
   const body2 = await bodyTextExcludingFreeform(page);
   expect(body2).not.toContain('NaN');
   expect(body2).not.toContain('undefined');
+});
+
+test('コスト内訳（役割×ステージ）パネルが実データのセル・行合計・列合計を表示する', async ({ page }) => {
+  await page.goto('/');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const breakdown = costBreakdownByRoleAndStage(runs);
+
+  expect(
+    breakdown.totalUsd,
+    'data/runs の合計コストが0のため「コスト内訳（役割×ステージ）」パネルの中身を検証できない。fixture を見直すこと。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('cost-role-stage-breakdown-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`$${breakdown.totalUsd.toFixed(2)}`);
+
+  // 実データに出現した role×stage の全セルが、集計結果と一致する金額・pctで表示される
+  for (const cell of breakdown.cells) {
+    const cellEl = page.getByTestId(`cost-role-stage-cell-${cell.role}-${cell.stage}`);
+    await expect(cellEl).toBeVisible();
+    await expect(cellEl).toContainText(`$${cell.totalUsd.toFixed(2)}`);
+    await expect(cellEl).toContainText(`${cell.pct.toFixed(1)}%`);
+  }
+
+  // 行合計(役割ごと)・列合計(ステージごと)も一致する
+  for (const roleTotal of breakdown.roleTotals) {
+    const totalEl = page.getByTestId(`cost-role-stage-role-total-${roleTotal.role}`);
+    await expect(totalEl).toContainText(`$${roleTotal.totalUsd.toFixed(2)}`);
+  }
+  for (const stageTotal of breakdown.stageTotals) {
+    const totalEl = page.getByTestId(`cost-role-stage-stage-total-${stageTotal.stage}`);
+    await expect(totalEl).toContainText(`$${stageTotal.totalUsd.toFixed(2)}`);
+  }
 });
 
 test('ブレーカ発火までのランウェイパネルが実データから導出した残反復数・対象iterationを表示する', async ({ page }) => {

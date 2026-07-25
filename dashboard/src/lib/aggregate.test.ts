@@ -10,6 +10,7 @@ import {
   mergeRateTrend,
   e2eFailureRateTrend,
   costBreakdown,
+  costBreakdownByRoleAndStage,
   changedLinesTrend,
   builderComparison,
   earlyWarningSignal,
@@ -1157,6 +1158,90 @@ describe('costBreakdown', () => {
     const modelSum = b.byModel.reduce((s, m) => s + m.totalUsd, 0);
     expect(modelSum).toBeCloseTo(summary.totalCostUsd);
     expect(b.totalUsd).toBeCloseTo(summary.totalCostUsd);
+  });
+});
+
+describe('costBreakdownByRoleAndStage', () => {
+  it('空配列では totalUsd=0、cells/stageTotals は空配列、roleTotals は4ロール分すべて0を返す', () => {
+    const b = costBreakdownByRoleAndStage([]);
+    expect(b.totalUsd).toBe(0);
+    expect(b.cells).toEqual([]);
+    expect(b.stageTotals).toEqual([]);
+    expect(b.roleTotals.map((r) => r.role)).toEqual(['builder', 'adversary', 'ideation', 'planner']);
+    for (const r of b.roleTotals) {
+      expect(r.totalUsd).toBe(0);
+      expect(r.pct).toBe(0);
+    }
+  });
+
+  it('単一verdict(plannerUsd未記録の旧レコード)では stage 列は1つのみ、planner セルは0で存在する', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        cost: { builderUsd: 0.6, adversaryUsd: 0.3, ideationUsd: 0.1, totalUsd: 1.0 },
+      }),
+    ];
+    const b = costBreakdownByRoleAndStage(runs);
+    expect(b.totalUsd).toBeCloseTo(1.0);
+    expect(b.stageTotals).toHaveLength(1);
+    expect(b.stageTotals[0]).toMatchObject({ stage: 'merged', totalUsd: 1.0, runCount: 1 });
+    expect(b.stageTotals[0].pct).toBeCloseTo(100);
+
+    expect(b.cells).toHaveLength(4);
+    const builderCell = b.cells.find((c) => c.role === 'builder' && c.stage === 'merged');
+    expect(builderCell?.totalUsd).toBeCloseTo(0.6);
+    expect(builderCell?.pct).toBeCloseTo(60);
+    const plannerCell = b.cells.find((c) => c.role === 'planner' && c.stage === 'merged');
+    expect(plannerCell?.totalUsd).toBe(0);
+    expect(plannerCell?.pct).toBe(0);
+  });
+
+  it('複数verdict×複数roleが混在する場合、セルごとに正しく合算・pct計算し、出現しないstageの列は作らない', () => {
+    const runs = [
+      makeRun({
+        iteration: 1,
+        verdict: 'merged',
+        cost: { builderUsd: 0.5, adversaryUsd: 0.2, ideationUsd: 0.1, totalUsd: 0.8 },
+      }),
+      makeRun({
+        iteration: 2,
+        verdict: 'failed',
+        cost: { builderUsd: 0.1, adversaryUsd: 0.05, ideationUsd: 0.05, totalUsd: 0.2 },
+      }),
+      makeRun({
+        iteration: 3,
+        verdict: 'merged',
+        cost: { builderUsd: 0.3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 0.3 },
+      }),
+    ];
+    const b = costBreakdownByRoleAndStage(runs);
+    expect(b.totalUsd).toBeCloseTo(1.3);
+
+    // merged: builder 0.5+0.3=0.8
+    const mergedBuilder = b.cells.find((c) => c.role === 'builder' && c.stage === 'merged');
+    expect(mergedBuilder?.totalUsd).toBeCloseTo(0.8);
+    expect(mergedBuilder?.pct).toBeCloseTo((0.8 / 1.3) * 100);
+
+    const failedBuilder = b.cells.find((c) => c.role === 'builder' && c.stage === 'failed');
+    expect(failedBuilder?.totalUsd).toBeCloseTo(0.1);
+    expect(failedBuilder?.pct).toBeCloseTo((0.1 / 1.3) * 100);
+
+    // 出現した stage(merged/failed)のみが列として存在し、abandoned等は含まない
+    expect(b.stageTotals.map((s) => s.stage).sort()).toEqual(['failed', 'merged']);
+    const mergedStage = b.stageTotals.find((s) => s.stage === 'merged');
+    expect(mergedStage?.totalUsd).toBeCloseTo(1.1);
+    expect(mergedStage?.runCount).toBe(2);
+    const failedStage = b.stageTotals.find((s) => s.stage === 'failed');
+    expect(failedStage?.totalUsd).toBeCloseTo(0.2);
+    expect(failedStage?.runCount).toBe(1);
+
+    // roleTotals は verdict を横断した役割合計（costBreakdown.byRole 相当）
+    const builderTotal = b.roleTotals.find((r) => r.role === 'builder');
+    expect(builderTotal?.totalUsd).toBeCloseTo(0.9);
+
+    // 全セルの pct 合計は概ね100%になる（取りこぼしがない）
+    expect(b.cells.reduce((sum, c) => sum + c.pct, 0)).toBeCloseTo(100);
   });
 });
 
