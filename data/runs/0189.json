@@ -1,0 +1,42 @@
+{
+  "id": "20260725T062933Z-255",
+  "iteration": 189,
+  "issue": {
+    "number": 255,
+    "title": "Gate Reason 無発生の「快適性」トレンドパネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/255-gate-reason",
+  "startedAt": "2026-07-25T06:29:33Z",
+  "finishedAt": "2026-07-25T06:40:06Z",
+  "durationSec": 633,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 273,
+  "adversary": {
+    "approved": true,
+    "summary": "Gate Reason 無発生の快適性トレンド観測機能が完全に実装されている。gateReasonComfortTrendSignal() は正しく window 内の comfort 比率を計算し、改善/悪化/横ばいを判定。テストは境界値・全ケースを網羅し、実装を実質的に検証している。既存コードへの副作用なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 307,
+  "cost": {
+    "builderUsd": 1.965349,
+    "adversaryUsd": 0.080213,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.4035569,
+    "totalUsd": 2.449119
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
