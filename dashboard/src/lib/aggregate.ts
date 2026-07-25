@@ -7718,3 +7718,84 @@ export function operatingHourCategorySummary(runs: RunRecord[]): OperatingHourCa
       };
     });
 }
+
+/** 給油成功率・平均増減の算出に使う直近反復数。GENERATION_RATE_WINDOW と同水準の窓。 */
+export const REFUEL_FORECAST_WINDOW = 5;
+
+/** 直近窓の給油成功率がこれを下回ると、残量に関わらずリスクありと判定する。 */
+export const REFUEL_SUCCESS_RATE_RISK_THRESHOLD = 0.5;
+
+export interface IdeationRefuelForecastPoint {
+  iteration: number;
+  /** その反復が ideation で生成した issue 数（nextIssues.length）。 */
+  generated: number;
+  /** その反復自身が消費する1件を、自分の生成分だけで賄えたか（generated >= 1）。 */
+  refueled: boolean;
+  /** backlogFlowByIteration と同じ基準（IDEATION_LOW_WATER 起点）で積算した相対残量。 */
+  balance: number;
+}
+
+export interface IdeationRefuelForecastSignal {
+  /** recentSuccessRate / averageNet の算出に使った反復数（REFUEL_FORECAST_WINDOW を上限にruns件数で制限）。 */
+  windowSize: number;
+  /** 直近windowSize反復のうち、給油に成功した割合。 */
+  recentSuccessRate: number;
+  /** 全反復を通した給油成功率（比較用のベースライン）。 */
+  overallSuccessRate: number;
+  /** 現時点の相対残量（backlogFlowByIteration の最新balanceと同じ）。 */
+  currentBalance: number;
+  /** 直近windowSize反復の1反復あたり正味増減平均。 */
+  averageNet: number;
+  /** currentBalance + averageNet。直近ペースがそのまま続いた場合の次反復の繰り越し予測残量。 */
+  carryoverForecast: number;
+  /** recentSuccessRate が閾値未満、または carryoverForecast が low_water 基準以下（発報）。 */
+  atRisk: boolean;
+  /** 全反復の給油点列（古い→新しい順）。 */
+  points: IdeationRefuelForecastPoint[];
+  /** recentSuccessRate / averageNet の対象iteration（古い→新しい順）。 */
+  iterations: number[];
+}
+
+/**
+ * Ideation給油成功率と次反復への繰り越し予測: backlogGenerationRateSignal が生成数の
+ * 絶対量だけを見るのに対し、こちらは各反復が「自分自身の消費1件を自分の生成分だけで
+ * 賄えたか（給油成功）」という比率と、直近ペースを1反復先まで延長した場合の相対残量
+ * （繰り越し予測）を組み合わせる。給油成功率が低い場合と、残量そのものが低水位基準へ
+ * 落ち込む場合の両方を独立したリスク要因として発報する。runsが空ならnull。
+ */
+export function ideationRefuelForecastSignal(runs: RunRecord[]): IdeationRefuelForecastSignal | null {
+  const flow = backlogFlowByIteration(runs);
+  if (flow.length === 0) return null;
+
+  const points: IdeationRefuelForecastPoint[] = flow.map((f) => ({
+    iteration: f.iteration,
+    generated: f.inflow,
+    refueled: f.inflow >= f.outflow,
+    balance: f.balance,
+  }));
+
+  const windowSize = Math.min(REFUEL_FORECAST_WINDOW, points.length);
+  const windowPoints = points.slice(points.length - windowSize);
+  const windowFlow = flow.slice(flow.length - windowSize);
+
+  const recentSuccessRate = windowPoints.filter((p) => p.refueled).length / windowSize;
+  const overallSuccessRate = points.filter((p) => p.refueled).length / points.length;
+  const averageNet = windowFlow.reduce((sum, f) => sum + f.net, 0) / windowSize;
+
+  const currentBalance = points[points.length - 1].balance;
+  const carryoverForecast = currentBalance + averageNet;
+
+  const atRisk = recentSuccessRate < REFUEL_SUCCESS_RATE_RISK_THRESHOLD || carryoverForecast <= IDEATION_LOW_WATER;
+
+  return {
+    windowSize,
+    recentSuccessRate,
+    overallSuccessRate,
+    currentBalance,
+    averageNet,
+    carryoverForecast,
+    atRisk,
+    points,
+    iterations: windowPoints.map((p) => p.iteration),
+  };
+}
