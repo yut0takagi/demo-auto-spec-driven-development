@@ -6,28 +6,10 @@ import json
 import re
 from dataclasses import dataclass
 
+from orchestrator import prompts
 from orchestrator.claude_cli import run_agent
 from orchestrator.config import Config
 from orchestrator.shell import Runner, real_runner
-
-IDEATION_PROMPT_TEMPLATE = """\
-あなたはこのリポジトリのプロダクトオーナーです。
-「ループ自身の稼働を可視化する自己観測ダッシュボード」を改善する次の作業を提案してください。
-
-## 現在の状況
-{context}
-
-## 提案の条件
-- 1 件あたり 3000 行以内の変更で完了できる粒度にする
-- `dashboard/` 配下だけで完結する（CI やオーケストレータは対象外）
-- 「テストで正しさを機械判定できる」ものを優先する
-- 既存機能の焼き直しではなく、観測性を実際に高めるものにする
-
-最大 {max_issues} 件、次の JSON 配列だけをコードフェンスで囲って出力してください:
-```json
-[{{"title": "<簡潔な題名>", "body": "<背景と受け入れ条件>"}}]
-```
-"""
 
 _FENCED = re.compile(r"```(?:json)?\s*(\[.*?\])\s*```", re.DOTALL)
 _BARE = re.compile(r"(\[.*\])", re.DOTALL)
@@ -72,8 +54,8 @@ def propose_next_issues(
     runner: Runner = real_runner,
 ) -> IdeationResult:
     out = run_agent(
-        IDEATION_PROMPT_TEMPLATE.format(
-            context=context, max_issues=cfg.ideation_max_issues
+        prompts.render(
+            "ideation", context=context, max_issues=cfg.ideation_max_issues
         ),
         model=cfg.ideation_model,
         cwd=cwd,
