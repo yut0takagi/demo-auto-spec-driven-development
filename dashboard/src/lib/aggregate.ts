@@ -6411,6 +6411,86 @@ export function dropoutStreaks(runs: RunRecord[]): DropoutStreak[] {
   return streaks;
 }
 
+/** 横滑り判定の対象とする最小連続チェーン長（shiftedFailure遷移の連続回数）。反復数では+1。 */
+export const LATERAL_SLIDE_MIN_CHAIN = 2;
+
+export interface VerdictLateralSlide {
+  startIteration: number;
+  endIteration: number;
+  /** 区間に含まれる反復数（LATERAL_SLIDE_MIN_CHAIN + 1 以上） */
+  length: number;
+  /** 区間に含まれるverdict（iteration昇順） */
+  verdicts: Verdict[];
+  /** 区間に含まれる反復番号（iteration昇順） */
+  iterations: number[];
+  /** 区間内に出現したverdictのユニーク数（横滑りの振れ幅の目安） */
+  distinctVerdictCount: number;
+  outcome: DropoutOutcome;
+  /** 区間の最後のverdictが abandoned だったか */
+  endedInAbandonment: boolean;
+  /** 区間に含まれる反復の cost.totalUsd 合計 */
+  totalCostUsd: number;
+}
+
+/**
+ * 「横滑り」＝verdictTransitions() の kind が shiftedFailure（不通過の型が変化）と
+ * 分類される遷移が LATERAL_SLIDE_MIN_CHAIN 回以上連続する区間を検知する。dropoutStreaks
+ * が「非マージが連続しているか」だけを見るのに対し、こちらは「同じ場所（非マージ）に
+ * 留まりながら不通過の型だけが変わり続けている」＝前にも後ろにも進んでいない状態を
+ * 区別して抽出する。shiftedFailure は定義上 from/to が共に非マージなので、区間を構成する
+ * 反復は常に非マージであり、outcome の判定は dropoutStreaks と同じ考え方でよい:
+ * 区間直後の遷移が recovered（mergedに到達）なら recovered、そうでなければ
+ * （repeatedFailureで途切れた、またはデータ終端に達した）区間最後のverdictが
+ * abandoned なら droppedOut、それ以外は ongoing とする。
+ */
+export function verdictLateralSlides(runs: RunRecord[]): VerdictLateralSlide[] {
+  const sorted = byIterationAsc(runs);
+  const transitions = verdictTransitions(runs);
+  const slides: VerdictLateralSlide[] = [];
+
+  let chainStartIdx: number | null = null;
+  let chainLen = 0;
+
+  const finalize = (endIdx: number, followedByMerged: boolean) => {
+    if (chainLen < LATERAL_SLIDE_MIN_CHAIN) {
+      chainStartIdx = null;
+      chainLen = 0;
+      return;
+    }
+    const chainRuns = sorted.slice(chainStartIdx!, endIdx + 1);
+    const last = chainRuns[chainRuns.length - 1];
+    const endedInAbandonment = last.verdict === 'abandoned';
+    slides.push({
+      startIteration: chainRuns[0].iteration,
+      endIteration: last.iteration,
+      length: chainRuns.length,
+      verdicts: chainRuns.map((r) => r.verdict),
+      iterations: chainRuns.map((r) => r.iteration),
+      distinctVerdictCount: new Set(chainRuns.map((r) => r.verdict)).size,
+      outcome: followedByMerged ? 'recovered' : endedInAbandonment ? 'droppedOut' : 'ongoing',
+      endedInAbandonment,
+      totalCostUsd: chainRuns.reduce((sum, r) => sum + r.cost.totalUsd, 0),
+    });
+    chainStartIdx = null;
+    chainLen = 0;
+  };
+
+  for (let i = 0; i < transitions.length; i++) {
+    const t = transitions[i];
+    if (t.kind === 'shiftedFailure') {
+      if (chainStartIdx === null) chainStartIdx = i;
+      chainLen++;
+    } else if (chainStartIdx !== null) {
+      finalize(i, t.kind === 'recovered');
+    }
+  }
+  if (chainStartIdx !== null) {
+    finalize(sorted.length - 1, false);
+  }
+
+  return slides;
+}
+
 /** モデルの成功率が「pressure(revise回数)が増えても崩れない」とみなす、bucket間の変化幅(pt)の下限。 */
 export const MODEL_SKILL_PRESSURE_FLAT_THRESHOLD_PCT = 5;
 

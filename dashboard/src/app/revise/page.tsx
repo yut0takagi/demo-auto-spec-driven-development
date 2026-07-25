@@ -14,6 +14,7 @@ import { MergePathLengthByVerdictPanel } from '@/components/MergePathLengthByVer
 import { VerdictTransitionPanel } from '@/components/VerdictTransitionPanel';
 import { VerdictTransitionRootCausePanel } from '@/components/VerdictTransitionRootCausePanel';
 import { VerdictJumpAnomalyPanel } from '@/components/VerdictJumpAnomalyPanel';
+import { VerdictLateralSlidePanel } from '@/components/VerdictLateralSlidePanel';
 import { E2eReviseCorrelationPanel } from '@/components/E2eReviseCorrelationPanel';
 import { E2eDiffSizeCorrelationPanel } from '@/components/E2eDiffSizeCorrelationPanel';
 import { E2eBuilderWorkloadSeparationPanel } from '@/components/E2eBuilderWorkloadSeparationPanel';
@@ -47,6 +48,7 @@ export default function RevisePage() {
         <VerdictTransitionPanel runs={runs} />
         <VerdictTransitionRootCausePanel runs={runs} />
         <VerdictJumpAnomalyPanel runs={runs} />
+        <VerdictLateralSlidePanel runs={runs} />
         <E2eReviseCorrelationPanel runs={runs} />
         <E2eDiffSizeCorrelationPanel runs={runs} />
         <E2eBuilderWorkloadSeparationPanel runs={runs} />
