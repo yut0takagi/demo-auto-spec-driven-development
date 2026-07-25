@@ -1,0 +1,44 @@
+{
+  "id": "20260725T042802Z-247",
+  "iteration": 181,
+  "issue": {
+    "number": 247,
+    "title": "ゲート不通過理由と builder モデル選択の相関マトリクス自動更新",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/247-builder",
+  "startedAt": "2026-07-25T04:28:02Z",
+  "finishedAt": "2026-07-25T04:35:17Z",
+  "durationSec": 435,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "相関マトリクスの lift 計算ロジック、スライド窓推移、信号方向判定が実装されており、要件を正確に満たしている。テストは境界値・複数シナリオをカバーし、既存の母集団定義（gateReasons 持つ反復のみ）と一貫性がある。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.969928,
+    "adversaryUsd": 0.114215,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.2756797,
+    "totalUsd": 1.359823
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}

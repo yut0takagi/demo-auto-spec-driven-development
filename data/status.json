@@ -1,7 +1,7 @@
 {
   "state": "RUNNING",
-  "reason": "直近の反復: merged",
+  "reason": "直近の反復: abandoned",
   "actor": "system",
-  "updatedAt": "2026-07-25T04:28:01Z",
+  "updatedAt": "2026-07-25T04:35:17Z",
   "resumeHint": "gh variable set LOOP_ENABLED --body true && gh workflow enable loop.yml"
 }
