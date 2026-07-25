@@ -1,0 +1,42 @@
+{
+  "id": "20260725T040244Z-247",
+  "iteration": 180,
+  "issue": {
+    "number": 247,
+    "title": "ゲート不通過理由と builder モデル選択の相関マトリクス自動更新",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/247-builder",
+  "startedAt": "2026-07-25T04:02:44Z",
+  "finishedAt": "2026-07-25T04:28:00Z",
+  "durationSec": 1516,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 260,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件を正確に実装。builderモデル×ゲート理由の相関を直近5反復スライド窓で推移観測し、lift の強含み/弱含み/横ばい判定ロジック、最小件数閾値フィルタ、null処理、ソート安定性がすべて要件通り。テストは境界値・ノイズフィルタ・窓スライド・方向判定(3パターン)を網羅し、実装の振る舞いを実質的に検証。既存コード変更なし、新規追加のみで既存ダッシュボード挙動に影響なし。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 395,
+  "cost": {
+    "builderUsd": 8.763039,
+    "adversaryUsd": 0.200146,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.6099187,
+    "totalUsd": 9.573104
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
