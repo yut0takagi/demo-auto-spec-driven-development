@@ -4174,6 +4174,67 @@ export function adversaryApprovalCommentStats(runs: RunRecord[]): AdversaryAppro
   };
 }
 
+export interface ReviseCountAdversaryComparisonBucket {
+  bucket: ReviseVerdictBucketLabel;
+  /** このbucketに属した反復数（reachedVerifyのみ） */
+  count: number;
+  /** adversary.approved === true だった件数 */
+  approvedCount: number;
+  /** 0..1. approvedCount / count */
+  approvalRate: number;
+  meanSummaryLength: number;
+  medianSummaryLength: number;
+  /** 該当した反復番号（昇順） */
+  iterations: number[];
+}
+
+/**
+ * revise回数(bucket: 0/1/2/3+) と adversary の承認率・レビュー文字量の関係。
+ * reviseVerdictMatrix/reviseCycleCostRecovery は revise回数bucket別の分布を見るが
+ * 従属変数がverdict件数・コストであり、adversaryの承認率・レビュー文字量ではない。
+ * 一方 adversaryApprovalCommentStats/adversarySummaryLengthTrend は承認/却下別の
+ * 文字数比較はあるが、軸がrevise回数bucketではない。この関数は両者の交差点として、
+ * 「revise回数が増えるほどadversaryの承認率は下がるか／レビュー文字量は増えるか」
+ * という粘着質化仮説を検証するために存在する。
+ * 母集団は adversarySummaryLengthTrend/adversaryApprovalCommentStats と同じ
+ * reachedVerify（failed run の summary は「レビューに到達しなかった」等の sentinel
+ * であり実測のレビュー内容ではないため除外する）。
+ * bucketはデータに実際に出現したものだけを、reviseVerdictMatrix と同じ順序で返す。
+ */
+export function reviseCountAdversaryComparison(runs: RunRecord[]): ReviseCountAdversaryComparisonBucket[] {
+  const byBucket = new Map<
+    ReviseVerdictBucketLabel,
+    { approvedCount: number; lengths: number[]; iterations: number[] }
+  >();
+
+  for (const run of byIterationAsc(runs).filter(reachedVerify)) {
+    const bucket = reviseVerdictBucket(run.reviseCycles);
+    let entry = byBucket.get(bucket);
+    if (!entry) {
+      entry = { approvedCount: 0, lengths: [], iterations: [] };
+      byBucket.set(bucket, entry);
+    }
+    if (run.adversary.approved) entry.approvedCount++;
+    entry.lengths.push(adversarySummaryLength(run));
+    entry.iterations.push(run.iteration);
+  }
+
+  return [...byBucket.entries()]
+    .map(([bucket, entry]) => {
+      const count = entry.lengths.length;
+      return {
+        bucket,
+        count,
+        approvedCount: entry.approvedCount,
+        approvalRate: count === 0 ? 0 : entry.approvedCount / count,
+        meanSummaryLength: mean(entry.lengths),
+        medianSummaryLength: median(entry.lengths),
+        iterations: entry.iterations,
+      };
+    })
+    .sort((a, b) => REVISE_VERDICT_BUCKET_ORDER.indexOf(a.bucket) - REVISE_VERDICT_BUCKET_ORDER.indexOf(b.bucket));
+}
+
 /** ダイジェストに表示する直近Adversaryコメントの最大件数。 */
 export const ADVERSARY_COMMENT_DIGEST_LIMIT = 5;
 

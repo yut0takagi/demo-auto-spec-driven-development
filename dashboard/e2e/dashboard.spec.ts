@@ -76,6 +76,7 @@ import {
   approvedButBuilderFailedSummary,
   approvedButBuilderFailedIterations,
   reviseCycleCostRecovery,
+  reviseCountAdversaryComparison,
   modelPairCompatibilityDivergence,
   builderModelGateReasonCorrelation,
   backlogLowWaterEta,
@@ -730,6 +731,50 @@ test('Reviseサイクル別 APIコスト分布と回収効率パネルが実デ�
     const expectedCostBarPct = (b.meanCostUsd / maxMeanCostUsd) * 100;
     const actualWidthStyle = await costBar.evaluate((el) => (el as HTMLElement).style.width);
     expect(parseFloat(actualWidthStyle)).toBeCloseTo(expectedCostBarPct, 1);
+  }
+
+  const body = await bodyTextExcludingFreeform(page);
+  expect(body).not.toContain('NaN');
+  expect(body).not.toContain('undefined');
+  expect(body).not.toContain('Infinity');
+});
+
+test('Revise回数別 Adversary承認率・レビュー文字数比較パネルが実データから導出したbucket統計を表示する', async ({ page }) => {
+  await page.goto('/revise');
+
+  const { runs } = loadRuns();
+  expect(runs.length, 'data/runs に有効な run が1件も読めなかった（fixture が壊れている）').toBeGreaterThan(0);
+  const buckets = reviseCountAdversaryComparison(runs);
+  expect(
+    buckets.length,
+    'data/runs から revise回数bucket が1件も導出できず、パネルの「データあり」経路を検証できない。',
+  ).toBeGreaterThan(0);
+
+  const panel = page.getByTestId('revise-count-adversary-approval-panel');
+  await expect(panel).toBeVisible();
+  await expect(panel).toContainText(`${buckets.length}区分`);
+
+  // bucket は常に 0→1→2→3+ の順で描画される（出現したものだけ）
+  const rows = await page.locator('[data-testid^="revise-count-adversary-row-"]').all();
+  const renderedBuckets = await Promise.all(
+    rows.map(async (r) => (await r.getAttribute('data-testid'))!.replace('revise-count-adversary-row-', '')),
+  );
+  expect(renderedBuckets).toEqual(buckets.map((b) => b.bucket));
+
+  // 各 bucket 行が reviseCountAdversaryComparison()（別の計算経路）と一致する承認率・
+  // レビュー平均/中央値文字数を表示する
+  for (const b of buckets) {
+    const rateEl = page.getByTestId(`revise-count-adversary-approval-rate-${b.bucket}`);
+    await expect(rateEl).toHaveText(`承認${(b.approvalRate * 100).toFixed(0)}%（${b.approvedCount}/${b.count}）`);
+
+    const lengthStatsEl = page.getByTestId(`revise-count-adversary-length-stats-${b.bucket}`);
+    await expect(lengthStatsEl).toHaveText(
+      `平均${b.meanSummaryLength.toFixed(0)}文字 / 中央値${b.medianSummaryLength.toFixed(0)}文字（${b.count}件）`,
+    );
+
+    const approvalBar = page.getByTestId(`revise-count-adversary-approval-bar-${b.bucket}`);
+    const actualApprovalWidth = await approvalBar.evaluate((el) => (el as HTMLElement).style.width);
+    expect(parseFloat(actualApprovalWidth)).toBeCloseTo(b.approvalRate * 100, 1);
   }
 
   const body = await bodyTextExcludingFreeform(page);

@@ -5,6 +5,7 @@ import { ReviseStopPatternByModelPanel } from '@/components/ReviseStopPatternByM
 import { ReviseCyclesByVerdictPanel } from '@/components/ReviseCyclesByVerdictPanel';
 import { ReviseVerdictMatrixPanel } from '@/components/ReviseVerdictMatrixPanel';
 import { ReviseCycleCostRecoveryPanel } from '@/components/ReviseCycleCostRecoveryPanel';
+import { ReviseCountAdversaryApprovalPanel } from '@/components/ReviseCountAdversaryApprovalPanel';
 import { RetryCostEfficiencyTrendPanel } from '@/components/RetryCostEfficiencyTrendPanel';
 import { ReviseSizeSuccessPatternPanel } from '@/components/ReviseSizeSuccessPatternPanel';
 import { RevisionSizeCurvePanel } from '@/components/RevisionSizeCurvePanel';
@@ -37,6 +38,7 @@ export default function RevisePage() {
         <ReviseCyclesByVerdictPanel runs={runs} />
         <ReviseVerdictMatrixPanel runs={runs} />
         <ReviseCycleCostRecoveryPanel runs={runs} />
+        <ReviseCountAdversaryApprovalPanel runs={runs} />
         <RetryCostEfficiencyTrendPanel runs={runs} />
         <ReviseSizeSuccessPatternPanel runs={runs} />
         <RevisionSizeCurvePanel runs={runs} />
