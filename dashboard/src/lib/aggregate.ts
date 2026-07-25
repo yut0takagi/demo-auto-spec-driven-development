@@ -7244,3 +7244,95 @@ export function verdictJumpSummary(runs: RunRecord[]): VerdictJumpKindSummary[] 
     })
     .sort((a, b) => b.count - a.count);
 }
+
+/** builderModelGateReasonCorrelationTrend のスライド窓幅（gateReasonsを持つ反復数）。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_WINDOW = 5;
+/** 窓内の出現件数がこれ未満の(model, category)セルは低頻度ノイズとして最大lift候補から除外する。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT = 2;
+/** 直近点のmaxLiftと過去点平均の絶対差がこの値未満なら「横ばい」。GATE_REASON_TREND_FLAT_THRESHOLDと同じ絶対差方式。 */
+export const BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD = 0.25;
+
+export interface BuilderModelGateReasonCorrelationTrendPoint {
+  iteration: number;
+  /** この窓内で最大liftだった(model, category)。閾値件数以上のセルが1つも無ければ全てnull */
+  model: string | null;
+  category: GateReasonCategory | null;
+  maxLift: number | null;
+  count: number | null;
+}
+
+/**
+ * builderModelGateReasonCorrelation（全履歴を1回で集計する静的lift行列）を、直近
+ * BUILDER_MODEL_GATE_REASON_TREND_WINDOW件のスライド窓ごとに呼び出し直して推移にする。
+ * 母集団はgateReasonBurdenTrendと同じ（gateReasonsを持つ反復のみ）。各窓でMIN_COUNT件以上
+ * 出現したセルに限って最大liftの(model, category)を1点とする。窓幅未満なら空配列。
+ */
+export function builderModelGateReasonCorrelationTrend(runs: RunRecord[]): BuilderModelGateReasonCorrelationTrendPoint[] {
+  const filtered = byIterationAsc(runs).filter((r) => r.gateReasons.length > 0);
+  const w = BUILDER_MODEL_GATE_REASON_TREND_WINDOW;
+  if (filtered.length < w) return [];
+
+  const points: BuilderModelGateReasonCorrelationTrendPoint[] = [];
+  for (let i = w - 1; i < filtered.length; i++) {
+    const windowRuns = filtered.slice(i - w + 1, i + 1);
+    const best = builderModelGateReasonCorrelation(windowRuns)
+      .flatMap((row) => row.cells.map((cell) => ({ ...cell, model: row.model })))
+      .filter((cell) => cell.count >= BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT)
+      .sort(
+        (a, b) =>
+          b.lift - a.lift ||
+          b.count - a.count ||
+          GATE_REASON_CATEGORY_ORDER.indexOf(a.category) - GATE_REASON_CATEGORY_ORDER.indexOf(b.category) ||
+          a.model.localeCompare(b.model),
+      )[0];
+    points.push({
+      iteration: windowRuns[windowRuns.length - 1].iteration,
+      model: best?.model ?? null,
+      category: best?.category ?? null,
+      maxLift: best?.lift ?? null,
+      count: best?.count ?? null,
+    });
+  }
+  return points;
+}
+
+/** intensifying: 直近の最大liftが過去平均より強含み（偏りが強まっている）。easing: 弱含み。flat: 横ばい。 */
+export type BuilderModelGateReasonCorrelationTrendDirection = 'intensifying' | 'easing' | 'flat';
+
+export interface BuilderModelGateReasonCorrelationTrendSignal {
+  latestIteration: number;
+  latestMaxLift: number;
+  latestModel: string;
+  latestCategory: GateReasonCategory;
+  /** 直近点を除く、maxLiftが定義できた過去の点の平均。sampleSizeはその点数 */
+  historicalAvgMaxLift: number;
+  sampleSize: number;
+  direction: BuilderModelGateReasonCorrelationTrendDirection;
+}
+
+function builderModelGateReasonCorrelationTrendDirection(delta: number): BuilderModelGateReasonCorrelationTrendDirection {
+  if (Math.abs(delta) < BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD) return 'flat';
+  return delta > 0 ? 'intensifying' : 'easing';
+}
+
+/** builderModelGateReasonCorrelationTrend の最新点が過去平均よりmaxLiftの絶対差で強含み/弱含み/横ばいかを判定する。最新点または過去点にmaxLiftが定義できたものが無ければnull。 */
+export function builderModelGateReasonCorrelationTrendSignal(
+  runs: RunRecord[],
+): BuilderModelGateReasonCorrelationTrendSignal | null {
+  const points = builderModelGateReasonCorrelationTrend(runs);
+  if (points.length === 0) return null;
+  const latest = points[points.length - 1];
+  if (latest.maxLift === null || latest.model === null || latest.category === null) return null;
+  const historical = points.slice(0, -1).filter((p) => p.maxLift !== null);
+  if (historical.length === 0) return null;
+  const historicalAvgMaxLift = mean(historical.map((p) => p.maxLift as number));
+  return {
+    latestIteration: latest.iteration,
+    latestMaxLift: latest.maxLift,
+    latestModel: latest.model,
+    latestCategory: latest.category,
+    historicalAvgMaxLift,
+    sampleSize: historical.length,
+    direction: builderModelGateReasonCorrelationTrendDirection(latest.maxLift - historicalAvgMaxLift),
+  };
+}
