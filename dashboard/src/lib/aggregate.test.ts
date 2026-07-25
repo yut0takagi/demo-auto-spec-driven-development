@@ -177,6 +177,8 @@ import {
   BUILDER_MODEL_GATE_REASON_TREND_WINDOW,
   BUILDER_MODEL_GATE_REASON_TREND_MIN_COUNT,
   BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD,
+  operatingHourSpectrum,
+  operatingHourCategorySummary,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -10505,5 +10507,151 @@ describe('builderModelGateReasonCorrelationTrendSignal', () => {
     expect(signal!.latestMaxLift).toBeCloseTo(1, 10);
     expect(signal!.historicalAvgMaxLift).toBeCloseTo(1, 10);
     expect(signal!.direction).toBe('flat');
+  });
+});
+
+describe('operatingHourSpectrum', () => {
+  it('runsが空なら空配列を返す', () => {
+    expect(operatingHourSpectrum([])).toEqual([]);
+  });
+
+  it('UTC跨ぎでJST日付が変わるケース: UTC 20:00(金曜)はJST翌05:00(土曜)になり、hour=5のバケツに計上される', () => {
+    // 2026-07-24T20:00:00Z (Fri) + 9h = 2026-07-25T05:00 (Sat, JST)
+    const runs = [makeRun({ startedAt: '2026-07-24T20:00:00Z' })];
+    const spectrum = operatingHourSpectrum(runs);
+    expect(spectrum).toHaveLength(24);
+    const bucket = spectrum.find((b) => b.hour === 5)!;
+    expect(bucket.count).toBe(1);
+    expect(bucket.category).toBe('night');
+    // 他の23バケツは0件のまま
+    expect(spectrum.filter((b) => b.count > 0)).toHaveLength(1);
+  });
+
+  it('平日9:00(JST)は営業時間内境界としてbusinessタグが付く', () => {
+    // 2026-07-24T00:00:00Z (Fri) + 9h = 2026-07-24T09:00 JST
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T00:00:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 9)!;
+    expect(bucket.count).toBe(1);
+    expect(bucket.category).toBe('business');
+  });
+
+  it('平日17:59(JST)は営業時間内境界としてbusinessタグが付く(hour=17)', () => {
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T08:59:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 17)!;
+    expect(bucket.count).toBe(1);
+    expect(bucket.category).toBe('business');
+  });
+
+  it('18:00(JST)は夜間境界としてnightタグが付く', () => {
+    // 2026-07-24T09:00:00Z + 9h = 2026-07-24T18:00 JST
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-24T09:00:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 18)!;
+    expect(bucket.count).toBe(1);
+    expect(bucket.category).toBe('night');
+  });
+
+  it('8:59(JST)は夜間境界としてnightタグが付く(hour=8)', () => {
+    // 2026-07-23T23:59:00Z + 9h = 2026-07-24T08:59 JST
+    const spectrum = operatingHourSpectrum([makeRun({ startedAt: '2026-07-23T23:59:00Z' })]);
+    const bucket = spectrum.find((b) => b.hour === 8)!;
+    expect(bucket.count).toBe(1);
+    expect(bucket.category).toBe('night');
+  });
+
+  it('startedAtが不正(Dateとしてparse不能)な反復しか無ければ空配列を返す', () => {
+    const runs = [makeRun({ startedAt: 'not-a-date' })];
+    expect(operatingHourSpectrum(runs)).toEqual([]);
+  });
+
+  it('有効なstartedAtの反復が1件でもあれば、不正な反復を除外した上で24バケツ全てを返す', () => {
+    const runs = [
+      makeRun({ iteration: 1, startedAt: '2026-07-24T00:00:00Z' }), // JST 09:00
+      makeRun({ iteration: 2, startedAt: 'not-a-date' }),
+    ];
+    const spectrum = operatingHourSpectrum(runs);
+    expect(spectrum).toHaveLength(24);
+    expect(spectrum.reduce((sum, b) => sum + b.count, 0)).toBe(1);
+  });
+});
+
+describe('operatingHourCategorySummary', () => {
+  it('runsが空なら空配列を返す', () => {
+    expect(operatingHourCategorySummary([])).toEqual([]);
+  });
+
+  it('startedAtが不正な反復しか無ければ空配列を返す', () => {
+    expect(operatingHourCategorySummary([makeRun({ startedAt: 'invalid' })])).toEqual([]);
+  });
+
+  it('平日夜間(UTC 20:00→JST翌05:00、2026-07-24は金曜)はnightカテゴリにのみ計上される', () => {
+    const runs = [makeRun({ startedAt: '2026-07-24T20:00:00Z', verdict: 'merged' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('night');
+    expect(summary[0].count).toBe(1);
+  });
+
+  it('平日営業時間内(UTC 01:00→JST10:00、2026-07-24は金曜)はbusinessカテゴリにのみ計上される', () => {
+    const runs = [makeRun({ startedAt: '2026-07-24T01:00:00Z', verdict: 'merged' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('business');
+    expect(summary[0].count).toBe(1);
+  });
+
+  it('土曜日終日は時刻が営業時間内(9-18時)でも夜間扱いになる', () => {
+    // 2026-07-25T01:00:00Z (Sat) + 9h = 2026-07-25T10:00 JST（土曜10時、時刻だけ見れば営業時間内）
+    const runs = [makeRun({ startedAt: '2026-07-25T01:00:00Z' })];
+    const summary = operatingHourCategorySummary(runs);
+    expect(summary).toHaveLength(1);
+    expect(summary[0].category).toBe('night');
+  });
+
+  it('business/nightそれぞれのマージ率・平均コスト・平均所要時間を集計する', () => {
+    const runs = [
+      // business: 平日10:00 JST(2026-07-24 Fri), 2件中1件merged
+      makeRun({
+        iteration: 1,
+        startedAt: '2026-07-24T01:00:00Z',
+        verdict: 'merged',
+        cost: { builderUsd: 1, adversaryUsd: 0, ideationUsd: 0, totalUsd: 1 },
+        durationSec: 100,
+      }),
+      makeRun({
+        iteration: 2,
+        startedAt: '2026-07-24T02:00:00Z', // JST 11:00, business
+        verdict: 'failed',
+        cost: { builderUsd: 3, adversaryUsd: 0, ideationUsd: 0, totalUsd: 3 },
+        durationSec: 300,
+      }),
+      // night: 平日夜間(JST翌05:00), 2件中2件merged
+      makeRun({
+        iteration: 3,
+        startedAt: '2026-07-24T20:00:00Z',
+        verdict: 'merged',
+        cost: { builderUsd: 2, adversaryUsd: 0, ideationUsd: 0, totalUsd: 2 },
+        durationSec: 200,
+      }),
+      makeRun({
+        iteration: 4,
+        startedAt: '2026-07-24T21:00:00Z', // JST翌06:00, night
+        verdict: 'merged',
+        cost: { builderUsd: 4, adversaryUsd: 0, ideationUsd: 0, totalUsd: 4 },
+        durationSec: 400,
+      }),
+    ];
+    const summary = operatingHourCategorySummary(runs);
+    const business = summary.find((s) => s.category === 'business')!;
+    const night = summary.find((s) => s.category === 'night')!;
+
+    expect(business.count).toBe(2);
+    expect(business.mergedRate).toBeCloseTo(0.5);
+    expect(business.avgCostUsd).toBeCloseTo(2); // (1+3)/2
+    expect(business.avgDurationSec).toBeCloseTo(200); // (100+300)/2
+
+    expect(night.count).toBe(2);
+    expect(night.mergedRate).toBeCloseTo(1);
+    expect(night.avgCostUsd).toBeCloseTo(3); // (2+4)/2
+    expect(night.avgDurationSec).toBeCloseTo(300); // (200+400)/2
   });
 });
