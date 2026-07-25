@@ -7336,3 +7336,118 @@ export function builderModelGateReasonCorrelationTrendSignal(
     direction: builderModelGateReasonCorrelationTrendDirection(latest.maxLift - historicalAvgMaxLift),
   };
 }
+
+const JST_OFFSET_MS = 9 * 60 * 60 * 1000;
+const OPERATING_HOUR_START = 9;
+const OPERATING_HOUR_END = 18; // exclusive
+
+/**
+ * startedAt(UTC ISO8601)をJST(UTC+9)に変換した上での時(0-23)。ライブラリを使わず
+ * getTime()にオフセットを加算した上でgetUTCHours()を読むことで、CI/Vercelビルド環境の
+ * ローカルTZに依存しない決定的な変換にする。
+ */
+function toJstHour(iso: string): number {
+  return new Date(new Date(iso).getTime() + JST_OFFSET_MS).getUTCHours();
+}
+
+/** startedAt(UTC ISO8601)をJSTに変換した上での曜日(0=日曜〜6=土曜)。toJstHourと同じ変換方式。 */
+function toJstWeekday(iso: string): number {
+  return new Date(new Date(iso).getTime() + JST_OFFSET_MS).getUTCDay();
+}
+
+function isValidStartedAt(iso: string): boolean {
+  return !Number.isNaN(new Date(iso).getTime());
+}
+
+/** 平日(月=1〜金=5)の9:00-18:00(JST)のみ営業時間内。それ以外(平日夜間・早朝・土日全時間帯)は夜間。 */
+export type OperatingHourCategory = 'business' | 'night';
+
+function operatingHourCategoryOf(run: RunRecord): OperatingHourCategory {
+  const weekday = toJstWeekday(run.startedAt);
+  const hour = toJstHour(run.startedAt);
+  const isWeekday = weekday >= 1 && weekday <= 5;
+  const isBusinessHour = hour >= OPERATING_HOUR_START && hour < OPERATING_HOUR_END;
+  return isWeekday && isBusinessHour ? 'business' : 'night';
+}
+
+/** hourのみ（曜日は問わない）に基づく分類。9-18時台はbusiness、それ以外はnight。 */
+function hourOnlyCategory(hour: number): OperatingHourCategory {
+  return hour >= OPERATING_HOUR_START && hour < OPERATING_HOUR_END ? 'business' : 'night';
+}
+
+export interface OperatingHourBucket {
+  /** JSTの時(0-23) */
+  hour: number;
+  /** hourのみに基づく分類（曜日は問わない）。9-18時台はbusiness、それ以外はnight。 */
+  category: OperatingHourCategory;
+  count: number;
+}
+
+/**
+ * JST 0-23時の時間帯ごとの反復件数ヒストグラム。GateReasonSeveritySpectrumPanelと
+ * 同様のバー表示用に、各バケツ(hour)にbusiness/nightのカテゴリタグを付与する
+ * （曜日を問わずhourだけで判定するため、operatingHourCategorySummaryのbusiness/night分類とは
+ * 独立: 同じ時刻でも曜日次第でカテゴリ別サマリ側の扱いは変わりうる）。
+ * startedAtが不正（Dateとしてparse不能）な反復は集計から除外する。
+ * runs=[]、またはstartedAtが有効な反復が1件も無い場合は空配列を返す。
+ */
+export function operatingHourSpectrum(runs: RunRecord[]): OperatingHourBucket[] {
+  const counts = new Array(24).fill(0) as number[];
+  let validCount = 0;
+  for (const run of runs) {
+    if (!isValidStartedAt(run.startedAt)) continue;
+    counts[toJstHour(run.startedAt)]++;
+    validCount++;
+  }
+  if (validCount === 0) return [];
+  return counts.map((count, hour) => ({
+    hour,
+    category: hourOnlyCategory(hour),
+    count,
+  }));
+}
+
+export interface OperatingHourCategorySummary {
+  category: OperatingHourCategory;
+  count: number;
+  /** merged件数 / count */
+  mergedRate: number;
+  avgCostUsd: number;
+  avgDurationSec: number;
+}
+
+/**
+ * business(平日9:00-18:00 JST)/night(それ以外)の2カテゴリごとに件数・マージ率・
+ * 平均コスト・平均所要時間を集計する。夜間実行が品質/コストに与える影響を一目で
+ * 比較できるサマリ行を作るためのもの。startedAtが不正な反復は除外する。
+ * runs=[]、またはstartedAtが不正な反復しか無い場合は空配列を返す。
+ */
+export function operatingHourCategorySummary(runs: RunRecord[]): OperatingHourCategorySummary[] {
+  const groups = new Map<OperatingHourCategory, RunRecord[]>();
+  for (const run of runs) {
+    if (!isValidStartedAt(run.startedAt)) continue;
+    const category = operatingHourCategoryOf(run);
+    const list = groups.get(category);
+    if (list) {
+      list.push(run);
+    } else {
+      groups.set(category, [run]);
+    }
+  }
+
+  const order: OperatingHourCategory[] = ['business', 'night'];
+  return order
+    .filter((category) => groups.has(category))
+    .map((category) => {
+      const list = groups.get(category)!;
+      const count = list.length;
+      const mergedCount = list.filter((run) => run.verdict === 'merged').length;
+      return {
+        category,
+        count,
+        mergedRate: mergedCount / count,
+        avgCostUsd: mean(list.map((run) => run.cost.totalUsd)),
+        avgDurationSec: mean(list.map((run) => run.durationSec)),
+      };
+    });
+}
