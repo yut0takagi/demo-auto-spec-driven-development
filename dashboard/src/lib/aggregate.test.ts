@@ -127,6 +127,9 @@ import {
   verdictTransitions,
   verdictTransitionSummary,
   verdictTransitionRootCausePatterns,
+  verdictJumpAnomalies,
+  verdictJumpSummary,
+  VERDICT_JUMP_WINDOW,
   dropoutStreaks,
   DROPOUT_STREAK_MIN_LENGTH,
   reviseSizeSuccessPatterns,
@@ -8811,6 +8814,76 @@ describe('verdictTransitionRootCausePatterns', () => {
       { rootCause: 'verifyFailed', count: 2, pct: expect.closeTo(66.6666, 3) },
       { rootCause: 'e2eFailed', count: 1, pct: expect.closeTo(33.3333, 3) },
     ]);
+  });
+});
+
+describe('verdictJumpAnomalies / verdictJumpSummary', () => {
+  const verifyFailedReason = 'verify(lint/typecheck/unit/build) が失敗している';
+  // 'm'=merged, 'f'=failed(gateReasons付き) の1文字パターンから反復1始まりのrunsを作る
+  const seq = (pattern: string): RunRecord[] =>
+    pattern.split('').map((c, i) =>
+      makeRun({
+        iteration: i + 1,
+        verdict: c === 'm' ? 'merged' : 'failed',
+        gateReasons: c === 'm' ? [] : [verifyFailedReason],
+      }),
+    );
+
+  it('前後VERDICT_JUMP_WINDOW件が全てmergedで中央1件だけ非mergedならspikeFailureとして検出する', () => {
+    expect(VERDICT_JUMP_WINDOW).toBe(3);
+    expect(verdictJumpAnomalies(seq('mmmfmmm'))).toEqual([
+      {
+        iteration: 4,
+        verdict: 'failed',
+        kind: 'spikeFailure',
+        beforeMergedRate: 1,
+        afterMergedRate: 1,
+        gateReasons: ['verifyFailed'],
+      },
+    ]);
+  });
+
+  it('前後VERDICT_JUMP_WINDOW件が全て非mergedで中央1件だけmergedならspikeSuccessとして検出する', () => {
+    expect(verdictJumpAnomalies(seq('fffmfff'))).toEqual([
+      {
+        iteration: 4,
+        verdict: 'merged',
+        kind: 'spikeSuccess',
+        beforeMergedRate: 0,
+        afterMergedRate: 0,
+        gateReasons: [],
+      },
+    ]);
+  });
+
+  it('前後どちらかの窓が不揃い、または前後の極値自体が異なる場合は検出しない', () => {
+    expect(verdictJumpAnomalies(seq('mmfmmmm'))).toEqual([]); // 前窓が不揃い(m,m,f)
+    expect(verdictJumpAnomalies(seq('fffmmmm'))).toEqual([]); // 前後の極値が異なる(緩やかな変化)
+  });
+
+  it('前後窓を満たすのに件数が足りない（境界未満）場合は空配列を返す', () => {
+    // 前後3件ずつ+中央1件=7件が最小件数。1件足りない6件では判定対象が存在しない
+    expect(verdictJumpAnomalies(seq('mmmfmm'))).toEqual([]);
+    expect(verdictJumpAnomalies([])).toEqual([]);
+  });
+
+  it('spikeFailureでもgateReasonsが空なら根本原因を特定できずgateReasonsは空配列のまま', () => {
+    const runs = seq('mmmmmmm');
+    runs[3] = makeRun({ iteration: 4, verdict: 'paused', gateReasons: [] });
+    const anomalies = verdictJumpAnomalies(runs);
+    expect(anomalies).toHaveLength(1);
+    expect(anomalies[0].kind).toBe('spikeFailure');
+    expect(anomalies[0].gateReasons).toEqual([]);
+  });
+
+  it('verdictJumpSummaryは出現した種別だけをcount降順で返し、0件の種別は含めない', () => {
+    // spikeFailureがiteration4と13の2箇所（間はmergedで緩衝し窓が干渉しないようにする）
+    const runs = seq('mmmfmmmmmmmmfmmm');
+    expect(verdictJumpAnomalies(runs).map((a) => a.iteration)).toEqual([4, 13]);
+
+    const summary = verdictJumpSummary(runs);
+    expect(summary).toEqual([{ kind: 'spikeFailure', count: 2, pct: 100 }]);
+    expect(summary.some((s) => s.kind === 'spikeSuccess')).toBe(false);
   });
 });
 
