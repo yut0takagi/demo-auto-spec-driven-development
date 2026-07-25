@@ -1,0 +1,42 @@
+{
+  "id": "20260725T064748Z-261",
+  "iteration": 191,
+  "issue": {
+    "number": 261,
+    "title": "Ideation 給油成功率パネル — 次反復への繰り越し予測",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/261-ideation",
+  "startedAt": "2026-07-25T06:47:48Z",
+  "finishedAt": "2026-07-25T07:02:11Z",
+  "durationSec": 863,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 274,
+  "adversary": {
+    "approved": true,
+    "summary": "タスク要件の Ideation 給油成功率パネルを完全に実装。成功率と残量の 2 つのリスク要因を独立に追跡し、直近窓のみの集計で全体成功率と乖離するケースも検証。テストは境界値・複合シナリオ・入力正規化を網羅し、トートロジーではなく実装を実質検証している。既存挙動は保護されている。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 348,
+  "cost": {
+    "builderUsd": 3.212769,
+    "adversaryUsd": 0.098698,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.5930723999999999,
+    "totalUsd": 3.904539
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
