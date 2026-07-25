@@ -1,0 +1,46 @@
+{
+  "id": "20260725T060658Z-254",
+  "iteration": 187,
+  "issue": {
+    "number": 254,
+    "title": "Verdict 変遷の「横滑り」パターン検出パネル",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/254-verdict",
+  "startedAt": "2026-07-25T06:06:58Z",
+  "finishedAt": "2026-07-25T06:22:17Z",
+  "durationSec": 919,
+  "reviseCycles": 0,
+  "verdict": "merged",
+  "gateReasons": [],
+  "prNumber": 272,
+  "adversary": {
+    "approved": true,
+    "summary": "横滑り検出ロジックは transitions チェーンを正確に検知し、outcome 分類は既存の dropout パターンと一貫。テストが境界値・分断・複数区間・計数を検証。ページ統合も適切。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 367,
+  "cost": {
+    "builderUsd": 2.666623,
+    "adversaryUsd": 0.060246,
+    "ideationUsd": 0.10802590000000001,
+    "plannerUsd": 0.6476776999999999,
+    "totalUsd": 3.482573
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": [
+    269,
+    270,
+    271
+  ]
+}
