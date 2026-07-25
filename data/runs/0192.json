@@ -1,0 +1,44 @@
+{
+  "id": "20260725T070213Z-261",
+  "iteration": 192,
+  "issue": {
+    "number": 261,
+    "title": "Ideation 給油成功率パネル — 次反復への繰り越し予測",
+    "labels": [
+      "loop:ready"
+    ]
+  },
+  "branch": "loop/261-ideation",
+  "startedAt": "2026-07-25T07:02:13Z",
+  "finishedAt": "2026-07-25T07:06:19Z",
+  "durationSec": 246,
+  "reviseCycles": 0,
+  "verdict": "abandoned",
+  "gateReasons": [
+    "builder が変更を生成しなかった"
+  ],
+  "prNumber": null,
+  "adversary": {
+    "approved": true,
+    "summary": "給油成功率パネル機能が仕様通りに実装され、境界値を含む全主要ケースがテストカバーされている。既存パネルへの影響なく、新規追加のみで整合性がある。"
+  },
+  "verify": {
+    "unitPassed": true,
+    "e2ePassed": true,
+    "coveragePct": 0.0
+  },
+  "changedLines": 0,
+  "cost": {
+    "builderUsd": 0.077493,
+    "adversaryUsd": 0.06346,
+    "ideationUsd": 0.0,
+    "plannerUsd": 0.09945479999999998,
+    "totalUsd": 0.240408
+  },
+  "models": {
+    "builder": "claude-sonnet-5",
+    "adversary": "claude-haiku-4-5",
+    "ideation": "claude-haiku-4-5"
+  },
+  "nextIssues": []
+}
