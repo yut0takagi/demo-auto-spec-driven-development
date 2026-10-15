@@ -185,6 +185,9 @@ import {
   BUILDER_MODEL_GATE_REASON_TREND_FLAT_THRESHOLD,
   operatingHourSpectrum,
   operatingHourCategorySummary,
+  ideationRefuelForecastSignal,
+  REFUEL_FORECAST_WINDOW,
+  REFUEL_SUCCESS_RATE_RISK_THRESHOLD,
 } from './aggregate';
 import type { RunRecord, Verdict } from './types';
 
@@ -10986,5 +10989,95 @@ describe('operatingHourCategorySummary', () => {
     expect(night.mergedRate).toBeCloseTo(1);
     expect(night.avgCostUsd).toBeCloseTo(3); // (2+4)/2
     expect(night.avgDurationSec).toBeCloseTo(300); // (200+400)/2
+  });
+});
+
+describe('ideationRefuelForecastSignal', () => {
+  it('runsが空ならnull（境界値）', () => {
+    expect(ideationRefuelForecastSignal([])).toBeNull();
+  });
+
+  it('1件、補充0件なら給油失敗として扱い、繰り越し予測も基準線を下回りリスクありと判定する', () => {
+    const s = ideationRefuelForecastSignal(makeRunRange(1, 1));
+    expect(s).not.toBeNull();
+    expect(s!.windowSize).toBe(1);
+    expect(s!.points).toEqual([
+      { iteration: 1, generated: 0, refueled: false, balance: IDEATION_LOW_WATER - 1 },
+    ]);
+    expect(s!.recentSuccessRate).toBe(0);
+    expect(s!.overallSuccessRate).toBe(0);
+    expect(s!.currentBalance).toBe(IDEATION_LOW_WATER - 1);
+    expect(s!.averageNet).toBe(-1);
+    expect(s!.carryoverForecast).toBe(IDEATION_LOW_WATER - 2);
+    expect(s!.atRisk).toBe(true);
+    expect(s!.iterations).toEqual([1]);
+  });
+
+  it('1件、補充1件はちょうど消費分を賄う給油成功（境界値）だが、残量はまだ基準線以下でリスクあり', () => {
+    const s = ideationRefuelForecastSignal(makeRunRange(1, 1, 1));
+    expect(s!.points).toEqual([{ iteration: 1, generated: 1, refueled: true, balance: IDEATION_LOW_WATER }]);
+    expect(s!.recentSuccessRate).toBe(1);
+    expect(s!.overallSuccessRate).toBe(1);
+    expect(s!.currentBalance).toBe(IDEATION_LOW_WATER);
+    expect(s!.averageNet).toBe(0);
+    expect(s!.carryoverForecast).toBe(IDEATION_LOW_WATER);
+    expect(s!.atRisk).toBe(true);
+  });
+
+  it('補充が消費を上回れば繰り越し予測は基準線を超え、給油成功率も1でリスクなしと判定する', () => {
+    const s = ideationRefuelForecastSignal(makeRunRange(1, 1, 2));
+    expect(s!.points[0]).toMatchObject({ generated: 2, refueled: true, balance: IDEATION_LOW_WATER + 1 });
+    expect(s!.recentSuccessRate).toBe(1);
+    expect(s!.averageNet).toBe(1);
+    expect(s!.carryoverForecast).toBe(IDEATION_LOW_WATER + 2);
+    expect(s!.atRisk).toBe(false);
+  });
+
+  it(`直近${REFUEL_FORECAST_WINDOW}反復だけを給油成功率・平均増減に使い、全体成功率とは別集計になる（成功率トリガー単独）`, () => {
+    // 前半5反復は補充3件(給油成功, net+2)、後半5反復は補充0件(給油失敗, net-1)。
+    const runs = [...makeRunRange(1, 5, 3), ...makeRunRange(6, 10)];
+    const s = ideationRefuelForecastSignal(runs);
+    expect(s!.windowSize).toBe(REFUEL_FORECAST_WINDOW);
+    expect(s!.iterations).toEqual([6, 7, 8, 9, 10]);
+    expect(s!.recentSuccessRate).toBe(0);
+    expect(s!.overallSuccessRate).toBe(0.5);
+    expect(s!.averageNet).toBe(-1);
+    // currentBalance = 基準線 + (前半 net+2 x5) + (後半 net-1 x5) = 基準線+5
+    expect(s!.currentBalance).toBe(IDEATION_LOW_WATER + 5);
+    // carryoverForecast = 基準線+5 + (-1) = 基準線+4 > 基準線なので残量側は非リスクだが、成功率が閾値未満で発報
+    expect(s!.carryoverForecast).toBe(IDEATION_LOW_WATER + 4);
+    expect(s!.atRisk).toBe(true);
+  });
+
+  it('給油成功率は閾値以上でも、繰り越し予測が基準線以下ならリスクありと判定する（残量トリガー単独）', () => {
+    // 補充2,0,2,0 の4反復: refueled true,false,true,false → 成功率0.5(閾値以上=非トリガー)
+    // net +1,-1,+1,-1 → 平均net 0 → 繰り越し予測は基準線と同じ(=境界値、基準線以下でトリガー)
+    const runs = [
+      makeRun({ iteration: 1, nextIssues: [101, 102] }),
+      makeRun({ iteration: 2, nextIssues: [] }),
+      makeRun({ iteration: 3, nextIssues: [301, 302] }),
+      makeRun({ iteration: 4, nextIssues: [] }),
+    ];
+    const s = ideationRefuelForecastSignal(runs);
+    expect(s!.windowSize).toBe(4);
+    expect(s!.recentSuccessRate).toBe(0.5);
+    expect(s!.recentSuccessRate < REFUEL_SUCCESS_RATE_RISK_THRESHOLD).toBe(false);
+    expect(s!.averageNet).toBe(0);
+    expect(s!.currentBalance).toBe(IDEATION_LOW_WATER);
+    expect(s!.carryoverForecast).toBe(IDEATION_LOW_WATER);
+    expect(s!.atRisk).toBe(true);
+  });
+
+  it('iteration降順など入力順に依存せず、iteration昇順に整列して集計する', () => {
+    const runs = [
+      makeRun({ iteration: 3, nextIssues: [] }),
+      makeRun({ iteration: 1, nextIssues: [101, 102] }),
+      makeRun({ iteration: 2, nextIssues: [] }),
+    ];
+    const s = ideationRefuelForecastSignal(runs);
+    expect(s!.points.map((p) => p.iteration)).toEqual([1, 2, 3]);
+    expect(s!.points[0]).toMatchObject({ generated: 2, refueled: true });
+    expect(s!.points[1]).toMatchObject({ generated: 0, refueled: false });
+    expect(s!.points[2]).toMatchObject({ generated: 0, refueled: false });
   });
 });
